@@ -1,0 +1,8 @@
+# Build output (arduino-cli compile --build-path)
+build/
+
+# Python virtual environment for tools/ble_test.py
+tools/venv/
+
+# macOS
+.DS_Store

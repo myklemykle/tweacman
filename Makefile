@@ -16,6 +16,11 @@
 #
 #   make run SKETCH=HelloWorld
 #
+# A sketch that lives inside a library's examples/ folder works the same
+# way, just with the full relative path:
+#
+#   make run SKETCH=RV112FF/examples/SerialPlotterDemo
+#
 # ---------------------------------------------------------------------------
 
 # Which sketch folder to build. Each sketch lives in its own directory whose
@@ -41,6 +46,13 @@ BUILD_DIR ?= build/$(SKETCH)
 
 ARDUINO_CLI ?= arduino-cli
 
+# Our own local Arduino libraries (this project's RV112FF driver, and any
+# future ones), passed via --library rather than installed into the global
+# sketchbook - keeps them versioned with this repo instead of scattered
+# into ~/Documents/Arduino/libraries.
+LIBRARIES ?= RV112FF
+LIBRARY_FLAGS = $(foreach lib,$(LIBRARIES),--library $(lib))
+
 # Python virtual environment for tools/ble_test.py. Isolated from system
 # Python so `pip install` here can't collide with anything else on the Mac.
 BLE_VENV ?= tools/venv
@@ -52,7 +64,7 @@ BLE_PYTHON ?= $(BLE_VENV)/bin/python3
 # ---------------------------------------------------------------------------
 
 build:
-	$(ARDUINO_CLI) compile --fqbn $(FQBN) --build-path $(BUILD_DIR) $(SKETCH)
+	$(ARDUINO_CLI) compile --fqbn $(FQBN) --build-path $(BUILD_DIR) $(LIBRARY_FLAGS) $(SKETCH)
 
 # Guard used by the targets that need hardware attached.
 require-port:
@@ -126,5 +138,6 @@ help:
 	@echo "  boards    list installed Renesas board names"
 	@echo "  info      show the current settings"
 	@echo
-	@echo "Variables: SKETCH, FQBN, PORT, BAUD"
+	@echo "Variables: SKETCH, FQBN, PORT, BAUD, LIBRARIES"
 	@echo "Example:   make run SKETCH=HelloWorld"
+	@echo "Example:   make run SKETCH=RV112FF/examples/SerialPlotterDemo"

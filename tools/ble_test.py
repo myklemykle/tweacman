@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ble_test.py - live text monitor for HelloWorld's Bluetooth LE mirror.
+ble_test.py - live text monitor for HelloWorldBLE's Bluetooth LE mirror.
 
 Connects to the SparkFun Thing Plus RA6M5's DA14531 BLE coprocessor
 (advertised as "CLv2-CodeLess") and prints, in real time, every line of
@@ -11,7 +11,7 @@ This is the terminal equivalent of connecting with a phone app like
 nRF Connect or LightBlue: it does the same "subscribe to a doorbell
 notification, then go read the message" dance that the CodeLess firmware
 uses to push unsolicited text over BLE. See the header comment in
-HelloWorld.ino for what these two characteristics are.
+HelloWorldBLE.ino for what these two characteristics are.
 
 Usage:
     tools/venv/bin/python3 tools/ble_test.py

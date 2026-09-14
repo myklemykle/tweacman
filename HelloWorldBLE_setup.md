@@ -1,9 +1,11 @@
 # Hello World over Bluetooth LE — Setup Summary
 
-How Bluetooth LE was added to `HelloWorld.ino` on the SparkFun Thing Plus
-RA6M5. Written for reuse in a tutorial; the research/investigation that led
-to these steps is omitted — just the steps themselves. Assumes the USB
-serial version is already working (see `HelloWorld_setup.md`).
+How Bluetooth LE was added to Hello World on the SparkFun Thing Plus RA6M5
+- now its own sketch, `HelloWorldBLE.ino`, built on top of the plain USB
+serial version rather than replacing it. Written for reuse in a tutorial;
+the research/investigation that led to these steps is omitted — just the
+steps themselves. Assumes the USB serial version is already working (see
+`HelloWorld_setup.md`).
 
 ## Key concept to introduce first
 

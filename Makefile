@@ -102,9 +102,9 @@ ble-venv:
 	@$(BLE_PYTHON) -c "import bleak" 2>/dev/null || \
 		$(BLE_VENV)/bin/pip install -q --only-binary=:all: bleak
 
-# Live text monitor for the Bluetooth LE side of HelloWorld - the terminal
+# Live text monitor for HelloWorldBLE's Bluetooth LE output - the terminal
 # equivalent of connecting with a phone app. Requires the sketch on the
-# board to actually be advertising (see HelloWorld.ino), and on macOS,
+# board to actually be advertising (see HelloWorldBLE.ino), and on macOS,
 # Terminal must have Bluetooth permission (System Settings > Privacy &
 # Security > Bluetooth).
 ble-test: ble-venv

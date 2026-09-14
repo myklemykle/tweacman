@@ -7,6 +7,7 @@
 #   make upload          build, then flash the board
 #   make monitor         open the serial monitor (Ctrl-C to quit)
 #   make run             upload, then immediately open the monitor
+#   make ble-test        watch the board's Bluetooth LE output (Ctrl-C to quit)
 #   make clean           delete build output
 #   make ports           show connected boards
 #   make help            list every target
@@ -40,8 +41,13 @@ BUILD_DIR ?= build/$(SKETCH)
 
 ARDUINO_CLI ?= arduino-cli
 
+# Python virtual environment for tools/ble_test.py. Isolated from system
+# Python so `pip install` here can't collide with anything else on the Mac.
+BLE_VENV ?= tools/venv
+BLE_PYTHON ?= $(BLE_VENV)/bin/python3
+
 .DEFAULT_GOAL := build
-.PHONY: build upload monitor run clean ports boards info help require-port
+.PHONY: build upload monitor run clean ports boards info help require-port ble-venv ble-test
 
 # ---------------------------------------------------------------------------
 
@@ -75,6 +81,23 @@ run: upload
 	@sleep 3
 	@$(MAKE) --no-print-directory monitor
 
+# Sets itself up on first use: creates the venv and installs bleak if either
+# is missing, then does nothing on later runs. bleak's macOS backend needs
+# pyobjc-core, which fails to build from source on current Xcode/clang - the
+# --only-binary flag forces a prebuilt wheel instead.
+ble-venv:
+	@test -x $(BLE_PYTHON) || python3 -m venv $(BLE_VENV)
+	@$(BLE_PYTHON) -c "import bleak" 2>/dev/null || \
+		$(BLE_VENV)/bin/pip install -q --only-binary=:all: bleak
+
+# Live text monitor for the Bluetooth LE side of HelloWorld - the terminal
+# equivalent of connecting with a phone app. Requires the sketch on the
+# board to actually be advertising (see HelloWorld.ino), and on macOS,
+# Terminal must have Bluetooth permission (System Settings > Privacy &
+# Security > Bluetooth).
+ble-test: ble-venv
+	$(BLE_PYTHON) -u tools/ble_test.py
+
 clean:
 	rm -rf build
 
@@ -97,6 +120,7 @@ help:
 	@echo "  upload    compile and flash the board"
 	@echo "  monitor   open the serial monitor at $(BAUD) baud"
 	@echo "  run       upload, then open the monitor"
+	@echo "  ble-test  watch the board's Bluetooth LE output (sets up a venv on first run)"
 	@echo "  clean     remove build output"
 	@echo "  ports     list connected boards"
 	@echo "  boards    list installed Renesas board names"

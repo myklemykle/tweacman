@@ -8,6 +8,7 @@
 #   make monitor         open the serial monitor (Ctrl-C to quit)
 #   make run             upload, then immediately open the monitor
 #   make ble-test        watch the board's Bluetooth LE output (Ctrl-C to quit)
+#   make faust           regenerate a Faust-based sketch's synth.h from its .dsp source
 #   make clean           delete build output
 #   make ports           show connected boards
 #   make help            list every target
@@ -58,8 +59,10 @@ LIBRARY_FLAGS = $(foreach lib,$(LIBRARIES),--library $(lib))
 BLE_VENV ?= tools/venv
 BLE_PYTHON ?= $(BLE_VENV)/bin/python3
 
+FAUST ?= faust
+
 .DEFAULT_GOAL := build
-.PHONY: build upload monitor run clean ports boards info help require-port ble-venv ble-test
+.PHONY: build upload monitor run clean ports boards info help require-port ble-venv ble-test faust
 
 # ---------------------------------------------------------------------------
 
@@ -110,6 +113,12 @@ ble-venv:
 ble-test: ble-venv
 	$(BLE_PYTHON) -u tools/ble_test.py
 
+# Regenerates AudioKnobsDemo's synth.h from synth.dsp. Not needed for a
+# normal build - the generated header is committed - only after editing
+# the .dsp source. Needs the `faust` compiler on PATH.
+faust:
+	$(FAUST) -cn KnobSynth AudioKnobsDemo/synth.dsp -o AudioKnobsDemo/synth.h
+
 clean:
 	rm -rf build
 
@@ -133,6 +142,7 @@ help:
 	@echo "  monitor   open the serial monitor at $(BAUD) baud"
 	@echo "  run       upload, then open the monitor"
 	@echo "  ble-test  watch the board's Bluetooth LE output (sets up a venv on first run)"
+	@echo "  faust     regenerate AudioKnobsDemo/synth.h from synth.dsp (needs faust on PATH)"
 	@echo "  clean     remove build output"
 	@echo "  ports     list connected boards"
 	@echo "  boards    list installed Renesas board names"

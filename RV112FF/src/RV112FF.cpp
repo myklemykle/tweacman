@@ -105,3 +105,60 @@ float RV112FF::read() {
 float RV112FF::rpm() {
   return _calibrated ? _rpm : 0.0;
 }
+
+uint8_t RV112FF::sumBytes(const void *data, size_t len, uint8_t sum) {
+  const uint8_t *bytes = reinterpret_cast<const uint8_t *>(data);
+  for (size_t i = 0; i < len; i++) sum += bytes[i];
+  return sum;
+}
+
+uint8_t RV112FF::calibrationChecksum(const RV112FFCalibration &cal) const {
+  // Deliberately not over the whole struct - magic/version are constants
+  // and checksumming them adds nothing, and reading raw bytes across the
+  // struct would depend on compiler padding between fields, which the
+  // min/max arrays' own sizeof() sidesteps entirely.
+  uint8_t sum = 0;
+  sum = sumBytes(cal.minVal, sizeof(cal.minVal), sum);
+  sum = sumBytes(cal.maxVal, sizeof(cal.maxVal), sum);
+  return sum;
+}
+
+RV112FFCalibration RV112FF::getCalibration() const {
+  RV112FFCalibration cal;
+  cal.magic = CALIBRATION_MAGIC;
+  cal.version = CALIBRATION_VERSION;
+  cal.minVal[0] = _minVal[0];
+  cal.minVal[1] = _minVal[1];
+  cal.maxVal[0] = _maxVal[0];
+  cal.maxVal[1] = _maxVal[1];
+  cal.checksum = calibrationChecksum(cal);
+  return cal;
+}
+
+bool RV112FF::setCalibration(const RV112FFCalibration &cal) {
+  if (cal.magic != CALIBRATION_MAGIC) return false;
+  if (cal.version != CALIBRATION_VERSION) return false;
+  if (cal.checksum != calibrationChecksum(cal)) return false;
+
+  // Belt and suspenders on top of the checksum: a technically-intact but
+  // physically nonsensical range (inverted, or outside what a normalized
+  // ADC reading can ever produce) shouldn't be trusted either.
+  for (int i = 0; i < 2; i++) {
+    if (cal.minVal[i] < 0.0 || cal.minVal[i] > 1.0) return false;
+    if (cal.maxVal[i] < 0.0 || cal.maxVal[i] > 1.0) return false;
+    if (cal.maxVal[i] <= cal.minVal[i]) return false;
+  }
+
+  _minVal[0] = cal.minVal[0];
+  _minVal[1] = cal.minVal[1];
+  _maxVal[0] = cal.maxVal[0];
+  _maxVal[1] = cal.maxVal[1];
+
+  // Same threshold read() itself uses, so a restored calibration is
+  // trusted under exactly the same rule a live one would be.
+  bool rangeOkA = (_maxVal[0] - _minVal[0]) >= _minCalibrationRange;
+  bool rangeOkB = (_maxVal[1] - _minVal[1]) >= _minCalibrationRange;
+  _calibrated = rangeOkA && rangeOkB;
+
+  return true;
+}

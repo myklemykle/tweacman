@@ -45,6 +45,17 @@
   envelope's center slides toward wherever the knob happens to be
   sitting rather than staying anchored to the shaft's real range.
 
+  A note on NVM wear, if you're persisting getCalibration()'s result
+  (e.g. with the built-in EEPROM library, which is backed by this
+  board's dedicated 8KB data flash rather than the much larger code
+  flash): that storage doesn't wear-level, and EEPROM.put() only skips
+  a write when the new bytes are byte-for-byte identical to what's
+  already there. That's no help here, since the calibration envelope
+  legitimately changes a little on almost every read() while a shaft is
+  actively being calibrated. Call getCalibration() and save its result
+  deliberately - once calibration completes, on a button press, rate-
+  limited - not on every read() or every time isCalibrated() is true.
+
   This example code is in the public domain.
 */
 
@@ -52,6 +63,28 @@
 #define RV112FF_h
 
 #include <Arduino.h>
+
+// Snapshot of a pot's calibration state, for storing in NVM (e.g. via
+// EEPROM.put()/EEPROM.get() - see getCalibration()/setCalibration() below)
+// and restoring after a reboot, so the sketch doesn't need the user to
+// sweep the shaft through a full rotation again every power-on.
+//
+// magic and version aren't meant to be inspected by sketches - they let
+// setCalibration() tell "this really is calibration data, written by a
+// version of this library that laid it out the way I expect" apart from
+// "this is erased flash, garbage, or an incompatible version" and refuse
+// it rather than trust something it can't verify. checksum catches a
+// write that got interrupted partway (e.g. power loss mid-save) -
+// deliberately a plain byte sum rather than a real CRC, since the
+// failure modes worth guarding against here are "garbage" and "partial
+// write," not subtle single-bit corruption.
+struct RV112FFCalibration {
+  uint32_t magic;
+  uint8_t version;
+  uint8_t checksum;
+  float minVal[2];
+  float maxVal[2];
+};
 
 class RV112FF {
   public:
@@ -88,6 +121,24 @@ class RV112FF {
     // after a noisy power-on).
     void resetCalibration();
 
+    // Returns a snapshot of the current calibration, ready to hand to
+    // something like EEPROM.put() for storage across a reboot. Meaningful
+    // even if isCalibrated() is currently false - restoring it later with
+    // setCalibration() will pick up wherever calibration had gotten to.
+    RV112FFCalibration getCalibration() const;
+
+    // Restores a previously-saved calibration (see getCalibration()).
+    // Returns true and adopts it if it passes validation (magic, version,
+    // checksum, and a basic sanity check on the ranges); otherwise leaves
+    // the current calibration state untouched and returns false. Safe to
+    // call with anything - freshly-erased flash, a different pot's data,
+    // data from an incompatible future version of this library - it will
+    // simply refuse rather than trust something it can't verify. Deciding
+    // *when* to call this, and when to call getCalibration() to persist
+    // one, is left to the sketch - see the class comment's note on NVM
+    // wear if you're saving what this returns.
+    bool setCalibration(const RV112FFCalibration &cal);
+
   private:
     uint8_t _pinA, _pinB;
     float _smoothTau;
@@ -107,7 +158,13 @@ class RV112FF {
     static constexpr float RPM_SMOOTH_TAU = 0.15;  // seconds
     static constexpr float ADC_MAX_VALUE = 4095.0;  // 2^12 - 1
 
+    static constexpr uint32_t CALIBRATION_MAGIC = 0x52563132;  // ASCII "RV12"
+    static constexpr uint8_t CALIBRATION_VERSION = 1;
+
     float readWiper(uint8_t pin, uint8_t channel, float dtSeconds);
+
+    static uint8_t sumBytes(const void *data, size_t len, uint8_t sum);
+    uint8_t calibrationChecksum(const RV112FFCalibration &cal) const;
 };
 
 #endif

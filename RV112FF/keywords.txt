@@ -7,6 +7,7 @@
 #######################################
 
 RV112FF	KEYWORD1
+RV112FFCalibration	KEYWORD1
 
 #######################################
 # Methods and Functions (KEYWORD2)
@@ -16,3 +17,5 @@ read	KEYWORD2
 rpm	KEYWORD2
 isCalibrated	KEYWORD2
 resetCalibration	KEYWORD2
+getCalibration	KEYWORD2
+setCalibration	KEYWORD2

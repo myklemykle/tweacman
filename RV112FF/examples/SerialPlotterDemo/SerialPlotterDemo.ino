@@ -13,7 +13,9 @@
 
   Each angle briefly reads -1 right after power-on - that's the pot's
   self-calibration warm-up (see RV112FF.h); it clears after roughly one
-  full turn of that shaft.
+  full turn of that shaft. Each pot's isCalibrated() is plotted too (as
+  0 or 1), so the moment calibration completes shows up as a clean step
+  right where the angle trace stops sitting at -1.
 
   This example code is in the public domain.
 */
@@ -44,10 +46,15 @@ void loop() {
     float angle2 = pot2.read();
 
     // Serial Plotter format: comma-separated "label:value" pairs, one
-    // line per sample.
+    // line per sample. isCalibrated() reflects the read() call that just
+    // happened, not a separate sample - print it right after, not before.
     Serial.print("pot1:");
     Serial.print(angle1);
+    Serial.print(",pot1cal:");
+    Serial.print(pot1.isCalibrated());
     Serial.print(",pot2:");
-    Serial.println(angle2);
+    Serial.print(angle2);
+    Serial.print(",pot2cal:");
+    Serial.println(pot2.isCalibrated());
   }
 }

@@ -23,12 +23,16 @@
     lowers its output impedance for driving an external load like this
     one. The Arduino core leaves it off by default with no exposed way to
     turn it on - see the register-level hack below for a quick A/B test.
+    This sketch toggles it on and off every 4 seconds on both channels at
+    once, while the L/R tone alternation keeps running - so each channel
+    gets heard with the amplifier both on and off over time, on top of
+    whatever else differs between them (A1 has a coupling cap, A0 doesn't).
 
   This example code is in the public domain.
 */
 
 #include "analogWave.h"
-#include "bsp_api.h"  // for R_DAC - see enableDacOutputAmplifier() below
+#include "bsp_api.h"  // for R_DAC - see setDacOutputAmplifier() below
 
 const float TONE_HZ = 220.0;
 const unsigned long BEEP_INTERVAL = 1000;  // milliseconds per channel
@@ -41,49 +45,60 @@ analogWave right(DAC1);  // A1
 // The RA6M5's DAC really does have an internal output amplifier - Renesas'
 // own driver (r_dac.c) supports enabling it - but the Arduino core
 // hardcodes it off (dac.cpp: output_amplifier_enabled = 0) with no
-// parameter anywhere to turn it on. This function reaches directly into
-// the DAC peripheral's registers and flips it on by hand, after
-// analogWave has already opened and started the channel: the same enable
-// sequence Renesas' driver runs internally when you *do* have the option
-// (see "Initialization Procedure with the Output Amplifier" in the RA6M5
-// hardware manual) - briefly disable the channel's output, arm the
-// amplifier, give it ~4us to stabilize, then re-enable output.
-// analogWave's background DTC transfer keeps writing new samples into the
-// data register throughout; that's harmless here, since the output-enable
-// bit gates whether any of it actually reaches the pin.
+// parameter anywhere to turn it on. setDacOutputAmplifier() reaches
+// directly into the DAC peripheral's registers and flips it by hand,
+// after analogWave has already opened and started the channel: the same
+// enable/disable sequence Renesas' driver runs internally when you *do*
+// have the option (see "Initialization Procedure with the Output
+// Amplifier" in the RA6M5 hardware manual) - briefly disable the
+// channel's output, arm the amplifier, give it ~4us to stabilize, then
+// re-enable output. analogWave's background DTC transfer keeps writing
+// new samples into the data register throughout; that's harmless here,
+// since the output-enable bit gates whether any of it actually reaches
+// the pin.
 //
 // This is a deliberate, temporary hack for a quick listening test, not
 // something to build on: it pokes a register the Arduino core doesn't
 // know about, and a core update could change this layout without notice.
-//
-// Set to 0 or 1 to enable the amplifier on that channel, or comment out
-// the call in setup() below to leave both channels at the core's default.
-#define AMP_HACK_CHANNEL 0  // 0 = A0 (left), 1 = A1 (right)
 
-void enableDacOutputAmplifier(int channel) {
+void setDacOutputAmplifier(int channel, bool enabled) {
   if (channel == 0) {
-    R_DAC->DACR_b.DAOE0 = 0;     // briefly disable channel 0's output
-    R_DAC->DAASWCR_b.DAASW0 = 1; // arm amplifier stabilization wait
-    R_DAC->DAAMPCR_b.DAAMP0 = 1; // enable the amplifier
-    R_DAC->DACR_b.DAOE0 = 1;     // re-enable output
+    R_DAC->DACR_b.DAOE0 = 0;                  // briefly disable channel 0's output
+    R_DAC->DAASWCR_b.DAASW0 = 1;               // arm amplifier stabilization wait
+    R_DAC->DAAMPCR_b.DAAMP0 = enabled ? 1 : 0; // set the amplifier state
+    R_DAC->DACR_b.DAOE0 = 1;                  // re-enable output
   } else {
     R_DAC->DACR_b.DAOE1 = 0;
     R_DAC->DAASWCR_b.DAASW1 = 1;
-    R_DAC->DAAMPCR_b.DAAMP1 = 1;
+    R_DAC->DAAMPCR_b.DAAMP1 = enabled ? 1 : 0;
     R_DAC->DACR_b.DAOE1 = 1;
   }
 
   delayMicroseconds(4);  // matches DAC_CONVERSION_TIME_WITH_OUTPUT_AMPLIFIER
 
   if (channel == 0) {
-    R_DAC->DAASWCR_b.DAASW0 = 0;  // stabilization done; amp output is live
+    R_DAC->DAASWCR_b.DAASW0 = 0;  // stabilization done; new state is live
   } else {
     R_DAC->DAASWCR_b.DAASW1 = 0;
   }
 }
 
-unsigned long previousMillis = 0;
+void enableDacOutputAmplifier(int channel) { setDacOutputAmplifier(channel, true); }
+void disableDacOutputAmplifier(int channel) { setDacOutputAmplifier(channel, false); }
+
+// Both-channels-at-once versions, since this sketch drives A0 and A1
+// together rather than experimenting on just one.
+void setDacOutputAmplifiers(bool enabled) {
+  setDacOutputAmplifier(0, enabled);
+  setDacOutputAmplifier(1, enabled);
+}
+
+const unsigned long AMP_TOGGLE_INTERVAL = 4000;  // milliseconds
+
+unsigned long previousBeepMillis = 0;
+unsigned long previousAmpMillis = 0;
 bool leftIsPlaying = true;
+bool ampIsEnabled = true;  // matches the setDacOutputAmplifiers(true) call in setup()
 
 void setup() {
   Serial.begin(115200);
@@ -102,20 +117,24 @@ void setup() {
   right.sine(TONE_HZ);
   right.stop();  // begin with only the left channel sounding
 
-  enableDacOutputAmplifier(AMP_HACK_CHANNEL);
-  Serial.print("Output amplifier hack-enabled on channel ");
-  Serial.println(AMP_HACK_CHANNEL);
+  setDacOutputAmplifiers(true);
+  Serial.println("Output amplifier hack-enabled on both channels.");
 
-  previousMillis = millis();
+  previousBeepMillis = millis();
+  previousAmpMillis = millis();
 }
 
 void loop() {
   // Same non-blocking pattern as HelloWorld's blink: compare the clock
   // instead of using delay(), so nothing else in loop() would ever stall.
+  // Two independent timers run side by side here - which channel is
+  // sounding, and whether the amplifier hack is currently on - so a
+  // channel's tone gets heard with the amplifier in both states over time
+  // without needing to reflash.
   unsigned long currentMillis = millis();
 
-  if (currentMillis - previousMillis >= BEEP_INTERVAL) {
-    previousMillis = currentMillis;
+  if (currentMillis - previousBeepMillis >= BEEP_INTERVAL) {
+    previousBeepMillis = currentMillis;
 
     leftIsPlaying = !leftIsPlaying;
 
@@ -128,5 +147,14 @@ void loop() {
       right.start();
       Serial.println("right (A1)");
     }
+  }
+
+  if (currentMillis - previousAmpMillis >= AMP_TOGGLE_INTERVAL) {
+    previousAmpMillis = currentMillis;
+
+    ampIsEnabled = !ampIsEnabled;
+
+    setDacOutputAmplifiers(ampIsEnabled);
+    Serial.println(ampIsEnabled ? "amplifiers ON" : "amplifiers OFF");
   }
 }

@@ -26,6 +26,68 @@ CapTouch::CapTouch(uint8_t pin) : _pin(pin) {
   // that touches hardware happens in begin() instead.
 }
 
+void CapTouch::recalibrate() {
+  _baseline = _raw;
+  _baselineInitialized = true;
+  _touched = false;
+  _touchStartMillis = 0;
+  _lastBaselineUpdateMillis = millis();
+}
+
+void CapTouch::finishReading(uint16_t raw, uint16_t reference) {
+  _raw = raw;
+  _reference = reference;
+
+  unsigned long now = millis();
+
+  if (!_baselineInitialized) {
+    // First reading ever for this pin: nothing to compare against yet,
+    // so start the baseline here (assumes nothing's touching at boot,
+    // the same assumption virtually every touch sensor design makes)
+    // and report untouched this cycle.
+    _baseline = raw;
+    _baselineInitialized = true;
+    _lastBaselineUpdateMillis = now;
+    _touched = false;
+    return;
+  }
+
+  bool touchedNow = ((float)raw - _baseline) >= (float)_threshold;
+
+  if (touchedNow) {
+    if (_touchStartMillis == 0) {
+      _touchStartMillis = now;  // this is the start of a new touch
+    } else if (now - _touchStartMillis >= _stuckTimeoutMs) {
+      // Held "touched" for longer than getStuckTimeout() allows for a
+      // real touch-and-hold - assume the baseline itself has shifted
+      // (something resting on the sensor, not a finger) and recover by
+      // recalibrating around the current reading instead of reporting
+      // touched forever.
+      recalibrate();
+      return;
+    }
+  } else {
+    _touchStartMillis = 0;  // ready to time a fresh touch next time
+  }
+
+  _touched = touchedNow;
+
+  if (!_touched) {
+    // Nudge the baseline toward the current raw reading - but only
+    // while untouched, so a genuine touch-and-hold doesn't slowly get
+    // absorbed as "the new normal" while it's still happening. Linear
+    // approximation of a first-order low-pass filter (alpha = dt/tau,
+    // clamped to 1) - accurate enough since scan() is normally called
+    // many times within one BASELINE_SMOOTHING_MS window, and avoids
+    // needing an actual exp() for it.
+    unsigned long dt = now - _lastBaselineUpdateMillis;
+    float alpha = (float)dt / (float)BASELINE_SMOOTHING_MS;
+    if (alpha > 1.0f) alpha = 1.0f;
+    _baseline += alpha * ((float)raw - _baseline);
+  }
+  _lastBaselineUpdateMillis = now;
+}
+
 bool CapTouch::lookupTsChannel(uint8_t pin, uint8_t &tsChannel) {
   for (uint8_t i = 0; i < 3; i++) {
     if (KNOWN_CHANNELS[i].pin == pin) {
@@ -211,8 +273,7 @@ void CapTouch::scan() {
 
       for (uint8_t i = 0; i < s_instanceCount; i++) {
         if (s_instances[i]->_tsChannel == finishedChannel) {
-          s_instances[i]->_raw = raw;
-          s_instances[i]->_reference = reference;
+          s_instances[i]->finishReading(raw, reference);
           break;
         }
       }

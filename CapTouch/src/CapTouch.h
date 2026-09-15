@@ -46,6 +46,25 @@
   preference for polling over interrupts (see RV112FF) - rather than the
   free-running, interrupt-driven mode the hardware also supports.
 
+  Automatic baseline tracking: the CTSU hardware only reports a raw
+  graduated count (readRaw()) - it has no concept of "touched" and no
+  ability to recalibrate itself. An untouched baseline drifts with
+  temperature, humidity, and whatever's near the wire (a finger versus,
+  say, a houseplant or a piece of produce touching it instead read very
+  differently), so isTouched() can't just compare readRaw() against one
+  fixed number forever. Instead, each scan() nudges a slowly-adapting
+  per-pin baseline (readBaseline()) toward the current raw reading -
+  but only while the pin isn't currently considered touched, so a long,
+  genuine touch-and-hold doesn't slowly get absorbed as "the new
+  normal" while it's happening. isTouched() is then readRaw() compared
+  against readBaseline() plus setThreshold()'s delta, not an absolute
+  value. If isTouched() somehow stays true continuously for longer than
+  getStuckTimeout() (default 60 seconds) - something resting on the
+  sensor rather than a real touch, which is exactly what a long-lived
+  conductive object left wired up looks like - scan() assumes the
+  baseline itself has genuinely changed and force-recalibrates around
+  the current reading instead of reporting touched forever.
+
   This example code is in the public domain.
 */
 
@@ -83,17 +102,44 @@ class CapTouch {
     // below, which works directly off readRaw().
     uint16_t readReference() const { return _reference; }
 
-    // Convenience boolean: readRaw() compared against this instance's
-    // threshold.
-    bool isTouched() const { return _raw >= _threshold; }
+    // This pin's slowly-adapting "untouched" baseline - see the class
+    // comment on automatic baseline tracking. Reflects whichever
+    // scan() last ran, like readRaw(); useful mainly for plotting
+    // alongside readRaw() to see the tracking happen (see
+    // SerialPlotterDemo).
+    uint16_t readBaseline() const { return (uint16_t)_baseline; }
 
-    // The default threshold is a starting point, not a calibrated
-    // value - it will need adjusting for your specific wire/pad and
-    // environment. Watch readRaw() with nothing touching it versus
-    // touching it (the Serial Plotter example does exactly this) and
-    // set the threshold somewhere between the two.
-    void setThreshold(uint16_t threshold) { _threshold = threshold; }
+    // A cached decision from the most recently completed scan() -
+    // readRaw() compared against readBaseline() plus setThreshold()'s
+    // delta - not something recomputed live at call time.
+    bool isTouched() const { return _touched; }
+
+    // How far above the baseline (see readBaseline()) counts as
+    // touched. Not an absolute reading - the default is a starting
+    // point, not a calibrated value for your setup. Confirmed on this
+    // project's own bench wiring (short jumper wires soldered to
+    // D20/D21, ~10nF TSCAP capacitor): baseline settled around
+    // 9100-9200, and touches pushed readRaw() 5000-12000 counts above
+    // that. Watch readRaw() and readBaseline() together with and
+    // without a touch (the Serial Plotter example plots both) and
+    // adjust if isTouched() doesn't track what you'd expect.
+    void setThreshold(uint16_t delta) { _threshold = delta; }
     uint16_t getThreshold() const { return _threshold; }
+
+    // If isTouched() stays continuously true for longer than this,
+    // scan() assumes the baseline itself has genuinely changed - not a
+    // real touch-and-hold - and force-recalibrates (see recalibrate())
+    // instead of reporting touched forever. Default 60 seconds.
+    void setStuckTimeout(unsigned long ms) { _stuckTimeoutMs = ms; }
+    unsigned long getStuckTimeout() const { return _stuckTimeoutMs; }
+
+    // Immediately sets this pin's baseline to its most recent raw
+    // reading and clears isTouched(). scan() calls this on its own
+    // once getStuckTimeout() elapses; call it directly for an explicit
+    // "recalibrate now" gesture in your own sketch (e.g. a boot-time
+    // calibration step, or a button the user can press while not
+    // touching the sensor).
+    void recalibrate();
 
     // Triggers one measurement across every registered CapTouch pin at
     // once - the hardware measures them together in a single pass, it
@@ -108,16 +154,34 @@ class CapTouch {
     uint16_t _threshold = DEFAULT_THRESHOLD;
     uint16_t _raw = 0;
     uint16_t _reference = 0;
+    bool _touched = false;
 
-    // A starting point only, not a calibrated value for your setup -
-    // raw() readings depend on wire/electrode size and the TSCAP
-    // capacitor, so an untouched baseline can land anywhere. Confirmed
-    // on this project's own bench wiring (short jumper wires soldered
-    // to D20/D21, ~10nF TSCAP capacitor): baseline ~9100-9200, touched
-    // ~15000-21000+. Watch raw() with and without a touch and adjust
-    // with setThreshold() if isTouched() doesn't track what you'd
-    // expect - see SerialPlotterDemo.
-    static const uint16_t DEFAULT_THRESHOLD = 12000;
+    // Baseline tracking state - see the class comment. _baseline is a
+    // float rather than matching readRaw()'s uint16_t: the exponential
+    // moving average below nudges it by a fraction of a count on most
+    // calls, and integer truncation would silently round that away and
+    // let the baseline get stuck (this bit us in early testing of this
+    // approach), where a float just accumulates the fractional part
+    // correctly for free - this chip has a hardware FPU, so it costs
+    // nothing here.
+    float _baseline = 0;
+    bool _baselineInitialized = false;
+    unsigned long _lastBaselineUpdateMillis = 0;
+    unsigned long _touchStartMillis = 0;  // 0 = not currently mid-touch
+    unsigned long _stuckTimeoutMs = DEFAULT_STUCK_TIMEOUT_MS;
+
+    // How long, in milliseconds, the baseline takes to close roughly
+    // 63% of the gap to a new steady reading (a standard first-order
+    // low-pass time constant) - long enough to ignore normal sensor
+    // noise between scans, short enough to track real environmental
+    // drift (temperature, humidity, a different object resting on the
+    // wire) within a few seconds. Not exposed for tuning - unlike
+    // getStuckTimeout(), which is about how long a genuine touch could
+    // plausibly last, this is closer to an implementation detail.
+    static const unsigned long BASELINE_SMOOTHING_MS = 2000;
+
+    static const uint16_t DEFAULT_THRESHOLD = 3000;
+    static const unsigned long DEFAULT_STUCK_TIMEOUT_MS = 60000;
 
     // The three known touch-capable pins on this board and their CTSU
     // channel numbers (TS00-TS19) - see the class comment for how these
@@ -136,6 +200,12 @@ class CapTouch {
 
     static void initHardwareOnce();
     static bool lookupTsChannel(uint8_t pin, uint8_t &tsChannel);
+
+    // Called from scan() with a freshly-read measurement for this
+    // instance: updates readRaw()/readReference(), decides
+    // isTouched(), and advances (or freezes, or resets) the baseline -
+    // see the class comment on automatic baseline tracking.
+    void finishReading(uint16_t raw, uint16_t reference);
 };
 
 #endif

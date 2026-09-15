@@ -1,0 +1,21 @@
+#######################################
+# Syntax Coloring Map for CapTouch
+#######################################
+
+#######################################
+# Datatypes (KEYWORD1)
+#######################################
+
+CapTouch	KEYWORD1
+
+#######################################
+# Methods and Functions (KEYWORD2)
+#######################################
+
+begin	KEYWORD2
+readRaw	KEYWORD2
+readReference	KEYWORD2
+isTouched	KEYWORD2
+setThreshold	KEYWORD2
+getThreshold	KEYWORD2
+scan	KEYWORD2

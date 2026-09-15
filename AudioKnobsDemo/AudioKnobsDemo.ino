@@ -12,18 +12,39 @@
   A2/A3, pot 2 wipers on A4/A5, both pots' track ends on 3.3V/GND) plus
   a 3.5mm jack on A0/A1/GND as in DACAudioTest - see that sketch's
   header comment for the DC-offset and output-impedance notes that
-  still apply here; nothing about those changes with Faust in the mix.
+  still apply here; nothing about those changes with Faust in the mix -
+  plus, for the two touch pads: D6 to a ~10nF capacitor to GND (TSCAP,
+  shared by both pads - see CapTouch.h), and D20 (touch1, gates knob1)
+  and D21 (touch2, gates knob2) each to their own wire or touch pad.
 
-  Pitch mapping: each pot's raw angle (0-360 degrees, wrapping) is
-  folded around its 180-degree midpoint before use - foldedAngle is 0
-  at 0 and 360 (the wrap point) and rises to 180 exactly at 180 - so
-  the frequency sweep reverses direction there instead of jumping
-  discontinuously at the 360-to-0 seam. That folded angle is then
+  Pitch mapping: each pot is wrapped in a MultiTurnKnob (see that
+  library), whose unbounded accumulated-degrees position is folded
+  around its own 180-degree midpoint before use - foldedAngle is 0 at
+  every multiple of 360 and rises back to 180 exactly halfway between
+  them - so the frequency sweep reverses direction there instead of
+  jumping discontinuously at each wrap. That folded angle is then
   mapped exponentially, not linearly, onto the 50-10000 Hz range: equal
   angular steps become equal pitch *ratios* rather than equal Hz steps,
   which is what a linear-feeling pitch sweep actually requires (we hear
   pitch logarithmically - the interval from 100 to 200 Hz sounds like
   the same size jump as 5000 to 10000 Hz, not 1/50th the size).
+
+  Touch-gated speed: each knob has a CapTouch pad (see that library)
+  next to it. Touching it while turning gets you "fast" - half a
+  physical turn sweeps the whole range, the same rate this demo always
+  used. Let go and it's "slow" - a 4x reduction in sensitivity, taking
+  two full turns per sweep - for finer pitch control than a single-turn
+  mapping could ever allow. This is exactly why MultiTurnKnob exists:
+  RV112FF's own read() only ever reports where the shaft is *right
+  now*, wrapped to one turn, which can't represent "I've turned two
+  full revolutions since I let go."
+
+  One known wrinkle: switching speed mid-turn (touching or releasing)
+  changes how much physical rotation maps to how much pitch, so the
+  played pitch can visibly/audibly jump at the exact moment you touch
+  or release - see knobAngle() below. Left as-is for now since it
+  wasn't part of what was asked for; worth revisiting with a
+  continuity-preserving offset if it sounds bad in practice.
 
   Each oscillator stays silent (gain 0) until its pot finishes its own
   self-calibration (see RV112FF.h) - otherwise it would play some
@@ -54,6 +75,8 @@
 */
 
 #include <RV112FF.h>
+#include <MultiTurnKnob.h>
+#include <CapTouch.h>
 #include "faust_support.h"
 #include "synth.h"
 #include "bsp_api.h"   // for R_DAC - the audio ISR writes it directly, same as DACAudioTest
@@ -64,12 +87,43 @@
 const float MIN_FREQ = 50.0;
 const float MAX_FREQ = 10000.0;
 
-// See the header comment above: fold the angle around its 180-degree
-// midpoint, then map that exponentially onto the frequency range.
+// Fold a (possibly multi-turn, possibly negative) angle around its own
+// 180-degree midpoint, then map that exponentially onto the frequency
+// range - see the header comment above.
 float angleToFrequency(float angleDegrees) {
   float foldedAngle = (angleDegrees <= 180.0) ? angleDegrees : (360.0 - angleDegrees);
   float t = foldedAngle / 180.0;  // 0 at the reversal points, 1 at the peak
   return MIN_FREQ * pow(MAX_FREQ / MIN_FREQ, t);
+}
+
+// How many physical turns of the knob cover one sweep from MIN_FREQ to
+// MAX_FREQ (or back) - see the header comment on touch-gated speed.
+// TURNS_PER_SWEEP_FAST=0.5 reproduces exactly what this demo always
+// did: angleToFrequency() above treats a full 360-degree cycle as two
+// sweeps (up, then back down), so half a turn is one sweep already,
+// with no scaling needed.
+const float TURNS_PER_SWEEP_FAST = 0.5;
+const float TURNS_PER_SWEEP_SLOW = 2.0;
+
+// Turns a knob's unbounded accumulated position (MultiTurnKnob::read())
+// into the [0, 360) angle angleToFrequency() expects, scaled by how
+// many physical turns should cover one sweep. Dividing by
+// turnsPerSweep*2 rather than turnsPerSweep directly accounts for
+// angleToFrequency()'s own 360-degrees-is-two-sweeps convention (see
+// TURNS_PER_SWEEP_FAST above) - at turnsPerSweep=0.5 that's a divisor
+// of 1 (no scaling, matching the original single-turn behavior
+// exactly); at turnsPerSweep=2.0 it's a divisor of 4, i.e. a full
+// sweep now takes 4x the physical rotation the fast rate needs.
+float knobAngle(float accumulatedDegrees, float turnsPerSweep) {
+  // MultiTurnKnob::read()'s not-yet-calibrated sentinel is the exact
+  // value -1 (passed straight through from RV112FF before any
+  // accumulation begins) - not "any negative number," which is a
+  // perfectly normal, valid accumulated position once the knob's been
+  // turned backward past wherever calibration happened to complete.
+  if (accumulatedDegrees == -1.0f) return -1;
+  float wrapped = fmodf(accumulatedDegrees / (turnsPerSweep * 2.0f), 360.0f);
+  if (wrapped < 0) wrapped += 360.0f;
+  return wrapped;
 }
 
 // -- Faust engine and its controls --------------------------------------
@@ -141,10 +195,15 @@ void audioCallback(timer_callback_args_t *args) {
   R_DAC->DADR[1] = dacValue;
 }
 
-// -- Pots -------------------------------------------
+// -- Pots and touch pads -------------------------------------------
 
 RV112FF pot1(A2, A3);
 RV112FF pot2(A4, A5);
+MultiTurnKnob knob1(pot1);
+MultiTurnKnob knob2(pot2);
+
+CapTouch touch1(20);  // gates knob1's speed
+CapTouch touch2(21);  // gates knob2's speed
 
 const unsigned long CONTROL_INTERVAL = 10;  // milliseconds (~100 Hz)
 unsigned long previousControlMillis = 0;
@@ -155,6 +214,10 @@ void setup() {
   while (!Serial && millis() - start < 3000) {}
 
   Serial.println("Audio + knobs demo: turn each pot to bend its oscillator's pitch.");
+  Serial.println("Touch a knob's pad while turning it for fast (single-turn) sweeps; let go for slow (multi-turn).");
+
+  touch1.begin();
+  touch2.begin();
 
   synth.init(SAMPLE_RATE);
 
@@ -198,11 +261,17 @@ void loop() {
   if (currentMillis - previousControlMillis >= CONTROL_INTERVAL) {
     previousControlMillis = currentMillis;
 
-    float angle1 = pot1.read();
+    // One CapTouch::scan() covers both touch pads at once - see
+    // CapTouch.h - so it only needs calling once here, not per-knob.
+    CapTouch::scan();
+
+    float turnsPerSweep1 = touch1.isTouched() ? TURNS_PER_SWEEP_FAST : TURNS_PER_SWEEP_SLOW;
+    float angle1 = knobAngle(knob1.read(), turnsPerSweep1);
     *freq1Ptr = angleToFrequency(angle1);
     *gain1Ptr = pot1.isCalibrated() ? 1.0 : 0.0;
 
-    float angle2 = pot2.read();
+    float turnsPerSweep2 = touch2.isTouched() ? TURNS_PER_SWEEP_FAST : TURNS_PER_SWEEP_SLOW;
+    float angle2 = knobAngle(knob2.read(), turnsPerSweep2);
     *freq2Ptr = angleToFrequency(angle2);
     *gain2Ptr = pot2.isCalibrated() ? 1.0 : 0.0;
   }

@@ -1,0 +1,17 @@
+#######################################
+# Syntax Coloring Map for MultiTurnKnob
+#######################################
+
+#######################################
+# Datatypes (KEYWORD1)
+#######################################
+
+MultiTurnKnob	KEYWORD1
+
+#######################################
+# Methods and Functions (KEYWORD2)
+#######################################
+
+read	KEYWORD2
+write	KEYWORD2
+lastAngle	KEYWORD2

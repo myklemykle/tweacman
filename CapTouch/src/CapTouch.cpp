@@ -230,6 +230,7 @@ void CapTouch::scan() {
                                           // take well under this even
                                           // with all channels registered
   uint8_t lastStatus = 0xFF;
+  uint8_t currentChannel = 0;  // updated at Status 2 - see below
 
   while (millis() - start < TIMEOUT_MS) {
     uint8_t status = R_CTSU->CTSUST_b.CTSUSTC;
@@ -251,6 +252,18 @@ void CapTouch::scan() {
     // did, leaving the divisor at its reset value of /2 instead) with
     // CTSURICOA=0 and CTSUICOG=00b (ICO gain 100%, both defaults).
     if (status == 2 && status != lastStatus) {
+      // CTSUMCH0 identifies which channel is about to be measured, per
+      // the manual's own description of CTSUSO0 ("Set the TS pin that
+      // is to be measured next after a CTSU_CTSUWR interrupt occurs").
+      // Capture it *here* rather than re-reading it later once
+      // CTSUDTSR fires: for the last channel in a scan, CTSUMCH0
+      // apparently gets reset back to an idle/invalid value (0x1F) as
+      // part of the hardware wrapping the scan up, racing against a
+      // read of it after the fact - found by tracing every channel/raw
+      // pair live and seeing the last channel's reads misattributed to
+      // channel 31, which isn't a real channel at all.
+      currentChannel = R_CTSU->CTSUMCH0_b.CTSUMCH0;
+
       R_CTSU->CTSUSSC = 0x0200;
       R_CTSU->CTSUSO0 = 0x0000;
       R_CTSU->CTSUSO1 = 0x0F00;  // must be written last - see CapTouch.h
@@ -267,12 +280,11 @@ void CapTouch::scan() {
     // even if the stabilization time...elapses". Reading CTSURC here
     // is what clears CTSUDTSR and lets the next channel proceed.
     if (R_CTSU->CTSUST_b.CTSUDTSR) {
-      uint8_t finishedChannel = R_CTSU->CTSUMCH0_b.CTSUMCH0;
       uint16_t raw = R_CTSU->CTSUSC;         // read order matters: SC then RC
       uint16_t reference = R_CTSU->CTSURC;
 
       for (uint8_t i = 0; i < s_instanceCount; i++) {
-        if (s_instances[i]->_tsChannel == finishedChannel) {
+        if (s_instances[i]->_tsChannel == currentChannel) {
           s_instances[i]->finishReading(raw, reference);
           break;
         }

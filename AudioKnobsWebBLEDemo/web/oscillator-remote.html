@@ -1,0 +1,544 @@
+<title>Oscillator Remote</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600&family=Public+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap">
+<style>
+  :root {
+    --bg: #ede8de;
+    --surface: #f8f5ef;
+    --surface-2: #ffffff;
+    --text: #262019;
+    --text-dim: #746b5c;
+    --accent: #a3691a;
+    --accent-strong: #7f5213;
+    --good: #2f8a63;
+    --bad: #b8503a;
+    --border: #d9d0c0;
+    color-scheme: light dark;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #191815;
+      --surface: #221f1b;
+      --surface-2: #2b2722;
+      --text: #efe9dc;
+      --text-dim: #9c9284;
+      --accent: #dba54a;
+      --accent-strong: #f0bf6e;
+      --good: #63c298;
+      --bad: #e08066;
+      --border: #3a352c;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #191815;
+    --surface: #221f1b;
+    --surface-2: #2b2722;
+    --text: #efe9dc;
+    --text-dim: #9c9284;
+    --accent: #dba54a;
+    --accent-strong: #f0bf6e;
+    --good: #63c298;
+    --bad: #e08066;
+    --border: #3a352c;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Public Sans", -apple-system, "Helvetica Neue", Arial, sans-serif;
+    padding-inline: 16px;
+    padding-block: 28px;
+    display: flex;
+    justify-content: center;
+  }
+
+  .panel {
+    width: 100%;
+    max-width: 420px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+  }
+
+  .eyebrow {
+    font-family: "Oswald", "Arial Narrow", sans-serif;
+    font-size: 0.72rem;
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+
+  h1 {
+    font-family: "Oswald", "Arial Narrow", sans-serif;
+    font-weight: 600;
+    font-size: clamp(1.6rem, 6vw, 2rem);
+    letter-spacing: 0.01em;
+    margin: 2px 0 0;
+    text-wrap: balance;
+  }
+
+  /* -- header / connection strip ----------------------------------- */
+
+  .headerRow {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .statusRow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+  }
+
+  .dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--bad);
+    flex-shrink: 0;
+    transition: background-color 0.2s ease;
+  }
+  .dot.connected { background: var(--good); }
+
+  .statusText {
+    font-family: "Oswald", "Arial Narrow", sans-serif;
+    font-size: 0.85rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+
+  button {
+    font-family: "Oswald", "Arial Narrow", sans-serif;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .connectBtn {
+    background: var(--accent);
+    color: var(--surface-2);
+    border-color: var(--accent-strong);
+    font-size: 0.8rem;
+    font-weight: 600;
+    padding: 9px 16px;
+    flex-shrink: 0;
+  }
+  .connectBtn:active { background: var(--accent-strong); }
+  .connectBtn[hidden] { display: none; }
+
+  /* -- oscillator readout tiles ------------------------------------- */
+
+  .readouts {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+
+  .osc {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 14px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .osc .label {
+    font-family: "Oswald", "Arial Narrow", sans-serif;
+    font-size: 0.72rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+
+  .osc .hz {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: clamp(1.3rem, 6.5vw, 1.7rem);
+    line-height: 1.1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .osc .hz .unit {
+    font-size: 0.6em;
+    color: var(--text-dim);
+    margin-left: 3px;
+  }
+
+  .chip {
+    align-self: flex-start;
+    font-family: "Oswald", "Arial Narrow", sans-serif;
+    font-size: 0.66rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+  }
+  .chip.fast {
+    color: var(--surface-2);
+    background: var(--accent);
+    border-color: var(--accent-strong);
+  }
+
+  /* -- touch pads ----------------------------------------------------- */
+
+  .pads {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .pad {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    user-select: none;
+    touch-action: none;
+    transition: background-color 0.08s ease, border-color 0.08s ease;
+  }
+  .pad .padLabel {
+    font-family: "Oswald", "Arial Narrow", sans-serif;
+    font-size: 1rem;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+  }
+  .pad .padHint {
+    font-size: 0.72rem;
+    color: var(--text-dim);
+  }
+  .pad.held {
+    background: var(--accent);
+    border-color: var(--accent-strong);
+  }
+  .pad.held .padLabel, .pad.held .padHint { color: var(--surface-2); }
+  .pad[aria-disabled="true"] { opacity: 0.5; }
+
+  /* -- debug log -------------------------------------------------------- */
+
+  details.log {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface);
+    overflow: hidden;
+  }
+  details.log summary {
+    font-family: "Oswald", "Arial Narrow", sans-serif;
+    font-size: 0.72rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    padding: 10px 14px;
+    cursor: pointer;
+  }
+  .logBody {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 0.72rem;
+    line-height: 1.5;
+    color: var(--text-dim);
+    padding: 0 14px 12px;
+    max-height: 140px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  footer {
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    text-align: center;
+  }
+</style>
+
+<div class="panel">
+  <div class="headerRow">
+    <div>
+      <div class="eyebrow">SparkFun Thing Plus RA6M5</div>
+      <h1>Oscillator&nbsp;Remote</h1>
+      <div class="statusRow">
+        <span class="dot" id="dot"></span>
+        <span class="statusText" id="statusText">Disconnected</span>
+      </div>
+    </div>
+    <button class="connectBtn" id="connectBtn">Connect</button>
+  </div>
+
+  <div class="readouts">
+    <div class="osc">
+      <div class="label">Osc&nbsp;1</div>
+      <div class="hz" id="hz1">&mdash;<span class="unit">Hz</span></div>
+      <span class="chip" id="chip1">slow</span>
+    </div>
+    <div class="osc">
+      <div class="label">Osc&nbsp;2</div>
+      <div class="hz" id="hz2">&mdash;<span class="unit">Hz</span></div>
+      <span class="chip" id="chip2">slow</span>
+    </div>
+  </div>
+
+  <div class="pads">
+    <div class="pad" id="pad1" aria-disabled="true">
+      <span class="padLabel">Touch&nbsp;1</span>
+      <span class="padHint">hold for fast sweep &middot; osc 1</span>
+    </div>
+    <div class="pad" id="pad2" aria-disabled="true">
+      <span class="padLabel">Touch&nbsp;2</span>
+      <span class="padHint">hold for fast sweep &middot; osc 2</span>
+    </div>
+  </div>
+
+  <details class="log">
+    <summary>Link log</summary>
+    <div class="logBody" id="logBody">Not connected yet.</div>
+  </details>
+
+  <footer id="footer">
+    Bluetooth LE via the DA14531MOD's CodeLess link. On iOS, open this page in Bluefy or WebBLE - Safari has no Web Bluetooth support.
+  </footer>
+</div>
+
+<script>
+(() => {
+  "use strict";
+
+  // CodeLess AT-command service - used only for the Binary mode
+  // handshake below, never for application data (writing plain text
+  // here gets parsed as an AT command and rejected - confirmed live).
+  const AT_SERVICE_UUID = "866d3b04-e674-40dc-9c05-b7f91bec6e83";
+  const AT_INBOUND_UUID  = "914f8fb9-e8cd-411d-b7d1-14594de45425";  // write: AT+BINREQ goes here
+  const AT_OUTBOUND_UUID = "3bb535aa-50b2-4fbe-aa09-6b06dc59a404";  // read: the module's AT replies
+  const AT_FLOWCTRL_UUID = "e2048b39-d4f9-4a45-9f25-1856c10d5639";  // notify: "AT reply ready" doorbell
+
+  // DSPS (Direct Serial Port Service) - the actual application data
+  // channel, active only after Binary mode is negotiated. Not in the
+  // board's advertisement either (same reasoning as AT_SERVICE_UUID
+  // below), so it also has to be requested via optionalServices.
+  const DSPS_SERVICE_UUID  = "0783b03e-8535-b5a0-7140-a304d2495cb7";
+  const DSPS_TX_UUID       = "0783b03e-8535-b5a0-7140-a304d2495cb8";  // notify: board -> phone
+  const DSPS_FLOWCTRL_UUID = "0783b03e-8535-b5a0-7140-a304d2495cb9";  // notify + write: part of the handshake
+  const DSPS_RX_UUID       = "0783b03e-8535-b5a0-7140-a304d2495cba";  // write-without-response: phone -> board
+
+  const dot = document.getElementById("dot");
+  const statusText = document.getElementById("statusText");
+  const connectBtn = document.getElementById("connectBtn");
+  const hz1 = document.getElementById("hz1");
+  const hz2 = document.getElementById("hz2");
+  const chip1 = document.getElementById("chip1");
+  const chip2 = document.getElementById("chip2");
+  const pad1 = document.getElementById("pad1");
+  const pad2 = document.getElementById("pad2");
+  const logBody = document.getElementById("logBody");
+  const footer = document.getElementById("footer");
+
+  function log(line) {
+    const stamp = new Date().toLocaleTimeString();
+    logBody.textContent += `\n[${stamp}] ${line}`;
+    logBody.scrollTop = logBody.scrollHeight;
+  }
+
+  let device = null;
+  let dspsRxChar = null;
+  let dspsBuffer = "";  // accumulates raw DSPS TX bytes until a newline
+
+  function setConnected(connected) {
+    dot.classList.toggle("connected", connected);
+    statusText.textContent = connected ? "Connected" : "Disconnected";
+    connectBtn.hidden = connected;
+    pad1.setAttribute("aria-disabled", String(!connected));
+    pad2.setAttribute("aria-disabled", String(!connected));
+    if (!connected) {
+      hz1.innerHTML = "&mdash;<span class=\"unit\">Hz</span>";
+      hz2.innerHTML = "&mdash;<span class=\"unit\">Hz</span>";
+      chip1.textContent = "slow"; chip1.classList.remove("fast");
+      chip2.textContent = "slow"; chip2.classList.remove("fast");
+      pad1.classList.remove("held");
+      pad2.classList.remove("held");
+    }
+  }
+
+  // The board sends lines like "F1:440.0,F2:220.0,T1:0,T2:1\n" (see
+  // AudioKnobsWebBLEDemo.ino's header comment) over the DSPS pipe, once
+  // Binary mode is active - no CodeLess pipe-prefix convention involved
+  // at all once we're past the handshake.
+  function handleTelemetry(line) {
+    const parts = Object.fromEntries(
+      line.split(",").map((p) => p.split(":")).filter((kv) => kv.length === 2)
+    );
+    if (parts.F1 !== undefined) hz1.innerHTML = `${Number(parts.F1).toFixed(1)}<span class="unit">Hz</span>`;
+    if (parts.F2 !== undefined) hz2.innerHTML = `${Number(parts.F2).toFixed(1)}<span class="unit">Hz</span>`;
+    if (parts.T1 !== undefined) {
+      const fast = parts.T1 === "1";
+      chip1.textContent = fast ? "fast" : "slow";
+      chip1.classList.toggle("fast", fast);
+    }
+    if (parts.T2 !== undefined) {
+      const fast = parts.T2 === "1";
+      chip2.textContent = fast ? "fast" : "slow";
+      chip2.classList.toggle("fast", fast);
+    }
+  }
+
+  // DSPS TX is a genuinely raw byte stream, not one notification per
+  // message - a telemetry line can arrive split across packets, or
+  // several packed into one. Buffer and split on newlines rather than
+  // assuming each notification is exactly one line.
+  function onDspsData(event) {
+    const bytes = new Uint8Array(event.target.value.buffer);
+    dspsBuffer += new TextDecoder().decode(bytes);
+    let nl;
+    while ((nl = dspsBuffer.indexOf("\n")) !== -1) {
+      const line = dspsBuffer.slice(0, nl).trim();
+      dspsBuffer = dspsBuffer.slice(nl + 1);
+      if (line.length === 0) continue;
+      log(`< ${line}`);
+      handleTelemetry(line);
+    }
+  }
+
+  async function sendCommand(text) {
+    if (!dspsRxChar) return;
+    try {
+      // writeValue(), not writeValueWithoutResponse() - the latter is a
+      // newer addition to the Web Bluetooth spec than plain writeValue()
+      // and not every third-party implementation (e.g. Bluefy) supports
+      // it correctly; confirmed live that it can resolve "successfully"
+      // there without the write actually reaching the peripheral at
+      // all. Per spec, writeValue() picks whichever write type the
+      // characteristic itself declares, so this still works correctly
+      // even though DSPS RX only supports write-without-response.
+      await dspsRxChar.writeValue(new TextEncoder().encode(text));
+      log(`> ${text}`);
+    } catch (err) {
+      log(`! write failed: ${err.message}`);
+    }
+  }
+
+  // Negotiates CodeLess's "Binary mode" (UM-140 manual, section 8.6,
+  // "Enter Binary mode using Generic GATT Client") so the DSPS
+  // characteristics below carry real application data instead of the
+  // AT-command link rejecting everything written to it. Confirmed live
+  // that the module waits for the *local* host (the RA6M5 sketch) to
+  // approve this before it actually activates - that approval isn't
+  // anything this page does, it's AudioKnobsWebBLEDemo.ino's own job.
+  //
+  // Step order matters here - confirmed the hard way: an earlier version
+  // of this function requested Binary mode (step 5) before finishing
+  // the DSPS notification/flow-control setup (steps 1-4), and the
+  // module never actually granted it even though every individual GATT
+  // call still succeeded with no error. Steps 1-4 all happen first now,
+  // exactly as documented, with step 5 (the actual request) last.
+  async function enterBinaryMode(atService, dspsTxChar, dspsFlowChar) {
+    const inboundChar = await atService.getCharacteristic(AT_INBOUND_UUID);
+    const atFlowChar = await atService.getCharacteristic(AT_FLOWCTRL_UUID);
+
+    await atFlowChar.startNotifications();    // step 1
+    await dspsTxChar.startNotifications();    // step 2
+    await dspsFlowChar.startNotifications();  // step 3
+    dspsTxChar.addEventListener("characteristicvaluechanged", onDspsData);
+
+    await dspsFlowChar.writeValue(new Uint8Array([0x01]));  // step 4 - see sendCommand()'s comment on writeValue() vs writeValueWithoutResponse()
+
+    log("Requesting Binary mode...");
+    const atBinreq = new Uint8Array([0x41, 0x54, 0x2b, 0x42, 0x49, 0x4e, 0x52, 0x45, 0x51, 0x00]);  // "AT+BINREQ\0"
+    await inboundChar.writeValue(atBinreq);  // step 5
+  }
+
+  async function connect() {
+    if (!navigator.bluetooth) {
+      log("navigator.bluetooth is unavailable in this browser.");
+      return;
+    }
+    try {
+      // acceptAllDevices rather than filtering by name: a name filter
+      // worked fine in desktop Chrome, but third-party Web Bluetooth
+      // implementations like Bluefy/WebBLE reimplement the API
+      // themselves rather than using a real browser engine's native
+      // support, and can have incomplete filter handling even when
+      // basic connect/read/write/notify all work - "CLv2-CodeLess"
+      // simply not appearing in Bluefy's device picker, despite the
+      // board confirmed advertising via an independent scan at the same
+      // time, is exactly that symptom. Neither the CodeLess nor DSPS
+      // service UUID is in the board's advertisement anyway (confirmed
+      // via a bleak scan while building this - only Dialog/Renesas's
+      // own manufacturer UUIDs are), so both still need to be listed in
+      // optionalServices to be usable after connecting regardless of
+      // how the device itself gets picked.
+      device = await navigator.bluetooth.requestDevice({
+        acceptAllDevices: true,
+        optionalServices: [AT_SERVICE_UUID, DSPS_SERVICE_UUID],
+      });
+      log(`Picked ${device.name || device.id}.`);
+      device.addEventListener("gattserverdisconnected", () => {
+        log("Disconnected.");
+        dspsRxChar = null;
+        dspsBuffer = "";
+        setConnected(false);
+      });
+
+      const server = await device.gatt.connect();
+
+      const atService = await server.getPrimaryService(AT_SERVICE_UUID);
+      const dspsService = await server.getPrimaryService(DSPS_SERVICE_UUID);
+      const dspsTxChar = await dspsService.getCharacteristic(DSPS_TX_UUID);
+      const dspsFlowChar = await dspsService.getCharacteristic(DSPS_FLOWCTRL_UUID);
+      dspsRxChar = await dspsService.getCharacteristic(DSPS_RX_UUID);
+
+      await enterBinaryMode(atService, dspsTxChar, dspsFlowChar);
+
+      setConnected(true);
+      log("Connected. Waiting for telemetry...");
+    } catch (err) {
+      log(`Connect failed: ${err.message}`);
+      setConnected(false);
+    }
+  }
+
+  connectBtn.addEventListener("click", connect);
+
+  function bindPad(pad, onId, offId) {
+    let held = false;
+    const press = (ev) => {
+      ev.preventDefault();
+      if (pad.getAttribute("aria-disabled") === "true" || held) return;
+      held = true;
+      pad.classList.add("held");
+      sendCommand(onId);
+    };
+    const release = () => {
+      if (!held) return;
+      held = false;
+      pad.classList.remove("held");
+      sendCommand(offId);
+    };
+    pad.addEventListener("pointerdown", press);
+    pad.addEventListener("pointerup", release);
+    pad.addEventListener("pointercancel", release);
+    pad.addEventListener("pointerleave", release);
+  }
+  bindPad(pad1, "T1:1", "T1:0");
+  bindPad(pad2, "T2:1", "T2:0");
+
+  if (!navigator.bluetooth) {
+    footer.textContent = "Web Bluetooth isn't available in this browser - on iOS, open this page in Bluefy or WebBLE instead of Safari.";
+    footer.style.color = "var(--bad)";
+  }
+})();
+</script>

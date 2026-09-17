@@ -155,6 +155,14 @@ volatile float currentStep = 1.0f;
 volatile int16_t lastGoodSample = 0;
 volatile uint32_t underrunTicks = 0;
 
+// Diagnostic only: the min/max ratio actually computed at control rate
+// since the last status print, to check whether currentStep is
+// spiking between prints (which only show a single 500ms snapshot) or
+// whether the buffer wobble seen at "steady" knob positions has some
+// other cause entirely.
+float minRatioSeen = 1e9f;
+float maxRatioSeen = -1e9f;
+
 // -- Audio-rate interrupt ---------------------------------------------
 
 FspTimer audioTimer;
@@ -269,7 +277,10 @@ void loop() {
     float turnsPerSweep = touch1.isTouched() ? TURNS_PER_SWEEP_FAST : TURNS_PER_SWEEP_SLOW;
     float angle = knobAngle(knob1.read(), turnsPerSweep);
     if (angle >= 0) {
-      currentStep = angleToSpeedRatio(angle) * rateFactor;
+      float ratio = angleToSpeedRatio(angle);
+      currentStep = ratio * rateFactor;
+      if (ratio < minRatioSeen) minRatioSeen = ratio;
+      if (ratio > maxRatioSeen) maxRatioSeen = ratio;
     }
     // else: pot not yet calibrated - leave currentStep at the
     // native-speed passthrough default set in setup().
@@ -285,9 +296,19 @@ void loop() {
     float fillPercent = 100.0f * ring.usedSpace() / RING_CAPACITY;
     Serial.print("speed ");
     Serial.print(ratio, 2);
-    Serial.print("x  buffer ");
+    Serial.print("x (range ");
+    if (minRatioSeen <= maxRatioSeen) {
+      Serial.print(minRatioSeen, 3);
+      Serial.print("-");
+      Serial.print(maxRatioSeen, 3);
+    } else {
+      Serial.print("n/a");  // pot wasn't calibrated during this window
+    }
+    Serial.print(")  buffer ");
     Serial.print(fillPercent, 0);
     Serial.print("%  underruns ");
     Serial.println(underrunTicks);
+    minRatioSeen = 1e9f;
+    maxRatioSeen = -1e9f;
   }
 }

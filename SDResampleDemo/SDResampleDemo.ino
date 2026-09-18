@@ -201,14 +201,25 @@ const float MAX_RATIO = 128.0f;  // magnitude at both extremes - deliberately pr
 const float DEADBAND_T = 0.03f;  // fraction of the half-sweep that reads as a real pause - tune on the bench
 
 // Maps knobAngle()'s continuous [0,360) angle directly onto a SIGNED
-// ratio: wrapped=0 -> -MAX_RATIO, wrapped=180 -> paused, wrapped
-// approaching (but never reaching) 360 -> +MAX_RATIO. Continuous
+// ratio: wrapped=0 -> +MAX_RATIO, wrapped=180 -> paused, wrapped
+// approaching (but never reaching) 360 -> -MAX_RATIO. Continuous
 // everywhere a physical sweep passes through smoothly, including
 // straight through zero at the middle - the only discontinuity is
 // exactly at wrapped's own 360/0 seam, which is the knob's own
 // physical wrap point, not anything this function branches on.
+// Exponential in magnitude, same curve AudioKnobsDemo's pitch mapping
+// uses - a linear version was tried and confirmed live to feel too
+// twitchy below 100%, since a purely linear mapping spends the same
+// physical rotation on every equal-sized ratio step regardless of
+// magnitude, spreading only a small fraction of the knob's travel
+// across the whole sub-1x range. Exponential spends equal rotation on
+// equal *ratios* instead, giving much finer control at low speed.
 float angleToSpeedRatio(float wrappedAngle) {
-  float t = (wrappedAngle / 180.0f) - 1.0f;  // -1 .. +1 across the full sweep
+  float t = 1.0f - (wrappedAngle / 180.0f);  // +1 .. -1 across the full sweep - the
+                                              // 1.0f-(...) order (not (...)-1.0f) is
+                                              // what reverses the direction sense:
+                                              // confirmed live the un-reversed mapping
+                                              // spun opposite the intuitive way.
   float magT = fabsf(t);
   if (magT < DEADBAND_T) return 0.0f;  // a real pause, not a vanishingly small nonzero speed
   float scaledT = (magT - DEADBAND_T) / (1.0f - DEADBAND_T);

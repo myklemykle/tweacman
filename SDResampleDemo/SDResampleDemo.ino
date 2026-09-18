@@ -93,6 +93,24 @@
   speed-ratio contribution one RPM is worth) is a starting guess meant
   to be tuned by ear, same as DEADBAND_T.
 
+  Relative speed control: the first pot is RELATIVE (like a DJ jog wheel
+  or a DAW's jog control), not ABSOLUTE (like a normal volume knob, where
+  a given shaft position always means the same value). Playback speed
+  always starts at native (1.0x) on boot and on every file switch,
+  regardless of wherever the physical pot happens to be sitting - only
+  turning the pot moves speed away from 1.0x, and by however much you
+  turn it, not to wherever the pot's absolute position would otherwise
+  map. This matters because the pot has no mechanical center detent or
+  home position (see RV112FF.h - it's an endless-rotation part with no
+  absolute "zero" a hobbyist could return it to), so an absolute mapping
+  would make "start every file at native speed" impossible to hit
+  reliably by hand. See angleForRatio()/resetVirtualKnobToNative() and
+  the control-rate block in loop() for the implementation - a small
+  virtual position that starts anchored at native speed and accumulates
+  the pot's own physical deltas from then on, the same idea as a
+  relative/incremental encoder even though the underlying sensor is an
+  absolute one.
+
   Underrun policy: if the ring buffer can't supply what the resampler
   needs, the DAC ISR holds the last good sample rather than dropping to
   silence - that's what a real buffer-starved device actually sounds
@@ -190,6 +208,13 @@
        confirm it adds a warble on top rather than taking over
        entirely, and that leaving it alone (not touching it) adds
        nothing audible.
+    8. Confirm relative control: with the first pot sitting anywhere at
+       all, load a file (power-on, or a fresh PLAY: over BLE) and
+       confirm playback always starts at native (1.0x) speed regardless
+       of the pot's physical position. Then turn the pot a small amount
+       and confirm speed changes by a correspondingly small amount from
+       wherever it just was - not by jumping to whatever an absolute
+       mapping of the pot's new position would imply.
 
   This example code is in the public domain.
 */
@@ -251,6 +276,19 @@ float angleToSpeedRatio(float wrappedAngle) {
   return copysignf(magnitude, t);
 }
 
+// Inverse of angleToSpeedRatio(), for a nonzero ratio - used only to
+// find where "native speed" (ratio 1.0) lives on the dial, so the
+// virtual-knob tracking below can (re-)anchor itself there. Not
+// meaningful for ratio 0, which isn't a single point on the dial - it's
+// the whole deadband.
+float angleForRatio(float ratio) {
+  float magnitude = fabsf(ratio);
+  float scaledT = logf(magnitude / MIN_RATIO) / logf(MAX_RATIO / MIN_RATIO);
+  float magT = DEADBAND_T + scaledT * (1.0f - DEADBAND_T);
+  float t = copysignf(magT, ratio);
+  return (1.0f - t) * 180.0f;
+}
+
 const float TURNS_PER_SWEEP_FAST = 0.5f;
 const float TURNS_PER_SWEEP_SLOW = 2.0f;
 
@@ -259,6 +297,40 @@ float knobAngle(float accumulatedDegrees, float turnsPerSweep) {
   float wrapped = fmodf(accumulatedDegrees / (turnsPerSweep * 2.0f), 360.0f);
   if (wrapped < 0) wrapped += 360.0f;
   return wrapped;
+}
+
+// -- Relative ("virtual knob") speed control -------------------------------
+// The physical knob is absolute (its position directly maps to a
+// point on the dial) but the speed control is relative: pot1's
+// MOVEMENT, not its position, is what moves a separate virtual dial
+// position - virtualKnobDegrees below - through the exact same mapping
+// above. This means the real knob's physical position at any moment is
+// meaningless on its own; only how far it's turned since the last tick
+// matters. virtualKnobAnchored tracks "no baseline yet" explicitly,
+// rather than testing lastPhysicalKnobDegrees's sign the way
+// knobAngle() tests for MultiTurnKnob's own -1 not-ready sentinel -
+// unlike that single-turn [0,360) reading, MultiTurnKnob::read()'s
+// accumulated multi-turn position legitimately goes negative during
+// perfectly ordinary counterclockwise turns, so a negative value here
+// can't be trusted to mean "not calibrated yet" (a real bug caught on
+// the bench: turning one direction silently froze the ratio the moment
+// the accumulator crossed zero). "No baseline yet" is true at boot
+// before pot1 first calibrates, and again briefly after every
+// resetVirtualKnobToNative() call (see loadFile()), which is what makes
+// native speed on every fresh sample and at boot come for free: the
+// control-rate block below establishes the virtual knob fresh, right at
+// the ratio-1.0 point, the moment it next finds no baseline to diff
+// against.
+float virtualKnobDegrees = 0.0f;
+float lastPhysicalKnobDegrees = 0.0f;
+bool virtualKnobAnchored = false;
+
+// Doesn't touch virtualKnobDegrees directly - just clears the baseline
+// so the control-rate block (which alone knows the current
+// touch-gated turnsPerSweep) re-anchors it at native speed on its very
+// next tick. Safe to call from anywhere, at any time.
+void resetVirtualKnobToNative() {
+  virtualKnobAnchored = false;
 }
 
 // -- SD card and WAV source -----------------------------------------------
@@ -378,7 +450,14 @@ bool loadFile(const String &filename, String &errorOut) {
   resampler.frac = 0.0f;
   lastGoodSample = 0;  // don't carry a stale sample into the new file
   rateFactor = wav.nativeSampleRate() / 48000.0f;
+  // Every fresh sample starts at native speed, regardless of wherever
+  // the (relative, not absolute - see resetVirtualKnobToNative()'s
+  // comment) speed knob currently sits: set lastKnownRatio directly
+  // rather than waiting for the next control-rate tick to catch up, so
+  // there's no gap where a stale ratio from the previous file applies.
+  lastKnownRatio = 1.0f;
   currentStep = lastKnownRatio * rateFactor;
+  resetVirtualKnobToNative();
 
   // Prime the buffer before resuming, same as the original boot-time
   // pre-fill, so playback doesn't wake into an instant underrun. Always
@@ -689,12 +768,28 @@ void loop() {
     CapTouch::scan();
 
     float turnsPerSweep = touch1.isTouched() ? TURNS_PER_SWEEP_FAST : TURNS_PER_SWEEP_SLOW;
-    float angle = knobAngle(knob1.read(), turnsPerSweep);
-    if (angle >= 0) {
-      float ratio = angleToSpeedRatio(angle);
-      lastKnownRatio = ratio;
-      if (ratio < minRatioSeen) minRatioSeen = ratio;
-      if (ratio > maxRatioSeen) maxRatioSeen = ratio;
+    float physicalNow = knob1.read();
+    if (physicalNow != -1.0f) {
+      if (!virtualKnobAnchored) {
+        // First calibration, or a reset just requested one (new file
+        // loaded): anchor the virtual knob at native (1.0x) speed right
+        // here, ignoring physicalNow's absolute position entirely - the
+        // whole point of relative control is that wherever the real
+        // knob happens to be sitting doesn't matter.
+        virtualKnobDegrees = angleForRatio(1.0f) * turnsPerSweep * 2.0f;
+        virtualKnobAnchored = true;
+      } else {
+        virtualKnobDegrees += physicalNow - lastPhysicalKnobDegrees;
+      }
+      lastPhysicalKnobDegrees = physicalNow;
+
+      float angle = knobAngle(virtualKnobDegrees, turnsPerSweep);
+      if (angle >= 0) {
+        float ratio = angleToSpeedRatio(angle);
+        lastKnownRatio = ratio;
+        if (ratio < minRatioSeen) minRatioSeen = ratio;
+        if (ratio > maxRatioSeen) maxRatioSeen = ratio;
+      }
     }
     // else: pot not yet calibrated - lastKnownRatio keeps whatever it
     // already had (the native-speed passthrough default from setup()/

@@ -1,0 +1,717 @@
+<title>WAV Remote</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600&family=Public+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap">
+<style>
+  :root {
+    --bg: #ede8de;
+    --surface: #f8f5ef;
+    --surface-2: #ffffff;
+    --text: #262019;
+    --text-dim: #746b5c;
+    --accent: #a3691a;
+    --accent-strong: #7f5213;
+    --good: #2f8a63;
+    --bad: #b8503a;
+    --border: #d9d0c0;
+    color-scheme: light dark;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #191815;
+      --surface: #221f1b;
+      --surface-2: #2b2722;
+      --text: #efe9dc;
+      --text-dim: #9c9284;
+      --accent: #dba54a;
+      --accent-strong: #f0bf6e;
+      --good: #63c298;
+      --bad: #e08066;
+      --border: #3a352c;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #191815;
+    --surface: #221f1b;
+    --surface-2: #2b2722;
+    --text: #efe9dc;
+    --text-dim: #9c9284;
+    --accent: #dba54a;
+    --accent-strong: #f0bf6e;
+    --good: #63c298;
+    --bad: #e08066;
+    --border: #3a352c;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Public Sans", -apple-system, "Helvetica Neue", Arial, sans-serif;
+    padding-inline: 16px;
+    padding-block: 28px;
+    display: flex;
+    justify-content: center;
+  }
+
+  .panel {
+    width: 100%;
+    max-width: 420px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+  }
+
+  .eyebrow {
+    font-family: "Oswald", "Arial Narrow", sans-serif;
+    font-size: 0.72rem;
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+
+  h1 {
+    font-family: "Oswald", "Arial Narrow", sans-serif;
+    font-weight: 600;
+    font-size: clamp(1.6rem, 6vw, 2rem);
+    letter-spacing: 0.01em;
+    margin: 2px 0 0;
+    text-wrap: balance;
+  }
+
+  /* -- header / connection strip ----------------------------------- */
+
+  .headerRow {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .statusRow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+  }
+
+  .dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--bad);
+    flex-shrink: 0;
+    transition: background-color 0.2s ease;
+  }
+  .dot.connected { background: var(--good); }
+
+  .statusText {
+    font-family: "Oswald", "Arial Narrow", sans-serif;
+    font-size: 0.85rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+
+  button {
+    font-family: "Oswald", "Arial Narrow", sans-serif;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .connectBtn {
+    background: var(--accent);
+    color: var(--surface-2);
+    border-color: var(--accent-strong);
+    font-size: 0.8rem;
+    font-weight: 600;
+    padding: 9px 16px;
+    flex-shrink: 0;
+  }
+  .connectBtn:active { background: var(--accent-strong); }
+  .connectBtn[hidden] { display: none; }
+
+  /* -- stat readout tiles ------------------------------------------- */
+
+  .readouts {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 10px;
+  }
+
+  .stat {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    align-items: center;
+    text-align: center;
+  }
+
+  .stat .label {
+    font-family: "Oswald", "Arial Narrow", sans-serif;
+    font-size: 0.68rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+
+  .stat .value {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: clamp(1.1rem, 6vw, 1.4rem);
+    line-height: 1.1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .stat .value.bad { color: var(--bad); }
+  .stat .value .unit {
+    font-size: 0.6em;
+    color: var(--text-dim);
+    margin-left: 3px;
+  }
+
+  .nowPlaying {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+  }
+  .nowPlaying .label {
+    font-family: "Oswald", "Arial Narrow", sans-serif;
+    font-size: 0.72rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+  .nowPlaying .filename {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 0.85rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* -- file list ------------------------------------------------------ */
+
+  .filesHeader {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .filesHeader .eyebrow { margin: 0; }
+  .refreshBtn {
+    background: var(--surface-2);
+    color: var(--text-dim);
+    font-size: 0.68rem;
+    font-weight: 600;
+    padding: 6px 10px;
+  }
+  .refreshBtn:active { background: var(--surface); }
+
+  .fileList {
+    list-style: none;
+    margin: 8px 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 260px;
+    overflow-y: auto;
+  }
+  .fileItem {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 0.85rem;
+    cursor: pointer;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    transition: background-color 0.08s ease, border-color 0.08s ease;
+  }
+  .fileItem:hover { border-color: var(--accent); }
+  .fileItem.playing {
+    background: var(--accent);
+    border-color: var(--accent-strong);
+    color: var(--surface-2);
+  }
+  .fileList:empty::after {
+    content: "No files yet - connect, then Refresh.";
+    font-family: "Public Sans", sans-serif;
+    font-size: 0.8rem;
+    color: var(--text-dim);
+  }
+
+  /* -- debug log -------------------------------------------------------- */
+
+  details.log {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface);
+    overflow: hidden;
+  }
+  details.log summary {
+    font-family: "Oswald", "Arial Narrow", sans-serif;
+    font-size: 0.72rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    padding: 10px 14px;
+    cursor: pointer;
+  }
+  .logToolbar {
+    padding: 0 14px 8px;
+  }
+  .copyLogBtn {
+    background: var(--surface-2);
+    color: var(--text-dim);
+    font-size: 0.66rem;
+    font-weight: 600;
+    padding: 5px 9px;
+  }
+  .copyLogBtn:active { background: var(--surface); }
+  .copyLogBtn.copied { color: var(--good); border-color: var(--good); }
+  .logBody {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 0.72rem;
+    line-height: 1.5;
+    color: var(--text-dim);
+    padding: 0 14px 12px;
+    max-height: 140px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  footer {
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    text-align: center;
+  }
+</style>
+
+<div class="panel">
+  <div class="headerRow">
+    <div>
+      <div class="eyebrow">SparkFun Thing Plus RA6M5</div>
+      <h1>WAV&nbsp;Remote</h1>
+      <div class="statusRow">
+        <span class="dot" id="dot"></span>
+        <span class="statusText" id="statusText">Disconnected</span>
+      </div>
+    </div>
+    <button class="connectBtn" id="connectBtn">Connect</button>
+  </div>
+
+  <div class="nowPlaying">
+    <span class="label">Now&nbsp;Playing</span>
+    <span class="filename" id="nowPlaying">&mdash;</span>
+  </div>
+
+  <div class="readouts">
+    <div class="stat">
+      <div class="label">Speed</div>
+      <div class="value" id="speed">&mdash;<span class="unit">x</span></div>
+    </div>
+    <div class="stat">
+      <div class="label">Buffer</div>
+      <div class="value" id="buffer">&mdash;<span class="unit">%</span></div>
+    </div>
+    <div class="stat">
+      <div class="label">Underruns</div>
+      <div class="value" id="underruns">&mdash;</div>
+    </div>
+  </div>
+
+  <div>
+    <div class="filesHeader">
+      <div class="eyebrow">Files on card</div>
+      <button class="refreshBtn" id="refreshBtn" disabled>Refresh</button>
+    </div>
+    <ul class="fileList" id="fileList"></ul>
+  </div>
+
+  <details class="log">
+    <summary>Link log</summary>
+    <div class="logToolbar">
+      <button class="copyLogBtn" id="copyLogBtn">Copy log</button>
+    </div>
+    <div class="logBody" id="logBody">Not connected yet.</div>
+  </details>
+
+  <footer id="footer">
+    Bluetooth LE via the DA14531MOD's CodeLess link. On iOS, open this page in Bluefy or WebBLE - Safari has no Web Bluetooth support.
+  </footer>
+</div>
+
+<script>
+(() => {
+  "use strict";
+
+  // CodeLess AT-command service - used only for the Binary mode
+  // handshake below, never for application data (writing plain text
+  // here gets parsed as an AT command and rejected - confirmed live).
+  const AT_SERVICE_UUID = "866d3b04-e674-40dc-9c05-b7f91bec6e83";
+  const AT_INBOUND_UUID  = "914f8fb9-e8cd-411d-b7d1-14594de45425";  // write: AT+BINREQ goes here
+  const AT_OUTBOUND_UUID = "3bb535aa-50b2-4fbe-aa09-6b06dc59a404";  // read: the module's AT replies
+  const AT_FLOWCTRL_UUID = "e2048b39-d4f9-4a45-9f25-1856c10d5639";  // notify: "AT reply ready" doorbell
+
+  // DSPS (Direct Serial Port Service) - the actual application data
+  // channel, active only after Binary mode is negotiated. Not in the
+  // board's advertisement either (same reasoning as AT_SERVICE_UUID
+  // below), so it also has to be requested via optionalServices.
+  const DSPS_SERVICE_UUID  = "0783b03e-8535-b5a0-7140-a304d2495cb7";
+  const DSPS_TX_UUID       = "0783b03e-8535-b5a0-7140-a304d2495cb8";  // notify: board -> phone
+  const DSPS_FLOWCTRL_UUID = "0783b03e-8535-b5a0-7140-a304d2495cb9";  // notify + write: part of the handshake
+  const DSPS_RX_UUID       = "0783b03e-8535-b5a0-7140-a304d2495cba";  // write-without-response: phone -> board
+
+  const dot = document.getElementById("dot");
+  const statusText = document.getElementById("statusText");
+  const connectBtn = document.getElementById("connectBtn");
+  const refreshBtn = document.getElementById("refreshBtn");
+  const nowPlaying = document.getElementById("nowPlaying");
+  const speedEl = document.getElementById("speed");
+  const bufferEl = document.getElementById("buffer");
+  const underrunsEl = document.getElementById("underruns");
+  const fileListEl = document.getElementById("fileList");
+  const logBody = document.getElementById("logBody");
+  const copyLogBtn = document.getElementById("copyLogBtn");
+  const footer = document.getElementById("footer");
+
+  function log(line) {
+    const stamp = new Date().toLocaleTimeString();
+    logBody.textContent += `\n[${stamp}] ${line}`;
+    logBody.scrollTop = logBody.scrollHeight;
+  }
+
+  let device = null;
+  let dspsRxChar = null;
+  let dspsBuffer = "";  // accumulates raw DSPS TX bytes until a newline
+  let currentFile = null;
+
+  function setConnected(connected) {
+    dot.classList.toggle("connected", connected);
+    statusText.textContent = connected ? "Connected" : "Disconnected";
+    connectBtn.hidden = connected;
+    refreshBtn.disabled = !connected;
+    if (!connected) {
+      nowPlaying.textContent = "—";
+      speedEl.innerHTML = "&mdash;<span class=\"unit\">x</span>";
+      bufferEl.innerHTML = "&mdash;<span class=\"unit\">%</span>";
+      underrunsEl.textContent = "—";
+      underrunsEl.classList.remove("bad");
+      fileListEl.textContent = "";
+      currentFile = null;
+    }
+  }
+
+  // File list arrives as a block: "FILES:BEGIN", one filename per line,
+  // "FILES:END" - not a single line, so it's handled outside
+  // handleTelemetry()'s one-line-at-a-time key:value parsing.
+  let collectingFiles = false;
+  let fileListBuffer = [];
+
+  // The board doesn't always cleanly complete its side of the Binary
+  // mode handshake on every connection - confirmed live that the
+  // module can simply fail to relay a fresh +CONNECTED/+BINREQ pair to
+  // it on some reconnects, for reasons outside this page's or the
+  // sketch's control. When that happens, this page is genuinely
+  // connected at the Bluetooth layer, but the board can never dispatch
+  // LIST, so no response ever comes - not a slow response, no response
+  // at all. Retry a couple of times with a timeout rather than hanging
+  // silently forever.
+  let listRetryTimer = null;
+  let listRetryCount = 0;
+  const LIST_RETRY_TIMEOUT_MS = 1500;  // a working board answers near-instantly
+  const LIST_MAX_RETRIES = 2;
+
+  function requestFileList() {
+    listRetryCount = 0;
+    sendListWithRetry();
+  }
+
+  function sendListWithRetry() {
+    sendCommand("LIST");
+    clearTimeout(listRetryTimer);
+    listRetryTimer = setTimeout(() => {
+      if (listRetryCount < LIST_MAX_RETRIES) {
+        listRetryCount++;
+        log(`No response to LIST - retrying (${listRetryCount}/${LIST_MAX_RETRIES})...`);
+        sendListWithRetry();
+      } else {
+        log("LIST still not answered - reconnecting to recover...");
+        reconnectAndRetry();
+      }
+    }, LIST_RETRY_TIMEOUT_MS);
+  }
+
+  function renderFileList(names) {
+    fileListEl.textContent = "";
+    for (const name of names) {
+      const li = document.createElement("li");
+      li.className = "fileItem" + (name === currentFile ? " playing" : "");
+      li.textContent = name;
+      li.addEventListener("click", () => sendCommand("PLAY:" + name));
+      fileListEl.appendChild(li);
+    }
+  }
+
+  function setNowPlaying(name) {
+    currentFile = name === "NONE" ? null : name;
+    nowPlaying.textContent = currentFile || "—";
+    for (const li of fileListEl.children) {
+      li.classList.toggle("playing", li.textContent === currentFile);
+    }
+  }
+
+  function showError(rest) {
+    // rest is "<filename>:<reason>" - only the first colon in it is ours
+    // to split on, the reason itself is free text and isn't parsed further.
+    const sep = rest.indexOf(":");
+    const filename = sep === -1 ? rest : rest.slice(0, sep);
+    const reason = sep === -1 ? "" : rest.slice(sep + 1);
+    log(`! ${filename}: ${reason}`);
+  }
+
+  // The board sends a stats line like "SPD:2.35,MIN:1.000,MAX:3.500,
+  // BUF:78,UND:0,FILE:AUDIO.WAV\n" (see SDResampleDemo.ino's header
+  // comment) over the DSPS pipe once Binary mode is active.
+  function handleTelemetry(line) {
+    const parts = Object.fromEntries(
+      line.split(",").map((p) => p.split(":")).filter((kv) => kv.length === 2)
+    );
+    if (parts.SPD !== undefined) speedEl.innerHTML = `${Number(parts.SPD).toFixed(2)}<span class="unit">x</span>`;
+    if (parts.BUF !== undefined) {
+      bufferEl.innerHTML = `${parts.BUF}<span class="unit">%</span>`;
+    }
+    if (parts.UND !== undefined) {
+      underrunsEl.textContent = parts.UND;
+      underrunsEl.classList.toggle("bad", Number(parts.UND) > 0);
+    }
+    if (parts.FILE !== undefined) setNowPlaying(parts.FILE);
+  }
+
+  // One line at a time, dispatched by prefix ahead of the plain
+  // key:value telemetry parser - FILES:/PLAYING:/ERR: are structurally
+  // different (a multi-line block, or a payload that itself may contain
+  // a colon) from the flat SPD:/BUF:/UND:/... stats line.
+  function handleLine(line) {
+    if (line === "FILES:BEGIN") {
+      clearTimeout(listRetryTimer);  // a response is actually coming - stop retrying
+      collectingFiles = true;
+      fileListBuffer = [];
+      return;
+    }
+    if (line === "FILES:END") { collectingFiles = false; renderFileList(fileListBuffer); return; }
+    if (collectingFiles) { fileListBuffer.push(line); return; }
+    if (line.startsWith("PLAYING:")) { setNowPlaying(line.slice(8)); return; }
+    if (line.startsWith("ERR:")) { showError(line.slice(4)); return; }
+    handleTelemetry(line);
+  }
+
+  // DSPS TX is a genuinely raw byte stream, not one notification per
+  // message - a line can arrive split across packets, or several packed
+  // into one. Buffer and split on newlines rather than assuming each
+  // notification is exactly one line.
+  function onDspsData(event) {
+    const bytes = new Uint8Array(event.target.value.buffer);
+    dspsBuffer += new TextDecoder().decode(bytes);
+    let nl;
+    while ((nl = dspsBuffer.indexOf("\n")) !== -1) {
+      const line = dspsBuffer.slice(0, nl).trim();
+      dspsBuffer = dspsBuffer.slice(nl + 1);
+      if (line.length === 0) continue;
+      log(`< ${line}`);
+      handleLine(line);
+    }
+  }
+
+  async function sendCommand(text) {
+    if (!dspsRxChar) return;
+    try {
+      // writeValueWithoutResponse(), not plain writeValue(): confirmed
+      // live on desktop Chrome that writeValue() resolves successfully
+      // (no thrown error) without the write actually reaching the
+      // board's Serial2 at all - DSPS RX is declared write-without-
+      // response-only, and Chrome's automatic type-selection fallback
+      // for plain writeValue() doesn't seem to relay correctly for this
+      // characteristic. NOTE: AudioKnobsWebBLEDemo's page uses plain
+      // writeValue() instead, specifically because Bluefy on iOS
+      // silently drops writeValueWithoutResponse() - if this page also
+      // needs to run in a phone WebBLE app rather than a desktop
+      // browser, that trade-off needs revisiting (possibly detecting
+      // the environment, or accepting one platform doesn't work).
+      await dspsRxChar.writeValueWithoutResponse(new TextEncoder().encode(text));
+      log(`> ${text}`);
+    } catch (err) {
+      log(`! write failed: ${err.message}`);
+    }
+  }
+
+  // Negotiates CodeLess's "Binary mode" (UM-140 manual, section 8.6,
+  // "Enter Binary mode using Generic GATT Client") so the DSPS
+  // characteristics below carry real application data instead of the
+  // AT-command link rejecting everything written to it. Confirmed live
+  // (in AudioKnobsWebBLEDemo) that the module waits for the *local* host
+  // (the RA6M5 sketch) to approve this before it actually activates -
+  // that approval isn't anything this page does, it's SDResampleDemo.ino's
+  // own job.
+  //
+  // Step order matters here: steps 1-4 must all finish before step 5 (the
+  // actual Binary-mode request), or the module never grants it even
+  // though every individual GATT call still succeeds with no error.
+  async function enterBinaryMode(atService, dspsTxChar, dspsFlowChar) {
+    const inboundChar = await atService.getCharacteristic(AT_INBOUND_UUID);
+    const atFlowChar = await atService.getCharacteristic(AT_FLOWCTRL_UUID);
+
+    await atFlowChar.startNotifications();    // step 1
+    await dspsTxChar.startNotifications();    // step 2
+    await dspsFlowChar.startNotifications();  // step 3
+    dspsTxChar.addEventListener("characteristicvaluechanged", onDspsData);
+
+    await dspsFlowChar.writeValue(new Uint8Array([0x01]));  // step 4 - see sendCommand()'s comment on writeValue() vs writeValueWithoutResponse()
+
+    log("Requesting Binary mode...");
+    const atBinreq = new Uint8Array([0x41, 0x54, 0x2b, 0x42, 0x49, 0x4e, 0x52, 0x45, 0x51, 0x00]);  // "AT+BINREQ\0"
+    await inboundChar.writeValue(atBinreq);  // step 5
+  }
+
+  // The GATT-connect-through-file-list sequence, factored out so
+  // reconnectAndRetry() below can redo it without requestDevice() -
+  // that API requires a direct user gesture and can't be called from a
+  // timeout, but reconnecting an already-granted device reference has
+  // no such restriction.
+  async function establishLink() {
+    const server = await device.gatt.connect();
+
+    const atService = await server.getPrimaryService(AT_SERVICE_UUID);
+    const dspsService = await server.getPrimaryService(DSPS_SERVICE_UUID);
+    const dspsTxChar = await dspsService.getCharacteristic(DSPS_TX_UUID);
+    const dspsFlowChar = await dspsService.getCharacteristic(DSPS_FLOWCTRL_UUID);
+    dspsRxChar = await dspsService.getCharacteristic(DSPS_RX_UUID);
+
+    await enterBinaryMode(atService, dspsTxChar, dspsFlowChar);
+
+    setConnected(true);
+    log("Connected. Waiting for telemetry...");
+    requestFileList();
+  }
+
+  // Used when the board never completes its side of the handshake (see
+  // the LIST-retry comment above). Confirmed live: this reliably
+  // happens in an exact alternating (ABAB) pattern across repeated page
+  // reloads - a reload doesn't always give the module a clean, immediate
+  // disconnect signal (the browser can tear the tab down without
+  // completing the BLE disconnect procedure), so the module only
+  // notices via its own supervision timeout; reconnecting faster than
+  // that timeout lands on a module that still thinks the old link is
+  // live and never sends a fresh +CONNECTED/+BINREQ. An explicit
+  // disconnect()/reconnect() cycle from inside the page gives the
+  // module that clean signal immediately instead.
+  async function reconnectAndRetry() {
+    if (!device) return;
+    log("Reconnecting to recover...");
+    try {
+      if (device.gatt.connected) device.gatt.disconnect();
+    } catch (err) {
+      // ignore - proceed to reconnect regardless
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    try {
+      await establishLink();
+    } catch (err) {
+      log(`Reconnect failed: ${err.message}`);
+      setConnected(false);
+    }
+  }
+
+  async function connect() {
+    if (!navigator.bluetooth) {
+      log("navigator.bluetooth is unavailable in this browser.");
+      return;
+    }
+    try {
+      // acceptAllDevices rather than filtering by name: a name filter
+      // worked fine in desktop Chrome, but third-party Web Bluetooth
+      // implementations like Bluefy/WebBLE reimplement the API
+      // themselves rather than using a real browser engine's native
+      // support, and can have incomplete filter handling even when
+      // basic connect/read/write/notify all work. Neither the CodeLess
+      // nor DSPS service UUID is in the board's advertisement anyway, so
+      // both still need to be listed in optionalServices to be usable
+      // after connecting regardless of how the device itself gets picked.
+      device = await navigator.bluetooth.requestDevice({
+        acceptAllDevices: true,
+        optionalServices: [AT_SERVICE_UUID, DSPS_SERVICE_UUID],
+      });
+      log(`Picked ${device.name || device.id}.`);
+      device.addEventListener("gattserverdisconnected", () => {
+        log("Disconnected.");
+        dspsRxChar = null;
+        dspsBuffer = "";
+        clearTimeout(listRetryTimer);
+        setConnected(false);
+      });
+
+      await establishLink();
+    } catch (err) {
+      log(`Connect failed: ${err.message}`);
+      setConnected(false);
+    }
+  }
+
+  connectBtn.addEventListener("click", connect);
+  refreshBtn.addEventListener("click", requestFileList);
+
+  // Explicitly disconnect before the page actually goes away, rather
+  // than leaving the module to notice via its own supervision timeout.
+  // This is the real fix for the ABAB reconnect-failure pattern seen
+  // in testing: a plain reload/navigate/close doesn't always complete
+  // the BLE disconnect procedure before the tab is torn down, so the
+  // module can still think the old link is live when the very next
+  // connection attempt arrives - it then never sends a fresh
+  // +CONNECTED/+BINREQ to the board for that attempt. pagehide fires
+  // reliably in all of those cases (unlike beforeunload, which modern
+  // browsers increasingly restrict); reconnectAndRetry() above is the
+  // fallback for whatever this doesn't catch (e.g. a crashed tab).
+  window.addEventListener("pagehide", () => {
+    if (device && device.gatt && device.gatt.connected) {
+      device.gatt.disconnect();
+    }
+  });
+
+  copyLogBtn.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(logBody.textContent);
+      copyLogBtn.textContent = "Copied!";
+      copyLogBtn.classList.add("copied");
+    } catch (err) {
+      copyLogBtn.textContent = "Copy failed";
+    }
+    setTimeout(() => {
+      copyLogBtn.textContent = "Copy log";
+      copyLogBtn.classList.remove("copied");
+    }, 1500);
+  });
+
+  if (!navigator.bluetooth) {
+    footer.textContent = "Web Bluetooth isn't available in this browser - on iOS, open this page in Bluefy or WebBLE instead of Safari.";
+    footer.style.color = "var(--bad)";
+  }
+})();
+</script>

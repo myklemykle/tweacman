@@ -102,6 +102,17 @@ class AudioRingBuffer {
     return tail_.load(std::memory_order_relaxed) - head_.load(std::memory_order_acquire);
   }
 
+  // Discards any buffered samples and returns both counters to zero, for
+  // switching to a different source file. Relaxed ordering is enough
+  // here specifically because the caller is required to have the audio
+  // interrupt masked first (see SDResampleDemo.ino's loadFile()) - unlike
+  // every other method here, there's no concurrent ISR access to order
+  // against during this call.
+  void reset() {
+    tail_.store(0, std::memory_order_relaxed);
+    head_.store(0, std::memory_order_relaxed);
+  }
+
  private:
   int16_t data_[CAPACITY];
   std::atomic<uint32_t> tail_{0};  // written by producer only

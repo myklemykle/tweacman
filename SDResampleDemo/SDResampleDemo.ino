@@ -2,11 +2,14 @@
   SDResampleDemo - SparkFun Thing Plus RA6M5
 
   Streams a WAV file off the onboard SD card and plays it out the DAC,
-  with a pot controlling a completely smooth, arbitrary playback-speed
-  ratio - not discrete multiples, and slowing down genuinely interpolates
-  new sample values rather than just repeating or stepping through
-  existing ones. A phone/browser can also pick which file plays and
-  watch the same live stats over BLE - see "BLE control" below.
+  with a pot controlling a completely smooth, arbitrary, BIDIRECTIONAL
+  playback-speed ratio - not discrete multiples, and slowing down (in
+  either direction) genuinely interpolates new sample values rather than
+  just repeating or stepping through existing ones. The pot sweeps from
+  -MAX_RATIO through a real pause at the middle up to +MAX_RATIO;
+  negative plays the file backward. A phone/browser can also pick which
+  file plays and watch the same live stats over BLE - see "BLE control"
+  below.
 
   Wiring: an SD card (FAT32, any SDHC card - see the SD note in
   CLAUDE.md, this board's slot is wired to the RA6M5's native SDHI
@@ -35,33 +38,44 @@
   below.
 
   Measured on the first bench card (a plain microSD, brand/speed class
-  unrecorded): underruns start right around speed ratio ~23-25x with
-  this sketch's default settings, regardless of whether SD reads happen
-  in 2KB or 32KB chunks and regardless of the ring buffer's size - both
-  were tried and neither moved the wall, which rules out per-fread()-
-  call overhead as the cause. That points at ~2-2.2MB/s as this card's
-  real sustained sequential read speed - a small fraction of the SDHI
-  bus's theoretical ceiling above, and apparently the card's own limit,
-  not this sketch's. Worth re-measuring with a different/faster card.
+  unrecorded), forward playback only: underruns start right around speed
+  ratio ~23-25x with this sketch's default settings, regardless of
+  whether SD reads happen in 2KB or 32KB chunks and regardless of the
+  ring buffer's size - both were tried and neither moved the wall, which
+  rules out per-fread()-call overhead as the cause. That points at
+  ~2-2.2MB/s as this card's real sustained sequential read speed - a
+  small fraction of the SDHI bus's theoretical ceiling above, and
+  apparently the card's own limit, not this sketch's. This number needs
+  re-measuring now that bidirectional playback reserves REVERSAL_MARGIN
+  samples of the ring buffer as standing headroom on the trailing edge
+  at all times (see loop()'s refill comment) - forward runway is smaller
+  than it used to be, so the ceiling has likely moved down somewhat.
+  Backward playback's ceiling turned out to be dramatically lower, not
+  just somewhat lower: underruns on the same card start around ratio
+  magnitude ~0.28x going backward - *below* native speed, not some large
+  multiple of it. Consistent with the suspicion that FAT's singly-linked
+  cluster chain (no native "previous cluster" pointer) makes backward
+  seeks meaningfully more expensive than forward reads on this SD/FatFs
+  stack - confirmed as a real, large effect rather than a minor one.
 
-  How the resampling works: RingBuffer.h holds raw samples read from SD;
-  Resampler.h tracks a fractional read position into that buffer and
-  advances it by a continuously-variable amount (`step`) once per
-  48kHz tick, interpolating a fresh output value with a 4-point
-  Catmull-Rom curve each time. The same mechanism handles speeding up
-  (step > 1 - skip some source samples, but still interpolate between
-  whichever two straddle the new position) and slowing down (step < 1 -
-  the read position stays inside the same 4 samples across several
-  output ticks, each time interpolating a genuinely new in-between
-  value) with no separate code path for either direction. See both of
-  those files' own comments for more detail.
+  How the resampling works: RingBuffer.h holds raw samples read from SD,
+  as a window that can slide in EITHER direction; Resampler.h tracks a
+  signed fractional read position into that window and advances it by a
+  continuously-variable, signed amount (`step`) once per 48kHz tick,
+  interpolating a fresh output value with a 4-point Catmull-Rom curve
+  each time. The same mechanism handles speeding up, slowing down,
+  reversing direction, and pausing (step == 0, which freezes the
+  position exactly with no special-casing needed) with no separate code
+  path for any of them - see both of those files' own comments for more
+  detail, and loop()'s refill comment for how the SD-reading side stays
+  in sync with whichever direction is currently active.
 
-  Aliasing at high speed ratios is expected, not a bug: no filter tracks
-  the ratio to prevent high source frequencies folding down as `step`
-  grows past ~2. A proper fix needs a cutoff that tracks the live ratio
-  - real DSP scope this hand-rolled kernel deliberately skips. It's also
-  a useful signpost, since it shows up audibly before the harder
-  SD-bandwidth wall.
+  Aliasing at high |speed ratio| is expected, not a bug: no filter tracks
+  the ratio to prevent high source frequencies folding down as `step`'s
+  magnitude grows past ~2 in either direction. A proper fix needs a
+  cutoff that tracks the live ratio - real DSP scope this hand-rolled
+  kernel deliberately skips. It's also a useful signpost, since it shows
+  up audibly before the harder SD-bandwidth wall.
 
   Underrun policy: if the ring buffer can't supply what the resampler
   needs, the DAC ISR holds the last good sample rather than dropping to
@@ -131,14 +145,24 @@
        is touched.
     3. Turn the pot slowly across its full range once a file is playing;
        confirm smooth, continuous pitch/tempo tracking with no
-       zippering or clicks, symmetric behavior above/below 1x, and that
-       touching the pad switches between fast/coarse and slow/fine
-       sweep rates.
-    4. Push the ratio hard enough to see the ring buffer's occupancy
-       fall and underrunTicks start climbing - that onset point is a
-       real, card-dependent number (~23-25x measured so far - see
-       above) worth re-checking against whatever card is on the bench.
-    5. Open web/wav-remote.html, connect, confirm LIST populates real
+       zippering or clicks, symmetric behavior above/below 1x forward,
+       and that touching the pad switches between fast/coarse and
+       slow/fine sweep rates.
+    4. Turn the pot slowly through the middle of its range - confirm a
+       real, silent-but-click-free pause, and that continuing past it
+       resumes playback smoothly in reverse, from the same place in the
+       file, with no gap or glitch. Then spin the pot past either
+       physical extreme - confirm an instant speed/direction hop there
+       (not a slow fold-back through the range) - that seam is the only
+       place a discontinuity is expected.
+    5. Push the ratio hard (either direction) to see the ring buffer's
+       occupancy fall and underrunTicks start climbing - that onset
+       point is a real, card-dependent number (~23-25x measured
+       forward-only, before bidirectional support reserved some of the
+       buffer as standing reversal headroom - see above) worth
+       re-checking against whatever card is on the bench, in both
+       directions.
+    6. Open web/wav-remote.html, connect, confirm LIST populates real
        filenames from the card, PLAY: on a mono-16-bit file switches
        cleanly, and PLAY: on anything else returns a clean ERR: instead
        of hanging.
@@ -160,18 +184,36 @@
 #include <utility>  // for std::move in loadFile()
 
 // -- Speed range and knob mapping ----------------------------------------
-// Same shape as AudioKnobsDemo's angleToFrequency()/knobAngle(), just
-// retargeted from a pitch range onto a speed-ratio range - see that
-// sketch's header comment for why the exponential mapping and the
-// fold-at-180-degrees behavior feel right for a knob like this.
+// knobAngle() (below) is reused unchanged from AudioKnobsDemo's pitch-
+// mapping pattern - it already produces a continuous, unbounded-turn-
+// aware [0,360) angle with a discontinuity only at its own 360->0 seam
+// (an fmodf wraparound artifact). AudioKnobsDemo's angleToFrequency()
+// deliberately FOLDED that angle around its 180-degree midpoint, to
+// smooth the seam over into a symmetric back-and-forth sweep. This
+// sketch wants the opposite: a bipolar speed that sweeps smoothly
+// through zero in the middle of the range, with the only allowed
+// discontinuity being an instant "hop" exactly at that 360->0 seam (the
+// knob's own physical wrap point) - so angleToSpeedRatio() below maps
+// the angle directly, with no fold.
 
 const float MIN_RATIO = 0.1f;
-const float MAX_RATIO = 128.0f;  // deliberately probing well past the SD ceiling
+const float MAX_RATIO = 128.0f;  // magnitude at both extremes - deliberately probing well past the SD ceiling
+const float DEADBAND_T = 0.03f;  // fraction of the half-sweep that reads as a real pause - tune on the bench
 
-float angleToSpeedRatio(float angleDegrees) {
-  float foldedAngle = (angleDegrees <= 180.0f) ? angleDegrees : (360.0f - angleDegrees);
-  float t = foldedAngle / 180.0f;
-  return MIN_RATIO * powf(MAX_RATIO / MIN_RATIO, t);
+// Maps knobAngle()'s continuous [0,360) angle directly onto a SIGNED
+// ratio: wrapped=0 -> -MAX_RATIO, wrapped=180 -> paused, wrapped
+// approaching (but never reaching) 360 -> +MAX_RATIO. Continuous
+// everywhere a physical sweep passes through smoothly, including
+// straight through zero at the middle - the only discontinuity is
+// exactly at wrapped's own 360/0 seam, which is the knob's own
+// physical wrap point, not anything this function branches on.
+float angleToSpeedRatio(float wrappedAngle) {
+  float t = (wrappedAngle / 180.0f) - 1.0f;  // -1 .. +1 across the full sweep
+  float magT = fabsf(t);
+  if (magT < DEADBAND_T) return 0.0f;  // a real pause, not a vanishingly small nonzero speed
+  float scaledT = (magT - DEADBAND_T) / (1.0f - DEADBAND_T);
+  float magnitude = MIN_RATIO * powf(MAX_RATIO / MIN_RATIO, scaledT);
+  return copysignf(magnitude, t);
 }
 
 const float TURNS_PER_SWEEP_FAST = 0.5f;
@@ -200,7 +242,10 @@ float rateFactor = 1.0f;  // wav's native sample rate / 48000 - recomputed on ev
 
 // -- Ring buffer and resampler ---------------------------------------------
 
-const uint32_t RING_CAPACITY = 16384;  // ~370ms of headroom at a 44.1kHz source
+const uint32_t RING_CAPACITY = 16384;  // ~370ms total at a 44.1kHz source - loop()'s
+                                        // REVERSAL_MARGIN reserves part of this as
+                                        // standing headroom on the trailing edge always,
+                                        // so usable one-directional runway is smaller
 AudioRingBuffer<RING_CAPACITY> ring;
 Resampler resampler;
 
@@ -240,7 +285,11 @@ void audioCallback(timer_callback_args_t *args) {
   if (ring.peek4(resampler.index, y)) {
     outSample = (int16_t)catmullRom(y[0], y[1], y[2], y[3], resampler.frac);
     lastGoodSample = outSample;
-    ring.release(resampler.advance(currentStep));
+    // No ring.release() anymore: the consumer no longer publishes
+    // anything back through the ring buffer at all - the producer
+    // (loop()) decides reclaim policy itself, based on direction. See
+    // RingBuffer.h's header comment and loop()'s refill logic.
+    resampler.advance(currentStep);
   } else {
     outSample = lastGoodSample;  // hold the last good sample - see header comment
     underrunTicks++;
@@ -256,6 +305,17 @@ void audioCallback(timer_callback_args_t *args) {
 }
 
 // -- File switching (BLE PLAY: command, and the boot-time default) -------
+
+// The only place a virtual (signed, possibly-wrapped-many-times-over)
+// sample position gets mapped onto a real, in-range file sample offset -
+// WavReader and AudioRingBuffer both stay ignorant of wraparound in
+// either direction. Used both here (priming) and in loop() (ongoing
+// refill).
+uint32_t fileOffsetFor(int32_t virtualPos, uint32_t total) {
+  int32_t m = virtualPos % (int32_t)total;
+  if (m < 0) m += (int32_t)total;
+  return (uint32_t)m;
+}
 
 // Validates and switches to a new file. On failure, errorOut is set and
 // whatever was already playing (if anything) is left completely
@@ -286,12 +346,19 @@ bool loadFile(const String &filename, String &errorOut) {
   currentStep = lastKnownRatio * rateFactor;
 
   // Prime the buffer before resuming, same as the original boot-time
-  // pre-fill, so playback doesn't wake into an instant underrun.
+  // pre-fill, so playback doesn't wake into an instant underrun. Always
+  // fills forward from virtual position 0 regardless of which direction
+  // the knob currently requests - if it's already parked at a negative
+  // ratio the instant a file loads, a brief low-side underrun is
+  // possible for a fraction of a second until loop()'s normal backward
+  // refill catches up. Same accepted trade-off as the file-switch click
+  // this function already causes - see the header comment.
   int16_t primer[1024];
   while (ring.freeSpace() >= 1024) {
-    size_t got = wav.readSamples(primer, 1024);
+    uint32_t offset = fileOffsetFor(ring.validHigh(), wav.totalSamples());
+    size_t got = wav.readSamplesAt(offset, primer, 1024);
     if (got == 0) break;
-    ring.push(primer, got);
+    ring.pushHigh(primer, got);
   }
 
   audioTimer.enable_overflow_irq();
@@ -514,12 +581,50 @@ void loop() {
   // let the SD card's real sustained read throughput be the limiting
   // factor once the speed ratio is cranked high enough, so this isn't
   // paced against anything - it just tops the buffer up as fast as
-  // loop() can cycle.
+  // loop() can cycle. Direction-aware: maintains a standing margin
+  // (REVERSAL_MARGIN) on whichever edge is currently *trailing* the
+  // consumer, continuously - not just reactively after a reversal -
+  // since an ordinary zero-crossing during real-time knob turning must
+  // never produce an audible gap, and there's no way to detect a
+  // reversal in advance. Only a margin that already exists before the
+  // reversal happens can guarantee that. This costs REVERSAL_MARGIN
+  // samples of one-directional lookahead capacity (RING_CAPACITY minus
+  // that margin is the real forward runway now), which likely lowers
+  // the previously-measured ~23-25x forward underrun ceiling somewhat -
+  // worth re-benchmarking, not a regression to avoid; click-free
+  // reversal matters more here.
   const size_t CHUNK_SAMPLES = 1024;
-  if (fileLoaded && ring.freeSpace() >= CHUNK_SAMPLES) {
-    int16_t chunk[CHUNK_SAMPLES];
-    size_t got = wav.readSamples(chunk, CHUNK_SAMPLES);
-    if (got > 0) ring.push(chunk, got);
+  const int32_t REVERSAL_MARGIN = 4096;  // ~93ms at 44.1kHz; must stay < RING_CAPACITY
+  if (fileLoaded) {
+    float step = currentStep;      // snapshot once per pass
+    int32_t pos = resampler.index;
+
+    if (step > 0.0f) {
+      int32_t wantLow = pos - REVERSAL_MARGIN;
+      if (wantLow > ring.validLow()) ring.releaseLow(wantLow);
+      if (ring.freeSpace() >= CHUNK_SAMPLES) {
+        int16_t chunk[CHUNK_SAMPLES];
+        uint32_t offset = fileOffsetFor(ring.validHigh(), wav.totalSamples());
+        size_t got = wav.readSamplesAt(offset, chunk, CHUNK_SAMPLES);
+        if (got > 0) ring.pushHigh(chunk, got);
+      }
+    } else if (step < 0.0f) {
+      int32_t wantHigh = pos + REVERSAL_MARGIN;
+      if (wantHigh < ring.validHigh()) ring.releaseHigh(wantHigh);
+      if (ring.freeSpace() >= CHUNK_SAMPLES) {
+        int16_t chunk[CHUNK_SAMPLES];
+        // A "backward" chunk needs no in-memory reversal: it's an
+        // ordinary forward read starting earlier in the file, which
+        // lands in exactly the ascending order pushLow() expects.
+        int32_t startVirtual = ring.validLow() - (int32_t)CHUNK_SAMPLES;
+        uint32_t offset = fileOffsetFor(startVirtual, wav.totalSamples());
+        size_t got = wav.readSamplesAt(offset, chunk, CHUNK_SAMPLES);
+        if (got > 0) ring.pushLow(chunk, got);
+      }
+    }
+    // step == 0: paused - deliberately untouched. See Resampler.h's
+    // advance() and audioCallback() above: this needs no special case
+    // here either, since the consumer's position simply stops moving.
   }
 
   unsigned long currentMillis = millis();

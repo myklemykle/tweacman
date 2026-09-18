@@ -10,7 +10,6 @@ WavReader &WavReader::operator=(WavReader &&other) noexcept {
   sampleRate_ = other.sampleRate_;
   dataStart_ = other.dataStart_;
   dataBytes_ = other.dataBytes_;
-  bytesRemaining_ = other.bytesRemaining_;
   memcpy(lastError_, other.lastError_, sizeof(lastError_));
   other.file_ = nullptr;
   return *this;
@@ -87,27 +86,28 @@ bool WavReader::open(const char *path) {
     return fail("this demo only plays mono 16-bit PCM WAV files");
   }
 
-  bytesRemaining_ = dataBytes_;
   return true;
 }
 
-size_t WavReader::readSamples(int16_t *dst, size_t maxSamples) {
+size_t WavReader::readSamplesAt(uint32_t sampleOffset, int16_t *dst, size_t maxSamples) {
+  fseek(file_, dataStart_ + (long)sampleOffset * 2, SEEK_SET);
+  uint32_t bytesRemaining = dataBytes_ - sampleOffset * 2;
   size_t samplesRead = 0;
 
   while (samplesRead < maxSamples) {
-    if (bytesRemaining_ < 2) {
+    if (bytesRemaining < 2) {
       // Hit the end of the data chunk - loop back to the start for
       // seamless continuous playback; callers never see this boundary.
       fseek(file_, dataStart_, SEEK_SET);
-      bytesRemaining_ = dataBytes_;
+      bytesRemaining = dataBytes_;
       if (dataBytes_ < 2) break;  // pathological empty file - avoid spinning forever
     }
     size_t samplesLeftHere = maxSamples - samplesRead;
-    size_t samplesAvailableHere = bytesRemaining_ / 2;
+    size_t samplesAvailableHere = bytesRemaining / 2;
     size_t chunk = samplesLeftHere < samplesAvailableHere ? samplesLeftHere : samplesAvailableHere;
     size_t got = fread(dst + samplesRead, 2, chunk, file_);
     samplesRead += got;
-    bytesRemaining_ -= got * 2;
+    bytesRemaining -= got * 2;
     if (got == 0) break;  // shouldn't happen, but avoid spinning forever
   }
   return samplesRead;

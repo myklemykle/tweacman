@@ -1,6 +1,7 @@
 /*
   WavReader - opens a mono 16-bit PCM WAV file on the mounted SD card
-  and streams raw samples from it, looping seamlessly at end-of-file.
+  and reads raw samples from any starting position, looping seamlessly
+  at end-of-file.
 
   Parses the RIFF chunk structure properly (skipping any chunk it
   doesn't need) rather than assuming a fixed 44-byte header - real WAV
@@ -9,6 +10,12 @@
   "fmt " and "data". Multi-byte fields are read directly into place
   with no manual byte-swapping, since both the RA6M5 and the WAV format
   itself are little-endian.
+
+  Only ever reads forward - backward playback (see SDResampleDemo.ino)
+  doesn't need this class to read backward at all, only to start a
+  forward read from an earlier offset than the last one. There's no
+  persistent read cursor for this reason: every call is given its own
+  starting sample offset, computed by the caller.
 
   Movable but not copyable: an instance owns a FILE*, and
   SDResampleDemo.ino's file-switch logic needs to build a fresh instance,
@@ -41,14 +48,18 @@ class WavReader {
   void close();
 
   uint32_t nativeSampleRate() const { return sampleRate_; }
+  uint32_t totalSamples() const { return dataBytes_ / 2; }
   const char *lastError() const { return lastError_; }
 
-  // Fills dst with up to maxSamples samples, wrapping back to the start
-  // of the data chunk (and continuing to fill) if end-of-file is hit
-  // partway through - callers never see the file's boundary at all.
-  // Returns the number of samples actually written; only less than
-  // maxSamples if the data chunk itself is pathologically short.
-  size_t readSamples(int16_t *dst, size_t maxSamples);
+  // Seeks to sampleOffset (must be < totalSamples() - callers wrap
+  // arbitrary signed/virtual positions into range themselves, see
+  // fileOffsetFor() in SDResampleDemo.ino) and reads up to maxSamples
+  // forward from there, looping back to the start of the data chunk
+  // (and continuing to fill) if end-of-file is hit partway through -
+  // callers never see the file's own boundary at all. Returns the
+  // number of samples actually written; only less than maxSamples if
+  // the data chunk itself is pathologically short.
+  size_t readSamplesAt(uint32_t sampleOffset, int16_t *dst, size_t maxSamples);
 
  private:
   // Records msg as the reason open() failed (for lastError()/the BLE
@@ -61,6 +72,5 @@ class WavReader {
   uint32_t sampleRate_ = 0;
   long dataStart_ = 0;
   uint32_t dataBytes_ = 0;
-  uint32_t bytesRemaining_ = 0;  // left in the current pass through the data chunk
   char lastError_[64] = "";
 };

@@ -353,6 +353,16 @@ void sendFileList() {
     closedir(dir);
   }
   Serial2.print("FILES:END\n");
+  // Piggybacked here rather than sent separately right after the
+  // handshake: a client already reliably requests LIST once on
+  // connect, so answering "what's currently playing" as part of that
+  // same response needs no new early-handshake message - and an
+  // earlier attempt at a connect-time-only PLAYING: sync collided with
+  // the AT+BINREQACK echo (see git history) precisely because that
+  // moment is far more collision-prone than this one.
+  Serial2.print("PLAYING:");
+  Serial2.print(fileLoaded ? currentFilename : "NONE");
+  Serial2.print("\n");
   telemetrySuppressedUntilMillis = millis() + 1000;
 }
 

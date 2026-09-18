@@ -93,8 +93,17 @@ class RV112FF {
     //   each wiper's raw reading - the main defense against ADC noise.
     // minCalibrationRange: fraction (0-1) of full-scale a wiper's smoothed
     //   signal must have swept before its calibration is trusted.
+    // rpmSmoothTau: time constant (seconds) of rpm()'s own separate
+    //   smoothing filter (see that method's comment). The default
+    //   (0.15s) was tuned for using this pot as a position control,
+    //   where rpm() is a secondary signal - a use that's read directly
+    //   as an audio-rate control input (e.g. a tape-scrub effect) will
+    //   likely want this much smaller, since a 150ms decay reads as
+    //   noticeable "momentum" once rpm() itself is driving something
+    //   audibly in real time.
     RV112FF(uint8_t wiperPinA, uint8_t wiperPinB,
-            float smoothTau = 0.02, float minCalibrationRange = 0.15);
+            float smoothTau = 0.02, float minCalibrationRange = 0.15,
+            float rpmSmoothTau = 0.15);
 
     // Samples both wipers, updates calibration and the speed estimate,
     // and returns the current shaft angle in degrees [0, 360). Returns
@@ -143,6 +152,7 @@ class RV112FF {
     uint8_t _pinA, _pinB;
     float _smoothTau;
     float _minCalibrationRange;
+    float _rpmSmoothTau;
 
     float _smooth[2];
     float _minVal[2];
@@ -155,7 +165,6 @@ class RV112FF {
     bool _begun = false;
     unsigned long _lastMicros = 0;
 
-    static constexpr float RPM_SMOOTH_TAU = 0.15;  // seconds
     static constexpr float ADC_MAX_VALUE = 4095.0;  // 2^12 - 1
 
     static constexpr uint32_t CALIBRATION_MAGIC = 0x52563132;  // ASCII "RV12"

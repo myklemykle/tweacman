@@ -2,9 +2,11 @@
 #include <math.h>
 
 RV112FF::RV112FF(uint8_t wiperPinA, uint8_t wiperPinB,
-                  float smoothTau, float minCalibrationRange)
+                  float smoothTau, float minCalibrationRange,
+                  float rpmSmoothTau)
   : _pinA(wiperPinA), _pinB(wiperPinB),
-    _smoothTau(smoothTau), _minCalibrationRange(minCalibrationRange) {
+    _smoothTau(smoothTau), _minCalibrationRange(minCalibrationRange),
+    _rpmSmoothTau(rpmSmoothTau) {
   _smooth[0] = _smooth[1] = 0.5;
   _minVal[0] = _minVal[1] = 1.0;
   _maxVal[0] = _maxVal[1] = 0.0;
@@ -91,7 +93,7 @@ float RV112FF::read() {
       while (delta < -180.0) delta += 360.0;
 
       float instantRpm = (delta / dtSeconds) / 360.0 * 60.0;
-      float rpmCoeff = 1.0 - exp(-dtSeconds / RPM_SMOOTH_TAU);
+      float rpmCoeff = 1.0 - exp(-dtSeconds / _rpmSmoothTau);
       _rpm += rpmCoeff * (instantRpm - _rpm);
     }
   } else {

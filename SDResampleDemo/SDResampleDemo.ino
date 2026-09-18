@@ -2,24 +2,26 @@
   SDResampleDemo - SparkFun Thing Plus RA6M5
 
   Streams a WAV file off the onboard SD card and plays it out the DAC,
-  with a pot controlling a completely smooth, arbitrary, BIDIRECTIONAL
+  with one pot controlling a completely smooth, arbitrary, BIDIRECTIONAL
   playback-speed ratio - not discrete multiples, and slowing down (in
   either direction) genuinely interpolates new sample values rather than
   just repeating or stepping through existing ones. The pot sweeps from
   -MAX_RATIO through a real pause at the middle up to +MAX_RATIO;
-  negative plays the file backward. A phone/browser can also pick which
-  file plays and watch the same live stats over BLE - see "BLE control"
-  below.
+  negative plays the file backward. A second pot adds a tape-scrub
+  effect on top - see "Tape scrub" below. A phone/browser can also pick
+  which file plays and watch the same live stats over BLE - see "BLE
+  control" below.
 
   Wiring: an SD card (FAT32, any SDHC card - see the SD note in
   CLAUDE.md, this board's slot is wired to the RA6M5's native SDHI
   peripheral, not SPI) with one or more WAV files at its root - use
   tools/make_test_wav.py to generate a simple one, a slow sine sweep
   that makes speed changes and any resampling artifacts obvious by ear.
-  Otherwise same as DACAudioTest (3.5mm jack on A0/A1/GND) plus one pot
-  (RV112FF wipers on A2/A3, track ends on 3.3V/GND) and one CapTouch pad
-  (D20, with the shared TSCAP capacitor on D6 - see CapTouch.h). The
-  DA14531MOD Bluetooth module used for BLE control is already onboard -
+  Otherwise same as DACAudioTest (3.5mm jack on A0/A1/GND) plus two pots
+  (RV112FF wipers on A2/A3 for speed, A4/A5 for tape scrub, both pots'
+  track ends on 3.3V/GND) and one CapTouch pad (D20, with the shared
+  TSCAP capacitor on D6 - see CapTouch.h). The DA14531MOD Bluetooth
+  module used for BLE control is already onboard -
   no extra wiring for that part.
 
   Why the DAC runs at a fixed 48kHz: an earlier version of this idea
@@ -76,6 +78,20 @@
   cutoff that tracks the live ratio - real DSP scope this hand-rolled
   kernel deliberately skips. It's also a useful signpost, since it shows
   up audibly before the harder SD-bandwidth wall.
+
+  Tape scrub: the second pot's ROTATIONAL VELOCITY (not its position)
+  adds directly onto whatever the first pot already requests, rather
+  than replacing it - RV112FF already computes this itself as rpm(),
+  driven by each read() (see that library's header), so this needed no
+  new velocity-tracking code of its own. With the first pot parked at
+  its pause deadband, this alone drives playback, sounding like
+  manually scrubbing a reel of tape back and forth; layered on top of
+  ordinary forward/backward playback it adds a wow/flutter-style warble
+  instead; sitting still, rpm() reads 0 and it contributes nothing at
+  all - all three cases fall out of one plain sum (see the control-rate
+  block in loop()), no special-casing needed. SCRUB_SCALE (how much
+  speed-ratio contribution one RPM is worth) is a starting guess meant
+  to be tuned by ear, same as DEADBAND_T.
 
   Underrun policy: if the ring buffer can't supply what the resampler
   needs, the DAC ISR holds the last good sample rather than dropping to
@@ -166,6 +182,14 @@
        filenames from the card, PLAY: on a mono-16-bit file switches
        cleanly, and PLAY: on anything else returns a clean ERR: instead
        of hanging.
+    7. With the first pot parked at its pause deadband, twist the
+       second pot back and forth - confirm it sounds like manually
+       scrubbing tape (pitch/direction tracking the twist directly,
+       silent when you stop). Then set the first pot to some steady
+       forward or backward speed and twist the second pot again -
+       confirm it adds a warble on top rather than taking over
+       entirely, and that leaving it alone (not touching it) adds
+       nothing audible.
 
   This example code is in the public domain.
 */
@@ -470,11 +494,31 @@ void handleBLECommand(String line) {
   }
 }
 
-// -- Pot and touch pad -------------------------------------------------
+// -- Pots and touch pad -------------------------------------------------
 
 RV112FF pot1(A2, A3);
 MultiTurnKnob knob1(pot1);
 CapTouch touch1(20);
+
+// The second pot: a tape-scrub control, not a position control - no
+// MultiTurnKnob wrapper needed, since scrubbing only cares about how
+// fast the shaft is currently turning, not its accumulated position.
+// RV112FF already computes this itself (rpm(), driven by each read()
+// call) - see the control-rate block below for how it's used. The
+// default rpmSmoothTau (0.15s, tuned for rpm() as a secondary signal
+// behind a position control) read as sluggish "momentum" here, where
+// rpm() drives audio directly and in real time - confirmed live and
+// cut to a much snappier 0.02s, matching the position filter's own
+// smoothTau below it - going much lower risks audible at-rest jitter,
+// since a derivative can't be more trustworthy than the signal (here,
+// smoothed at that same 0.02s) it's derived from.
+RV112FF pot2(A4, A5, 0.02f, 0.15f, 0.02f);
+
+// Maps pot2's RPM onto an equivalent contribution to currentStep - a
+// starting guess (60 RPM, one turn per second, contributing roughly
+// +/-1x) meant to be tuned by ear on the actual hardware, same as
+// DEADBAND_T above.
+const float SCRUB_SCALE = 1.0f / 60.0f;
 
 const unsigned long CONTROL_INTERVAL = 10;  // ms (~100Hz)
 unsigned long previousControlMillis = 0;
@@ -649,12 +693,27 @@ void loop() {
     if (angle >= 0) {
       float ratio = angleToSpeedRatio(angle);
       lastKnownRatio = ratio;
-      currentStep = ratio * rateFactor;
       if (ratio < minRatioSeen) minRatioSeen = ratio;
       if (ratio > maxRatioSeen) maxRatioSeen = ratio;
     }
-    // else: pot not yet calibrated - leave currentStep at the
-    // native-speed passthrough default set in setup()/loadFile().
+    // else: pot not yet calibrated - lastKnownRatio keeps whatever it
+    // already had (the native-speed passthrough default from setup()/
+    // loadFile(), until pot1 calibrates for the first time).
+
+    // Tape-scrub: pot2's rotational velocity adds directly onto
+    // whatever knob1 already requests, rather than replacing it -
+    // with knob1 parked at its pause deadband (ratio 0) this alone
+    // drives playback, sounding like manually scrubbing a reel of
+    // tape; layered on top of ordinary forward/backward playback it
+    // adds a wow/flutter-style warble instead; sitting still, rpm() is
+    // 0 and it contributes nothing at all - no special-casing needed
+    // for any of those three cases, they all fall out of one sum.
+    pot2.read();  // drives pot2's own rpm() computation - see RV112FF.h
+    // Negated: confirmed live the un-reversed mapping scrubbed opposite
+    // the intuitive direction, same as knob1 originally did.
+    float scrub = pot2.isCalibrated() ? -pot2.rpm() * SCRUB_SCALE : 0.0f;
+
+    currentStep = lastKnownRatio * rateFactor + scrub;
   }
 
   // Deliberately short and infrequent: Serial here is native USB CDC

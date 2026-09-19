@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Generate the starting KiCad 7 board for the Compact-Cassette-shaped carrier PCB:
-outline, hub cutouts, M3 holes, touch-pad footprints, hub silkscreen, and the
+outline, hub cutouts, tooling holes, touch-pad footprints, hub silkscreen, and the
 trapezoid (copper-free, mask-free window on the tape-access edge), Thing Plus and fifth-screw marker.
 
 WARNING: this writes ../cassette-carrier.kicad_pcb from scratch. Run it once to
@@ -31,17 +31,23 @@ HUB_X = (HUB_D, HUB_D + HUB_SPACING)
 HUB_HOLE_D = 8.0
 HUB_SILK = (6.7 * S, 7.2 * S)         # model hub bore / rim radii, scaled
 M3_D = 3.2
-PAD_W, PAD_H, PAD_INNER_R = 40.0, 20.0, 5.0
+PAD_W, PAD_H, PAD_R = 40.0, 20.0, 5.0   # touch pads: 40 x 20 mm, both bottom corners rounded r=5, top edge flush with the board edge
+PAD_INSET = 15.0                      # distance from the side edges to the pad
+ANT_M = R                             # plated M3 antenna holes sit this far in from the pad's top corners
+TOOL_D, TOOL_MASK = 1.152, 0.148      # NPTH tooling holes: drill dia, solder-mask expansion
+# tooling holes at the screw positions on the patent drawing (measured ~5.45 from the sides, 10.0 from the top, 5.5 from
+# the bottom on a 100 x 64 mm cassette), scaled
+TOOL_X, TOOL_TOP, TOOL_BOT = 5.45 * S, 10.0 * S, 5.5 * S
 # hub sprocket outline (from the patent drawing): six inward teeth on the hub bore
 TOOTH_ANGLES = (90, 30, -30, -90, -150, 150)
 TOOTH_LEN, TOOTH_W, TOOTH_GAP = 1.73 * S, 1.5 * S, 0.3
-# fifth screw: bottom centre, ~13.6 mm above the bottom edge on the (unscaled) patent drawing
-SCREW5 = (W / 2, 13.6 * S)
+# fifth screw: bottom centre, ~13.0 mm above the bottom edge on the (unscaled) patent drawing
+SCREW5 = (W / 2, 13.0 * S)
 # Thing Plus: rows 20.32 apart, USB facing left, lower row's copper 2 mm above the board edge
 TP_PAD_R = 1.8796 / 2
 TP_ROW_V = 2.0 + TP_PAD_R
 TP_CENTRE = (W / 2, TP_ROW_V + 20.32 / 2)
-TP_TOP_V = TP_CENTRE[1] + 11.43       # top edge of the Thing Plus footprint outline
+TP_TOP_V = TP_CENTRE[1] + 11.43       # top edge of the Thing Plus (its 22.86 mm width, rotated)
 
 # Trapezoid on the tape-access edge. The model's bottom corners are at u = 16.0 / 85.6 (body-left = 0.814)
 # and its sides lean inward 4.4 mm over 15.2 mm; we keep that slope but run the sides up to the
@@ -59,8 +65,14 @@ def xy(u, v):
     return X0 + u, Y0 - v
 
 
+_uid_n = 0
+
+
 def uid():
-    return str(uuid.uuid4())
+    """Deterministic ids, so re-running the generator only changes files whose contents really changed."""
+    global _uid_n
+    _uid_n += 1
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"cassette-carrier/{_uid_n}"))
 
 
 def f(x):
@@ -129,58 +141,58 @@ def arc_pts(cx, cy, r, a0, a1, n=24):
              cy + r * math.sin(math.radians(a0 + (a1 - a0) * i / n))) for i in range(n + 1)]
 
 
-def touch_pad_polygon(mirror):
-    """Copper outline for the top-left corner pad, in footprint coords (origin =
-    M3 hole centre, y down). The outer corner follows the board's corner arc."""
-    pts = [(0, R)]
-    pts += arc_pts(R, R, R, 180, 270)                       # outer corner (board radius)
-    pts += [(PAD_W, 0), (PAD_W, PAD_H - PAD_INNER_R)]
-    pts += arc_pts(PAD_W - PAD_INNER_R, PAD_H - PAD_INNER_R, PAD_INNER_R, 0, 90)   # inner corner
-    pts += [(0, PAD_H)]
-    pts = [(x - R, y - R) for x, y in pts]                 # move origin to hole centre
-    if mirror:
-        pts = [(-x, y) for x, y in pts]
+def touch_pad_polygon():
+    """Copper outline of one touch pad in footprint coords (origin = middle of the pad's top edge, which sits on
+    the board edge; y down). Top corners square (edge-plating), bottom corners rounded."""
+    hw = PAD_W / 2
+    pts = [(-hw, 0), (hw, 0), (hw, PAD_H - PAD_R)]
+    pts += arc_pts(hw - PAD_R, PAD_H - PAD_R, PAD_R, 0, 90)          # bottom right
+    pts += arc_pts(-hw + PAD_R, PAD_H - PAD_R, PAD_R, 90, 180)       # bottom left
     return pts
 
 
-def touch_pad_footprint(name, mirror, at=None, ref="TCH"):
-    pts = touch_pad_polygon(mirror)
+def touch_pad_footprint(at=None, ref="TCH"):
+    hx = PAD_W / 2 - ANT_M                                          # antenna holes' x offset from the pad centre
+    anchor = (-hx, ANT_M)
+    pts = [(x - anchor[0], y - anchor[1]) for x, y in touch_pad_polygon()]   # primitives are relative to the pad
     xy_list = "\n".join(f"            (xy {f(x)} {f(y)})" for x, y in pts)
+    name = "TouchPad_40x20"
     head = (f'(footprint "{"cassette:" if at else ""}{name}" ' +
             (f'(layer "F.Cu") (tstamp {uid()}) (at {f(at[0])} {f(at[1])})\n' if at else
              '(version 20221018) (generator pcbnew)\n  (layer "F.Cu")\n'))
     return (
         head +
-        f'  (descr "Exposed-copper capacitive touch pad, {PAD_W:g} x {PAD_H:g} mm in a board corner, '
-        f'with a plated M3 hole for a bolt-on antenna. Origin = hole centre.")\n'
+        f'  (descr "Exposed-copper capacitive touch pad, {PAD_W:g} x {PAD_H:g} mm, top edge on the board edge, with two '
+        f'plated M3 holes in the top corners for bolt-on antennas. Origin = middle of the top edge.")\n'
         f'  (attr through_hole)\n'
-        f'  (fp_text reference "{ref}" (at 0 -7) (layer "F.Fab")\n'
+        f'  (fp_text reference "{ref}" (at 0 -3) (layer "F.Fab")\n'
         f'    (effects (font (size 1 1) (thickness 0.15))) (tstamp {uid()}))\n'
-        f'  (fp_text value "{name}" (at 0 7) (layer "F.Fab")\n'
+        f'  (fp_text value "{name}" (at 0 {PAD_H + 3}) (layer "F.Fab")\n'
         f'    (effects (font (size 1 1) (thickness 0.15))) (tstamp {uid()}))\n'
-        f'  (pad "1" thru_hole custom (at 0 0) (size 6 6) (drill {M3_D}) (layers "F.Cu" "B.Cu" "*.Mask")\n'
+        f'  (pad "1" thru_hole custom (at {f(anchor[0])} {f(anchor[1])}) (size 6 6) (drill {M3_D}) (layers "F.Cu" "B.Cu" "*.Mask")\n'
         f'    (options (clearance outline) (anchor circle))\n'
         f'    (primitives\n'
         f'      (gr_poly\n'
         f'        (pts\n{xy_list}\n        )\n'
         f'        (width 0) (fill yes))\n'
         f'    ) (tstamp {uid()}))\n'
+        f'  (pad "1" thru_hole circle (at {f(hx)} {f(ANT_M)}) (size 6 6) (drill {M3_D}) (layers "F.Cu" "B.Cu" "*.Mask") (tstamp {uid()}))\n'
         f')\n')
 
 
-def mounting_hole(ref, u, v):
+def tooling_hole(ref=None, u=0.0, v=0.0):
+    """NPTH tooling hole. With ref/u/v: an instance for the board; without: the library footprint."""
+    pad = (f'(pad "" np_thru_hole circle (at 0 0) (size {TOOL_D} {TOOL_D}) (drill {TOOL_D}) (layers "*.Cu" "*.Mask") '
+           f'(solder_mask_margin {TOOL_MASK}) (tstamp {uid()}))')
+    text = (f'(fp_text reference "{ref or "REF**"}" (at 0 -2) (layer "F.Fab")\n      (effects (font (size 1 1) (thickness 0.15))) (tstamp {uid()}))\n'
+            f'    (fp_text value "ToolingHole_{TOOL_D}mm" (at 0 2) (layer "F.Fab")\n      (effects (font (size 1 1) (thickness 0.15))) (tstamp {uid()}))')
+    descr = f'(descr "NPTH tooling hole, {TOOL_D} mm drill, {TOOL_MASK} mm solder-mask expansion")'
+    if ref is None:
+        return (f'(footprint "ToolingHole_{TOOL_D}mm" (version 20221018) (generator pcbnew)\n  (layer "F.Cu")\n  {descr}\n'
+                f'  (attr exclude_from_pos_files exclude_from_bom)\n  {text}\n  {pad}\n)\n')
     x, y = xy(u, v)
-    return (
-        f'  (footprint "cassette:MountingHole_3.2mm_M3_Plated" (layer "F.Cu") (tstamp {uid()}) (at {f(x)} {f(y)})\n'
-        f'    (descr "Plated M3 mounting hole, 3.2 mm drill / 6 mm pad (net it to GND, or leave floating)")\n'
-        f'    (attr exclude_from_pos_files exclude_from_bom)\n'
-        f'    (fp_text reference "{ref}" (at 0 -4.2) (layer "F.Fab")\n'
-        f'      (effects (font (size 1 1) (thickness 0.15))) (tstamp {uid()}))\n'
-        f'    (fp_text value "MountingHole_3.2mm_M3_Plated" (at 0 4.2) (layer "F.Fab")\n'
-        f'      (effects (font (size 1 1) (thickness 0.15))) (tstamp {uid()}))\n'
-        f'    (pad "1" thru_hole circle (at 0 0) (size 6 6) (drill {M3_D}) (layers "*.Cu" "*.Mask") (tstamp {uid()}))\n'
-        f'  )\n')
-
+    return (f'  (footprint "cassette:ToolingHole_{TOOL_D}mm" (layer "F.Cu") (tstamp {uid()}) (at {f(x)} {f(y)})\n'
+            f'    {descr}\n    (attr exclude_from_pos_files exclude_from_bom)\n    {text}\n    {pad}\n  )\n')
 
 
 def outline_poly(pts, layer, w=0.15):
@@ -215,49 +227,155 @@ TP_RIGHT = ["FREE", "TX", "RX", "POCI", "PICO", "SCK", "A5", "A4", "A3", "A2", "
 
 
 def thing_plus_footprint(at=None, ref="U1"):
+    """SparkFun Thing Plus RA6M5 (the long variant: 2.70 in PCB, antenna module overhanging to 2.871 in).
+    Origin = centre of the 22.86 x 68.58 mm PCB; USB-C toward +y, antenna toward -y. Header pads are unchanged from
+    SparkFun's KiCad footprint (shifted 5.08 mm because the origin moved); silkscreen positions of the switches, LEDs,
+    USB-C shell, mounting holes and module are read off SparkFun's Thing Plus RA6M5 dimension drawing."""
     rot = 270 if at else 0                                   # 270: USB-C end faces left
     pre = "cassette:" if at else ""
+    IN = 25.4
+    L = lambda x_in, y_in: ((x_in - 0.45) * IN, (1.35 - y_in) * IN)      # drawing (in, from left/bottom edge) -> local mm
     head = (f'(footprint "{pre}ThingPlus" (layer "F.Cu") (tstamp {uid()}) (at {f(at[0])} {f(at[1])} {rot})\n' if at else
             '(footprint "ThingPlus" (version 20221018) (generator pcbnew)\n  (layer "F.Cu")\n')
     o = head
-    o += ('  (descr "SparkFun Thing Plus (RA6M5) header footprint: 2.54 mm pitch, rows 20.32 mm apart. '
-          'Pad geometry from SparkFun-KiCad-Libraries (CC BY 4.0). Origin = module centre, USB-C toward +y.")\n'
+    o += ('  (descr "SparkFun Thing Plus RA6M5, long (2.70 in) variant with the BLE module overhanging the PCB end. Pad geometry '
+          'from SparkFun-KiCad-Libraries (CC BY 4.0); outline, LED, switch and module positions from SparkFun\'s Thing Plus '
+          'RA6M5 dimension drawing. Origin = PCB centre, USB-C toward +y.")\n'
           '  (attr through_hole)\n')
-    o += (f'  (fp_text reference "{ref}" (at 0 -31.5 {rot}) (layer "F.Fab")\n'
+    o += (f'  (fp_text reference "{ref}" (at 0 -41 0) (layer "F.Fab")\n'
           f'    (effects (font (size 1 1) (thickness 0.15))) (tstamp {uid()}))\n'
-          f'  (fp_text value "SparkFun_Thing_Plus_RA6M5" (at 0 31.5 {rot}) (layer "F.Fab")\n'
+          f'  (fp_text value "SparkFun_Thing_Plus_RA6M5" (at 0 38 0) (layer "F.Fab")\n'
           f'    (effects (font (size 1 1) (thickness 0.15))) (tstamp {uid()}))\n')
-    for txt, y in (("USB-C", 26.0), ("BLE ANT", -26.0)):
-        o += (f'  (fp_text user "{txt}" (at 0 {y} {rot}) (layer "F.SilkS")\n'
-              f'    (effects (font (size 1 1) (thickness 0.15))) (tstamp {uid()}))\n')
-    for (x1, y1, x2, y2, layer, w) in ((-11.43, -29.21, 11.43, -29.21, "F.SilkS", 0.15), (11.43, -29.21, 11.43, 29.21, "F.SilkS", 0.15),
-                                        (11.43, 29.21, -11.43, 29.21, "F.SilkS", 0.15), (-11.43, 29.21, -11.43, -29.21, "F.SilkS", 0.15),
-                                        (-11.7, -29.5, 11.7, -29.5, "F.CrtYd", 0.05), (11.7, -29.5, 11.7, 29.5, "F.CrtYd", 0.05),
-                                        (11.7, 29.5, -11.7, 29.5, "F.CrtYd", 0.05), (-11.7, 29.5, -11.7, -29.5, "F.CrtYd", 0.05)):
-        o += (f'  (fp_line (start {x1} {y1}) (end {x2} {y2}) (stroke (width {w}) (type default)) '
-              f'(layer "{layer}") (tstamp {uid()}))\n')
+
+    def ln(x1, y1, x2, y2, layer="F.SilkS", w=0.15):
+        return (f'  (fp_line (start {f(x1)} {f(y1)}) (end {f(x2)} {f(y2)}) (stroke (width {w}) (type default)) '
+                f'(layer "{layer}") (tstamp {uid()}))\n')
+
+    def box(x1, y1, x2, y2, layer="F.SilkS", w=0.15):
+        return ln(x1, y1, x2, y1, layer, w) + ln(x2, y1, x2, y2, layer, w) + ln(x2, y2, x1, y2, layer, w) + ln(x1, y2, x1, y1, layer, w)
+
+    def circ(cx, cy, r, layer="F.SilkS", w=0.15):
+        return (f'  (fp_circle (center {f(cx)} {f(cy)}) (end {f(cx + r)} {f(cy)}) (stroke (width {w}) (type default)) '
+                f'(fill none) (layer "{layer}") (tstamp {uid()}))\n')
+
+    def label(txt, x, y, size=0.9, justify="", ang=0):
+        j = f" (justify {justify})" if justify else ""
+        return (f'  (fp_text user "{txt}" (at {f(x)} {f(y)} {ang}) (layer "F.SilkS")\n'
+                f'    (effects (font (size {size} {size}) (thickness 0.15)){j}) (tstamp {uid()}))\n')
+
+    hw, hl, cr = 11.43, 34.29, 0.10 * IN                     # PCB half-width, half-length, corner radius
+    s2 = math.sqrt(0.5)
+    for sx in (-1, 1):                                        # PCB outline: 4 lines + 4 rounded corners
+        o += ln(sx * hw, -(hl - cr), sx * hw, hl - cr)
+    for sy in (-1, 1):
+        o += ln(-(hw - cr), sy * hl, hw - cr, sy * hl)
+    for sx in (-1, 1):
+        for sy in (-1, 1):
+            cx, cy = sx * (hw - cr), sy * (hl - cr)
+            o += (f'  (fp_arc (start {f(cx + sx * cr)} {f(cy)}) (mid {f(cx + sx * cr * s2)} {f(cy + sy * cr * s2)}) '
+                  f'(end {f(cx)} {f(cy + sy * cr)}) (stroke (width 0.15) (type default)) (layer "F.SilkS") (tstamp {uid()}))\n')
+    for hx_in, hy_in in ((0.10, 0.10), (0.80, 0.10), (0.10, 2.20), (0.80, 2.20)):     # the Thing Plus's own M3 holes
+        o += circ(*L(hx_in, hy_in), 1.7, w=0.12)
+    (x1, y1), (x2, y2) = L(0.20, 2.871), L(0.70, 2.30)                                   # BLE module (overhangs the PCB end)
+    o += box(x1, y1, x2, y2)
+    o += label("BLE", 0, (y1 + y2) / 2)
+    (x1, y1), (x2, y2) = L(0.28, 0.25), L(0.62, -0.045)                                  # USB-C shell (overhangs slightly)
+    o += box(x1, y1, x2, y2)
+    o += label("USB-C", 0, (y1 + y2) / 2 + 0.3)
+    for name, (a1, b1), (a2, b2), (pcx, pcy), (tx, ty) in (                              # tactile switches, with plunger circles
+            ("USR", (0.531, 0.715), (0.641, 0.539), (0.587, 0.631), (0.586, 0.77)),
+            ("RST", (0.618, 0.453), (0.783, 0.343), (0.700, 0.396), (0.700, 0.28))):
+        (x1, y1), (x2, y2) = L(a1, b1), L(a2, b2)
+        o += box(x1, y1, x2, y2) + circ(*L(pcx, pcy), 0.8, w=0.12) + label(name, *L(tx, ty), size=0.8)
+    for name, (a1, b1), (a2, b2), y_in in (("RGB", (0.040, 2.620), (0.126, 2.535), 2.578),   # LEDs
+                                           ("PWR", (0.030, 2.490), (0.140, 2.440), 2.465),
+                                           ("STAT", (0.030, 2.380), (0.140, 2.335), 2.358)):
+        (x1, y1), (x2, y2) = L(a1, b1), L(a2, b2)
+        o += box(x1, y1, x2, y2) + label(name, -4.9, L(0, y_in)[1], size=0.8, ang=90)
+    for (x1, y1, x2, y2, layer, w) in ((-11.7, -38.9, 11.7, -38.9, "F.CrtYd", 0.05), (11.7, -38.9, 11.7, 35.7, "F.CrtYd", 0.05),
+                                        (11.7, 35.7, -11.7, 35.7, "F.CrtYd", 0.05), (-11.7, 35.7, -11.7, -38.9, "F.CrtYd", 0.05)):
+        o += ln(x1, y1, x2, y2, layer, w)
     n = 0
-    for col, names, x in ((0, TP_LEFT, -10.16), (1, TP_RIGHT, 10.16)):
+    for names, x in ((TP_LEFT, -10.16), (TP_RIGHT, 10.16)):
         for i, name in enumerate(names):
             n += 1
             shape = "rect" if n == 1 else "circle"
-            o += (f'  (pad "{n}" thru_hole {shape} (at {x} {f(-22.86 + 2.54 * i)}) (size 1.8796 1.8796) (drill 1.016) '
+            o += (f'  (pad "{n}" thru_hole {shape} (at {x} {f(-17.78 + 2.54 * i)}) (size 1.8796 1.8796) (drill 1.016) '
                   f'(layers "*.Cu" "*.Mask") (pinfunction "{name}") (tstamp {uid()}))\n')
     return o + ")\n"
 
 
-def mounting_hole_lib():
-    return (
-        '(footprint "MountingHole_3.2mm_M3_Plated" (version 20221018) (generator pcbnew)\n'
-        '  (layer "F.Cu")\n'
-        '  (descr "Plated M3 mounting hole, 3.2 mm drill / 6 mm pad (net it to GND, or leave floating)")\n'
-        '  (attr exclude_from_pos_files exclude_from_bom)\n'
-        f'  (fp_text reference "REF**" (at 0 -4.2) (layer "F.Fab")\n'
-        f'    (effects (font (size 1 1) (thickness 0.15))) (tstamp {uid()}))\n'
-        f'  (fp_text value "MountingHole_3.2mm_M3_Plated" (at 0 4.2) (layer "F.Fab")\n'
-        f'    (effects (font (size 1 1) (thickness 0.15))) (tstamp {uid()}))\n'
-        f'  (pad "1" thru_hole circle (at 0 0) (size 6 6) (drill {M3_D}) (layers "*.Cu" "*.Mask") (tstamp {uid()}))\n'
-        ')\n')
+# RV112FF-40 (Taiwan Alpha), shaft up, pins bent down at the factory. Origin = shaft axis; drawn as in the
+# datasheet's "P.C.B. MOUNTING HOLE DETAIL" (pin row 10.0 mm on the +y side of the axis, y down). Pads, left to
+# right in that view: wiper B, power, wiper A, ground.
+POT_PINS = (("1", "WIPER_B", -3.75, "B"), ("2", "PWR", -1.25, "V"), ("3", "WIPER_A", 1.25, "A"), ("4", "GND", 3.75, "G"))
+
+
+def pot_footprint(at=None, ref="RV", rot=0, text_rot=0):
+    pre = "cassette:" if at else ""
+    head = (f'(footprint "{pre}RV112FF-40" (layer "F.Cu") (tstamp {uid()}) (at {f(at[0])} {f(at[1])} {rot})\n' if at else
+            '(footprint "RV112FF-40" (version 20221018) (generator pcbnew)\n  (layer "F.Cu")\n')
+    o = head
+    o += ('  (descr "Taiwan Alpha RV112FF-40 dual endless pot, shaft up, factory-bent pins. Footprint per the datasheet PCB '
+          'hole detail: 4x 1.0 mm holes at 2.5 mm pitch, 10.0 mm from the shaft axis; two 2.0x2.1 mm clip cut-outs on the '
+          'axis, 13.0 mm apart. Origin = shaft axis.")\n  (attr through_hole)\n')
+    o += (f'  (fp_text reference "{ref}" (at 0 -9 {text_rot}) (layer "F.Fab")\n'
+          f'    (effects (font (size 1 1) (thickness 0.15))) (tstamp {uid()}))\n'
+          f'  (fp_text value "RV112FF-40-25A-0B10K" (at 0 13 {text_rot}) (layer "F.Fab")\n'
+          f'    (effects (font (size 1 1) (thickness 0.15))) (tstamp {uid()}))\n')
+    def ln(x1, y1, x2, y2, layer, w):
+        return (f'  (fp_line (start {f(x1)} {f(y1)}) (end {f(x2)} {f(y2)}) (stroke (width {w}) (type default)) '
+                f'(layer "{layer}") (tstamp {uid()}))\n')
+    def box(x1, y1, x2, y2, layer, w):
+        return ln(x1, y1, x2, y1, layer, w) + ln(x2, y1, x2, y2, layer, w) + ln(x2, y2, x1, y2, layer, w) + ln(x1, y2, x1, y1, layer, w)
+    o += box(-5.5, -6.7, 5.5, 8.7, "F.SilkS", 0.15)                       # case outline (11.0 wide, 6.7 / 8.7 mm about the axis)
+    o += box(-6.3, -7.0, 6.3, 10.9, "F.CrtYd", 0.05)
+    for cx in (-6.5, 6.5):
+        o += box(cx - 1.0, -1.05, cx + 1.0, 1.05, "Edge.Cuts", 0.1)       # case-clip cut-outs
+    o += (f'  (fp_circle (center 0 0) (end 3 0) (stroke (width 0.1) (type default)) (fill none) (layer "F.Fab") (tstamp {uid()}))\n')
+    for num, name, x, lab in POT_PINS:
+        o += (f'  (pad "{num}" thru_hole circle (at {x} 10) (size 1.7 1.7) (drill 1.0) (layers "*.Cu" "*.Mask") '
+              f'(pinfunction "{name}") (tstamp {uid()}))\n')
+        o += (f'  (fp_text user "{lab}" (at {x} 12 {text_rot}) (layer "F.SilkS")\n'
+              f'    (effects (font (size 1 1) (thickness 0.15))) (tstamp {uid()}))\n')
+    return o + ")\n"
+
+
+
+# Kycon STX-3120-3B 3.5 mm stereo jack (through-hole, right angle). From Kycon's drawing (a BOTTOM view, mirrored here to
+# top-view): origin = centre of the barrel's front face, +x toward the back of the jack, y down. Pin 1 (sleeve) is 6.5 mm
+# back on the axis; pins 2 and 5 are 11.5 mm back, 5.0 mm either side. Tip/ring on pins 2/5 is UNVERIFIED (schematic
+# symbol suggests 5 = tip, 2 = ring): check with a continuity test on the real part before wiring.
+JACK_PADS = (("1", "SLEEVE", 6.5, 0.0), ("2", "PIN2", 11.5, -5.0), ("5", "PIN5", 11.5, 5.0))
+JACK_PEGS = ((6.5, -5.0), (6.5, 5.0), (11.5, 0.0))
+
+
+def jack_footprint(at=None, ref="J1", rot=0, text_rot=0):
+    pre = "cassette:" if at else ""
+    head = (f'(footprint "{pre}Kycon_STX-3120-3B" (layer "F.Cu") (tstamp {uid()}) (at {f(at[0])} {f(at[1])} {rot})\n' if at else
+            '(footprint "Kycon_STX-3120-3B" (version 20221018) (generator pcbnew)\n  (layer "F.Cu")\n')
+    o = head
+    o += ('  (descr "Kycon STX-3120-3B 3.5 mm stereo jack, all plastic, right angle. Origin = centre of the barrel front face, '
+          '+x toward the back. 3x 1.3 mm pin holes + 3x 1.6 mm locating pegs. Tip/ring on pins 2/5 unverified.")\n'
+          '  (attr through_hole)\n')
+    o += (f'  (fp_text reference "{ref}" (at 7.5 -8 {text_rot}) (layer "F.Fab")\n'
+          f'    (effects (font (size 1 1) (thickness 0.15))) (tstamp {uid()}))\n'
+          f'  (fp_text value "STX-3120-3B" (at 7.5 8 {text_rot}) (layer "F.Fab")\n'
+          f'    (effects (font (size 1 1) (thickness 0.15))) (tstamp {uid()}))\n')
+    def ln(x1, y1, x2, y2, layer, w):
+        return (f'  (fp_line (start {f(x1)} {f(y1)}) (end {f(x2)} {f(y2)}) (stroke (width {w}) (type default)) '
+                f'(layer "{layer}") (tstamp {uid()}))\n')
+    def box(x1, y1, x2, y2, layer, w):
+        return ln(x1, y1, x2, y1, layer, w) + ln(x2, y1, x2, y2, layer, w) + ln(x2, y2, x1, y2, layer, w) + ln(x1, y2, x1, y1, layer, w)
+    o += box(3.5, -6.0, 14.1, 6.0, "F.SilkS", 0.15)          # housing 12.0 wide
+    o += box(0.0, -3.4, 3.5, 3.4, "F.Fab", 0.1)              # barrel, 6.8 wide
+    o += box(-0.2, -6.2, 15.3, 6.2, "F.CrtYd", 0.05)
+    for num, name, x, y in JACK_PADS:
+        o += (f'  (pad "{num}" thru_hole circle (at {x} {y}) (size 2.2 2.2) (drill 1.3) (layers "*.Cu" "*.Mask") '
+              f'(pinfunction "{name}") (tstamp {uid()}))\n')
+    for x, y in JACK_PEGS:
+        o += (f'  (pad "" np_thru_hole circle (at {x} {y}) (size 1.6 1.6) (drill 1.6) (layers "*.Cu" "*.Mask") (tstamp {uid()}))\n')
+    return o + ")\n"
 
 
 # ---------------------------------------------------------------- assemble
@@ -278,11 +396,9 @@ def trapezoid_keepout():
 
 
 def build():
-    tl_hole = (R, H - R)
-    tr_hole = (W - R, H - R)
     s = HEADER
     s += outline()
-    for i, (hx) in enumerate(HUB_X, 1):
+    for hx in HUB_X:
         s += circle((hx, HUB_V), HUB_HOLE_D / 2, "Edge.Cuts")
         s += hub_silk(hx, HUB_V)
     s += text(HUB_X[0], HUB_V - HUB_SILK[1] - 2, "A")
@@ -290,21 +406,27 @@ def build():
     s += trapezoid_keepout()
     s += poly(TRAP, "F.Mask") + poly(TRAP, "B.Mask")        # mask open both sides: bare FR4
     s += screw5_silk()
-    x, y = xy(*tl_hole); s += "  " + touch_pad_footprint("TouchPad_TL", False, (x, y), "TCH1").replace("\n", "\n  ").rstrip() + "\n"
-    x, y = xy(*tr_hole); s += "  " + touch_pad_footprint("TouchPad_TR", True, (x, y), "TCH2").replace("\n", "\n  ").rstrip() + "\n"
+    for ref, cu in (("TCH1", PAD_INSET + PAD_W / 2), ("TCH2", W - PAD_INSET - PAD_W / 2)):
+        x, y = xy(cu, H); s += "  " + touch_pad_footprint((x, y), ref).replace("\n", "\n  ").rstrip() + "\n"
+    for ref, hx in (("RV1", HUB_X[0]), ("RV2", HUB_X[1])):     # pin row toward the top of the board = rotate 180
+        x, y = xy(hx, HUB_V); s += "  " + pot_footprint((x, y), ref, 180, 0).replace("\n", "\n  ").rstrip() + "\n"
+    x, y = xy(W / 2, H); s += "  " + jack_footprint((x, y), "J1", 270, 0).replace("\n", "\n  ").rstrip() + "\n"   # barrel flush with the top edge, facing up
     x, y = xy(*TP_CENTRE); s += "  " + thing_plus_footprint((x, y), "U1").replace("\n", "\n  ").rstrip() + "\n"
-    s += mounting_hole("H1", R, R)
-    s += mounting_hole("H2", W - R, R)
+    for ref, (u, v) in (("TH1", (TOOL_X, H - TOOL_TOP)), ("TH2", (W - TOOL_X, H - TOOL_TOP)),
+                        ("TH3", (TOOL_X, TOOL_BOT)), ("TH4", (W - TOOL_X, TOOL_BOT))):
+        s += tooling_hole(ref, u, v)
     s += ")\n"
     return s
 
 
 if __name__ == "__main__":
+    _uid_n = 0
     (OUT / "cassette.pretty").mkdir(exist_ok=True)
-    (OUT / "cassette.pretty" / "TouchPad_TL.kicad_mod").write_text(touch_pad_footprint("TouchPad_TL", False))
-    (OUT / "cassette.pretty" / "TouchPad_TR.kicad_mod").write_text(touch_pad_footprint("TouchPad_TR", True))
+    (OUT / "cassette.pretty" / "TouchPad_40x20.kicad_mod").write_text(touch_pad_footprint())
     (OUT / "cassette.pretty" / "ThingPlus.kicad_mod").write_text(thing_plus_footprint())
-    (OUT / "cassette.pretty" / "MountingHole_3.2mm_M3_Plated.kicad_mod").write_text(mounting_hole_lib())
+    (OUT / "cassette.pretty" / "RV112FF-40.kicad_mod").write_text(pot_footprint())
+    (OUT / "cassette.pretty" / "Kycon_STX-3120-3B.kicad_mod").write_text(jack_footprint())
+    (OUT / "cassette.pretty" / "ToolingHole_1.152mm.kicad_mod").write_text(tooling_hole())
     (OUT / "cassette-carrier.kicad_pcb").write_text(build())
     (OUT / "cassette-carrier.kicad_pro").write_text('{\n  "meta": {\n    "filename": "cassette-carrier.kicad_pro",\n    "version": 1\n  }\n}\n')
     (OUT / "fp-lib-table").write_text(

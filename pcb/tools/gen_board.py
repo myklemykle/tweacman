@@ -35,17 +35,15 @@ PAD_W, PAD_H, PAD_R = 40.0, 20.0, 5.0   # touch pads: 40 x 20 mm, both bottom co
 PAD_INSET = 15.0                      # distance from the side edges to the pad
 ANT_M = R                             # plated M3 antenna holes sit this far in from the pad's top corners
 TOOL_D, TOOL_MASK = 1.152, 0.148      # NPTH tooling holes: drill dia, solder-mask expansion
-# tooling holes at the screw positions on the patent drawing (measured ~5.45 from the sides, 10.0 from the top, 5.5 from
-# the bottom on a 100 x 64 mm cassette), scaled
-TOOL_X, TOOL_TOP, TOOL_BOT = 5.45 * S, 10.0 * S, 5.5 * S
+# tooling holes sit on the centres of the four board-corner arcs (R from each edge)
 # hub sprocket outline (from the patent drawing): six inward teeth on the hub bore
 TOOTH_ANGLES = (90, 30, -30, -90, -150, 150)
 TOOTH_LEN, TOOTH_W, TOOTH_GAP = 1.73 * S, 1.5 * S, 0.3
 # fifth screw: bottom centre, ~13.0 mm above the bottom edge on the (unscaled) patent drawing
 SCREW5 = (W / 2, 13.0 * S)
-# Thing Plus: rows 20.32 apart, USB facing left, lower row's copper 2 mm above the board edge
+# Thing Plus: rows 20.32 apart, USB facing left
 TP_PAD_R = 1.8796 / 2
-TP_ROW_V = 2.0 + TP_PAD_R
+TP_ROW_V = 1.0 + TP_PAD_R              # lower row's copper 1 mm above the board edge
 TP_CENTRE = (W / 2, TP_ROW_V + 20.32 / 2)
 TP_TOP_V = TP_CENTRE[1] + 11.43       # top edge of the Thing Plus (its 22.86 mm width, rotated)
 
@@ -317,7 +315,7 @@ def pot_footprint(at=None, ref="RV", rot=0, text_rot=0):
             '(footprint "RV112FF-40" (version 20221018) (generator pcbnew)\n  (layer "F.Cu")\n')
     o = head
     o += ('  (descr "Taiwan Alpha RV112FF-40 dual endless pot, shaft up, factory-bent pins. Footprint per the datasheet PCB '
-          'hole detail: 4x 1.0 mm holes at 2.5 mm pitch, 10.0 mm from the shaft axis; two 2.0x2.1 mm clip cut-outs on the '
+          'hole detail: 4x 1.0 mm holes at 2.5 mm pitch, 10.0 mm from the shaft axis; two plated 2.0x2.1 mm case-clip holes on the '
           'axis, 13.0 mm apart. Origin = shaft axis.")\n  (attr through_hole)\n')
     o += (f'  (fp_text reference "{ref}" (at 0 -9 {text_rot}) (layer "F.Fab")\n'
           f'    (effects (font (size 1 1) (thickness 0.15))) (tstamp {uid()}))\n'
@@ -330,8 +328,9 @@ def pot_footprint(at=None, ref="RV", rot=0, text_rot=0):
         return ln(x1, y1, x2, y1, layer, w) + ln(x2, y1, x2, y2, layer, w) + ln(x2, y2, x1, y2, layer, w) + ln(x1, y2, x1, y1, layer, w)
     o += box(-5.5, -6.7, 5.5, 8.7, "F.SilkS", 0.15)                       # case outline (11.0 wide, 6.7 / 8.7 mm about the axis)
     o += box(-6.3, -7.0, 6.3, 10.9, "F.CrtYd", 0.05)
-    for cx in (-6.5, 6.5):
-        o += box(cx - 1.0, -1.05, cx + 1.0, 1.05, "Edge.Cuts", 0.1)       # case-clip cut-outs
+    for num, cx in (("5", -6.5), ("6", 6.5)):                              # case-clip holes: plated so the clips can be soldered
+        o += (f'  (pad "{num}" thru_hole rect (at {cx} 0) (size 3.6 3.7) (drill oval 2.0 2.1) (layers "*.Cu" "*.Mask") '
+              f'(pinfunction "CASE") (tstamp {uid()}))\n')
     o += (f'  (fp_circle (center 0 0) (end 3 0) (stroke (width 0.1) (type default)) (fill none) (layer "F.Fab") (tstamp {uid()}))\n')
     for num, name, x, lab in POT_PINS:
         o += (f'  (pad "{num}" thru_hole circle (at {x} 10) (size 1.7 1.7) (drill 1.0) (layers "*.Cu" "*.Mask") '
@@ -412,8 +411,7 @@ def build():
         x, y = xy(hx, HUB_V); s += "  " + pot_footprint((x, y), ref, 180, 0).replace("\n", "\n  ").rstrip() + "\n"
     x, y = xy(W / 2, H); s += "  " + jack_footprint((x, y), "J1", 270, 0).replace("\n", "\n  ").rstrip() + "\n"   # barrel flush with the top edge, facing up
     x, y = xy(*TP_CENTRE); s += "  " + thing_plus_footprint((x, y), "U1").replace("\n", "\n  ").rstrip() + "\n"
-    for ref, (u, v) in (("TH1", (TOOL_X, H - TOOL_TOP)), ("TH2", (W - TOOL_X, H - TOOL_TOP)),
-                        ("TH3", (TOOL_X, TOOL_BOT)), ("TH4", (W - TOOL_X, TOOL_BOT))):
+    for ref, (u, v) in (("TH1", (R, H - R)), ("TH2", (W - R, H - R)), ("TH3", (R, R)), ("TH4", (W - R, R))):
         s += tooling_hole(ref, u, v)
     s += ")\n"
     return s

@@ -247,6 +247,7 @@ def screw5_silk():
 
 # SparkFun Thing Plus pad names, by pad number (see ThingPlus.kicad_mod in
 # sparkfun/SparkFun-KiCad-Libraries, CC BY 4.0; rebuilt here in KiCad 7 format)
+TP_MOUNT_D = 3.048                   # Thing Plus mounting-hole diameter (0.12 in), per SparkFun's Eagle board file
 TP_LEFT = ["SDA", "SCL", "D6", "D5", "D4", "D3", "D2", "D1", "D0", "VBUS", "EN", "VBAT"]
 TP_RIGHT = ["FREE", "TX", "RX", "POCI", "PICO", "SCK", "A5", "A4", "A3", "A2", "A1", "A0", "GND", "VREF", "3V3", "RST"]
 
@@ -299,8 +300,12 @@ def thing_plus_footprint(at=None, ref="U1"):
             cx, cy = sx * (hw - cr), sy * (hl - cr)
             o += (f'  (fp_arc (start {f(cx + sx * cr)} {f(cy)}) (mid {f(cx + sx * cr * s2)} {f(cy + sy * cr * s2)}) '
                   f'(end {f(cx)} {f(cy + sy * cr)}) (stroke (width 0.15) (type default)) (layer "F.SilkS") (tstamp {uid()}))\n')
-    for hx_in, hy_in in ((0.10, 0.10), (0.80, 0.10), (0.10, 2.20), (0.80, 2.20)):     # the Thing Plus's own M3 holes
-        o += circ(*L(hx_in, hy_in), 1.7, w=0.12)
+    for hx_in, hy_in in ((0.10, 0.10), (0.80, 0.10), (0.10, 2.20), (0.80, 2.20)):     # the Thing Plus's own four mounting holes
+        # NPTH holes in the carrier at the same spots, 3.048 mm (0.12 in) like SparkFun's STAND-OFF-TIGHT holes, for screws/bushings
+        # (#4-40 or M3) through both boards. 2.54 mm in from the Thing Plus's edges.
+        hx, hy = L(hx_in, hy_in)
+        o += (f'  (pad "" np_thru_hole circle (at {f(hx)} {f(hy)}) (size {TP_MOUNT_D} {TP_MOUNT_D}) (drill {TP_MOUNT_D}) '
+              f'(layers "*.Cu" "*.Mask") (tstamp {uid()}))\n')
     (x1, y1), (x2, y2) = L(0.20, 2.871), L(0.70, 2.30)                                   # BLE module (overhangs the PCB end)
     o += box(x1, y1, x2, y2)
     o += label("BLE", 0, (y1 + y2) / 2)

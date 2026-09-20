@@ -28,6 +28,8 @@ DL.mkdir(exist_ok=True)
 SOCKET_H = 8.5          # female header height
 SPACER_H = 2.5          # male header plastic under a module
 MODULE_Z = SOCKET_H + SPACER_H   # underside of a plugged-in module
+TP_SOCKET_H = 3.0                # every plug-in module (Thing Plus, OLED, mic) sits on LOW-PROFILE (3 mm) sockets
+TP_MODULE_Z = TP_SOCKET_H + SPACER_H
 
 
 # ------------------------------------------------------------------ helpers
@@ -62,20 +64,23 @@ def new(name):
     return cq.Assembly(name=name)
 
 
-def header_row(asm, x, y_first, n, y_step, z_top, spacer=True, prefix="hdr"):
+def header_row(asm, x, y_first, n, y_step, z_top, spacer=True, prefix="hdr", mz=None):
     """A male-header spacer (black plastic under a PCB) plus square gold pins, pin 1 at (x, y_first)."""
+    mz = MODULE_Z if mz is None else mz
+    bottom = max(mz - 6.0, 0.5)            # a 6 mm pin tail, but never through the carrier board
     for i in range(n):
         y = y_first + i * y_step
         if spacer:
-            asm.add(box(x, y, MODULE_Z - SPACER_H, 2.54, 2.54, SPACER_H), color=BLACK, name=f"{prefix}_sp{i}")
-        asm.add(box(x, y, MODULE_Z - 6.0, 0.64, 0.64, z_top - (MODULE_Z - 6.0)), color=GOLD, name=f"{prefix}_pin{i}")
+            asm.add(box(x, y, mz - SPACER_H, 2.54, 2.54, SPACER_H), color=BLACK, name=f"{prefix}_sp{i}")
+        asm.add(box(x, y, bottom, 0.64, 0.64, z_top - bottom), color=GOLD, name=f"{prefix}_pin{i}")
 
 
-def socket_row(asm, x, y_first, n, y_step, prefix="sock"):
-    """A female header (black, SOCKET_H tall) with pin holes on top; pin 1 at (x, y_first)."""
+def socket_row(asm, x, y_first, n, y_step, prefix="sock", h=None):
+    """A female header (black, h tall, default SOCKET_H) with pin holes on top; pin 1 at (x, y_first)."""
+    h = SOCKET_H if h is None else h
     for i in range(n):
         y = y_first + i * y_step
-        body = cq.Workplane("XY").box(2.54, 2.54, SOCKET_H, centered=(True, True, False)).faces(">Z").workplane() \
+        body = cq.Workplane("XY").box(2.54, 2.54, h, centered=(True, True, False)).faces(">Z").workplane() \
             .rect(1.0, 1.0).cutBlind(-3.0).translate((x, y, 0)).val()
         asm.add(body, color=BLACK, name=f"{prefix}{i}")
 
@@ -135,8 +140,8 @@ def thing_plus():
     root = ET.parse(TP_BRD).getroot()
     bb = package_bboxes(root)
     ox, oy = PCB_W / 2, PCB_L / 2                       # eagle (0,0) is the PCB's bottom-left; model origin = PCB centre
-    zt = MODULE_Z + PCB_T                               # top surface of the Thing Plus PCB
-    zb = MODULE_Z                                       # underside
+    zt = TP_MODULE_Z + PCB_T                            # top surface of the Thing Plus PCB
+    zb = TP_MODULE_Z                                    # underside
     asm = new("ThingPlus")
 
     # sockets and male headers: left column = 12 pins (pads 1-12), right = 16 (pads 13-28); 2.54 pitch
@@ -144,8 +149,8 @@ def thing_plus():
     y_top = 34.29 - 5.08 - (-17.78) * -1                # placeholder, replaced below
     # pad y (footprint, y down) = -17.78 + 2.54 i  ->  model y = 17.78 - 2.54 i
     for x, n, prefix in ((xl, 12, "L"), (xr, 16, "R")):
-        socket_row(asm, x, 17.78, n, -2.54, prefix=f"sock{prefix}")
-        header_row(asm, x, 17.78, n, -2.54, zt + 0.6, prefix=f"hdr{prefix}")
+        socket_row(asm, x, 17.78, n, -2.54, prefix=f"sock{prefix}", h=TP_SOCKET_H)
+        header_row(asm, x, 17.78, n, -2.54, zt + 0.6, prefix=f"hdr{prefix}", mz=TP_MODULE_Z)
 
     # the PCB: rounded rectangle, 4 mounting holes, plated header holes
     pcb = (cq.Workplane("XY").rect(PCB_W, PCB_L).extrude(PCB_T).edges("|Z").fillet(2.54).translate((0, 0, zb)))
@@ -246,12 +251,12 @@ def knob():
 def oled():
     """0.91 in 128x32 SSD1306 module (38 x 12 mm), 4 pins along one short edge, plugged into a 1x4 socket. Origin = pin 1."""
     asm = new("OLED")
-    socket_row(asm, 0, 0, 4, -2.54)
-    header_row(asm, 0, 0, 4, -2.54, MODULE_Z + 1.0 + 0.6)
-    pcb = cq.Workplane("XY").box(38.0, 12.0, 1.0, centered=(True, True, False)).translate((-36.5 + 19.0, -3.81 + 0.0, MODULE_Z))
+    socket_row(asm, 0, 0, 4, -2.54, h=TP_SOCKET_H)
+    header_row(asm, 0, 0, 4, -2.54, TP_MODULE_Z + 1.0 + 0.6, mz=TP_MODULE_Z)
+    pcb = cq.Workplane("XY").box(38.0, 12.0, 1.0, centered=(True, True, False)).translate((-36.5 + 19.0, -3.81 + 0.0, TP_MODULE_Z))
     asm.add(pcb.val(), color=BLUE, name="pcb")
-    asm.add(box(-18.25, -3.81, MODULE_Z + 1.0, 29.5, 11.5, 1.2), color=GLASS, name="glass")
-    asm.add(box(-18.25, -3.81, MODULE_Z + 2.2, 22.4, 5.6, 0.05), color=col(0.0, 0.0, 0.0), name="active")
+    asm.add(box(-18.25, -3.81, TP_MODULE_Z + 1.0, 29.5, 11.5, 1.2), color=GLASS, name="glass")
+    asm.add(box(-18.25, -3.81, TP_MODULE_Z + 2.2, 22.4, 5.6, 0.05), color=col(0.0, 0.0, 0.0), name="active")
     return asm
 
 
@@ -260,16 +265,16 @@ def mic():
     on the same side as the header so its sound hole faces up when the module is plugged in. Origin = socket pin 1 (VDD);
     pins run toward -y; the module extends toward +x. Dimensions from Adafruit's Eagle board file."""
     asm = new("I2S_MIC")
-    socket_row(asm, 0, 0, 6, -2.54)
-    header_row(asm, 0, 0, 6, -2.54, MODULE_Z + 1.6 + 0.6)
+    socket_row(asm, 0, 0, 6, -2.54, h=TP_SOCKET_H)
+    header_row(asm, 0, 0, 6, -2.54, TP_MODULE_Z + 1.6 + 0.6, mz=TP_MODULE_Z)
     # Eagle board coordinates (x 1.016..17.526, y 0..12.7); pin 1 (VDD) at eagle x=15.621, y=2.54.
     ex = lambda xe: xe - 15.621            # eagle x -> model y (pins step toward -y)
     ey = lambda ye: ye - 2.54              # eagle y -> model x
-    pcb = cq.Workplane("XY").box(12.7, 16.51, 1.6, centered=(True, True, False)).translate((ey(6.35), ex(9.271), MODULE_Z))
-    pcb = pcb.faces(">Z").workplane(origin=(0, 0, MODULE_Z + 1.6)).pushPoints([(ey(10.16), ex(3.556)), (ey(10.16), ex(14.986))]).hole(2.5)
-    pcb = pcb.faces(">Z").workplane(origin=(0, 0, MODULE_Z + 1.6)).pushPoints([(ey(7.112), ex(9.271))]).hole(0.9)   # sound port
+    pcb = cq.Workplane("XY").box(12.7, 16.51, 1.6, centered=(True, True, False)).translate((ey(6.35), ex(9.271), TP_MODULE_Z))
+    pcb = pcb.faces(">Z").workplane(origin=(0, 0, TP_MODULE_Z + 1.6)).pushPoints([(ey(10.16), ex(3.556)), (ey(10.16), ex(14.986))]).hole(2.5)
+    pcb = pcb.faces(">Z").workplane(origin=(0, 0, TP_MODULE_Z + 1.6)).pushPoints([(ey(7.112), ex(9.271))]).hole(0.9)   # sound port
     asm.add(pcb.val(), color=col(0.04, 0.04, 0.06), name="pcb")
-    asm.add(box(ey(7.112), ex(9.271), MODULE_Z - 1.0, 3.5, 2.65, 1.0), color=SILVER, name="mic")
+    asm.add(box(ey(7.112), ex(9.271), TP_MODULE_Z - 1.0, 3.5, 2.65, 1.0), color=SILVER, name="mic")
     return asm
 
 

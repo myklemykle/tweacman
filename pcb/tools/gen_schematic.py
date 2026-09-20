@@ -164,7 +164,7 @@ def yn(flag):
     return "yes" if flag else "no"
 
 
-def symbol(lib_id, ref, value, footprint, at, rot=0, ref_at=None, val_at=None, hide_ref=False, in_bom=True, on_board=True):
+def symbol(lib_id, ref, value, footprint, at, rot=0, ref_at=None, val_at=None, hide_ref=False, in_bom=True, on_board=True, props=None):
     pins = {n: sch_pt(at, rot, (x, y)) for n, (x, y, a) in PINS[lib_id].items()}
     refs[ref] = pins
     horiz = rot in (90, 270)
@@ -181,6 +181,7 @@ def symbol(lib_id, ref, value, footprint, at, rot=0, ref_at=None, val_at=None, h
         f'    (property "Value" "{value}" (at {f(val_at[0])} {f(val_at[1])} 0) {eff(1.27, just)})\n'
         f'    (property "Footprint" "{footprint}" (at {f(at[0])} {f(at[1])} 0) {eff(1.27, " hide")})\n'
         f'    (property "Datasheet" "~" (at {f(at[0])} {f(at[1])} 0) {eff(1.27, " hide")})\n'
+        + "".join(f'    (property "{k}" "{v}" (at {f(at[0])} {f(at[1])} 0) {eff(1.27, " hide")})\n' for k, v in (props or {}).items()) +
         f'{pin_txt}'
         f'    (instances (project "{PROJECT}" (path "/{ROOT}" (reference "{ref}") (unit 1))))\n  )\n')
     return pins
@@ -433,6 +434,19 @@ text("Optional 4-pin SSD1306 OLED (0.91 in 128x32 outline; a 128x64 covers it)."
 text("Pin order: GND, VCC, SCL, SDA. I2C address 0x3C (or 0x3D).", (200.0, 259.0), 1.0)
 text("SDA/SCL are the Thing Plus's D15/D16, shared with its Qwiic", (200.0, 262.0), 1.0)
 text("port and fuel gauge (0x36); the I2C pull-ups are on the Thing Plus.", (200.0, 265.0), 1.0)
+
+# ------------------------------------------------------------------ Sockets (BOM only)
+box(20.32, 256.5, 110.0, 283.5, "Sockets: BOM lines only (pads are in the footprints)")
+SOCKETS = (("XS1", "1x12 socket", "U1 left column", "HCTL", "PM254-1-12-Z-3.0-C", "C5156451"),
+           ("XS2", "1x16 socket", "U1 right column", "HCTL", "PM254-1-16-Z-3.0-C", "C5159943"),
+           ("XS3", "1x4 socket", "DS1 (OLED)", "HCTL", "PM254-1-04-Z-3.0-C", "C5159936"),
+           ("XS4", "1x6 socket", "MIC1 (mic)", "XFCN", "MF254V-11-06-0743", "C962325"))
+for k, (ref, val, use, mfr, mpn, lcsc) in enumerate(SOCKETS):
+    x = 30.48 + 20.32 * k
+    symbol("Mechanical:MountingHole", ref, val, "", (x, 269.5), 0, ref_at=(x - 3.0, 265.5), val_at=(x - 6.0, 274.0), on_board=False,
+           props={"Manufacturer": mfr, "MPN": mpn, "LCSC": lcsc, "Used for": use, "Description": "2.54 mm pitch, 3 mm insulation height, round-hole turned pin"})
+text("Low-profile (3 mm) sockets. Module male headers need short pin tails (~3 mm) or trimmed pins.", (22.0, 277.5), 1.0)
+text("Standoff between the carrier and the Thing Plus: about 5.5 mm (3 mm socket + 2.5 mm header body).", (22.0, 280.5), 1.0)
 
 # ------------------------------------------------------------------ Mechanical
 box(20.32, 216.0, 110.0, 254.0, "Board-only parts")

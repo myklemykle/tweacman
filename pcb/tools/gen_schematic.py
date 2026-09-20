@@ -388,7 +388,7 @@ text("TSCAP", (309.0, 229.0))
 # ------------------------------------------------------------------ Power switch
 box(20.32, 14.0, 110.0, 48.0, "Power switch: EN to GND")
 SW = (66.04, 29.21)
-sw = symbol("Switch:SW_SPDT", "SW1", "Power", "Button_Switch_THT:SW_Slide_1P2T_CK_OS102011MS2Q", SW, 0,
+sw = symbol("Switch:SW_SPDT", "SW1", "EG1224", "Button_Switch_THT:SW_E-Switch_EG1224_SPDT_Angled", SW, 0,
             ref_at=(SW[0] - 3.0, SW[1] - 7.0), val_at=(SW[0] - 3.0, SW[1] + 7.0))
 stub_label("Switch:SW_SPDT", 0, sw, "2", "EN")
 gnd_from_pin(sw["1"], pin_dir("Switch:SW_SPDT", 0, "1"), (0, 1), None)

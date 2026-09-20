@@ -415,9 +415,9 @@ text("Standoff between the carrier and the Thing Plus: about 5.5 mm (3 mm socket
 # ------------------------------------------------------------------ Mechanical
 box(20.32, 216.0, 110.0, 254.0, "Board-only parts")
 for k in range(4):
-    symbol("Mechanical:MountingHole", f"TH{k + 1}", "ToolingHole", "cassette:ToolingHole_1.152mm", (30.48 + 20.32 * k, 232.41), 0,
+    symbol("Mechanical:MountingHole", f"MH{k + 1}", "M3 hole", "cassette:MountingHole_M3_NPTH", (30.48 + 20.32 * k, 232.41), 0,
            ref_at=(27.0 + 20.32 * k, 226.5), val_at=(21.0 + 20.32 * k, 237.5))
-text("TH1-TH4: 1.152 mm NPTH tooling holes on the corner-arc centres", (22.0, 247.0))
+text("MH1-MH4: M3 NPTH case-mounting holes on the corner-arc centres", (22.0, 247.0))
 
 
 def build():

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Generate the starting KiCad 7 board for the Compact-Cassette-shaped carrier PCB:
-outline, hub cutouts, tooling holes, touch-pad footprints, hub silkscreen, and the
+outline, hub cutouts, case-mounting holes, touch-pad footprints, hub silkscreen, and the
 trapezoid (copper-free, mask-free window on the tape-access edge), Thing Plus and fifth-screw marker.
 
 WARNING: this writes ../cassette-carrier.kicad_pcb from scratch. Run it once to
@@ -34,8 +34,8 @@ M3_D = 3.2
 PAD_W, PAD_H, PAD_R = 40.0, 20.0, 5.0   # touch pads: 40 x 20 mm, both bottom corners rounded r=5, top edge flush with the board edge
 PAD_INSET = 15.0                      # distance from the side edges to the pad
 ANT_M = R                             # plated M3 antenna holes sit this far in from the pad's top corners
-TOOL_D, TOOL_MASK = 1.152, 0.148      # NPTH tooling holes: drill dia, solder-mask expansion
-# tooling holes sit on the centres of the four board-corner arcs (R from each edge)
+MOUNT_D = M3_D                        # NPTH case-mounting holes: M3 clearance, no copper or mask ring
+# mounting holes sit on the centres of the four board-corner arcs (R from each edge)
 # hub sprocket outline (from the patent drawing): six inward teeth on the hub bore
 TOOTH_ANGLES = (90, 30, -30, -90, -150, 150)
 TOOTH_LEN, TOOTH_W, TOOTH_GAP = 1.73 * S, 1.5 * S, 0.3
@@ -205,18 +205,18 @@ def touch_pad_footprint(at=None, ref="TCH"):
         f')\n')
 
 
-def tooling_hole(ref=None, u=0.0, v=0.0):
-    """NPTH tooling hole. With ref/u/v: an instance for the board; without: the library footprint."""
-    pad = (f'(pad "" np_thru_hole circle (at 0 0) (size {TOOL_D} {TOOL_D}) (drill {TOOL_D}) (layers "*.Cu" "*.Mask") '
-           f'(solder_mask_margin {TOOL_MASK}) (tstamp {uid()}))')
-    text = (f'(fp_text reference "{ref or "REF**"}" (at 0 -2) (layer "F.Fab")\n      (effects (font (size 1 1) (thickness 0.15))) (tstamp {uid()}))\n'
-            f'    (fp_text value "ToolingHole_{TOOL_D}mm" (at 0 2) (layer "F.Fab")\n      (effects (font (size 1 1) (thickness 0.15))) (tstamp {uid()}))')
-    descr = f'(descr "NPTH tooling hole, {TOOL_D} mm drill, {TOOL_MASK} mm solder-mask expansion")'
+def mounting_hole(ref=None, u=0.0, v=0.0):
+    """M3 NPTH case-mounting hole. With ref/u/v: an instance for the board; without: the library footprint."""
+    pad = (f'(pad "" np_thru_hole circle (at 0 0) (size {MOUNT_D} {MOUNT_D}) (drill {MOUNT_D}) (layers "*.Cu" "*.Mask") '
+           f'(tstamp {uid()}))')
+    text = (f'(fp_text reference "{ref or "REF**"}" (at 0 -3) (layer "F.Fab")\n      (effects (font (size 1 1) (thickness 0.15))) (tstamp {uid()}))\n'
+            f'    (fp_text value "MountingHole_M3_NPTH" (at 0 3) (layer "F.Fab")\n      (effects (font (size 1 1) (thickness 0.15))) (tstamp {uid()}))')
+    descr = f'(descr "M3 case-mounting hole, {MOUNT_D} mm non-plated drill")'
     if ref is None:
-        return (f'(footprint "ToolingHole_{TOOL_D}mm" (version 20221018) (generator pcbnew)\n  (layer "F.Cu")\n  {descr}\n'
+        return (f'(footprint "MountingHole_M3_NPTH" (version 20221018) (generator pcbnew)\n  (layer "F.Cu")\n  {descr}\n'
                 f'  (attr exclude_from_pos_files exclude_from_bom)\n  {text}\n  {pad}\n)\n')
     x, y = xy(u, v)
-    return (f'  (footprint "cassette:ToolingHole_{TOOL_D}mm" (layer "F.Cu") (tstamp {uid()}) (at {f(x)} {f(y)})\n'
+    return (f'  (footprint "cassette:MountingHole_M3_NPTH" (layer "F.Cu") (tstamp {uid()}) (at {f(x)} {f(y)})\n'
             f'    {descr}\n    (attr exclude_from_pos_files exclude_from_bom)\n    {text}\n    {pad}\n  )\n')
 
 
@@ -617,8 +617,8 @@ def build():
         x, y = xy(hx, HUB_V); s += "  " + pot_footprint((x, y), ref, 180, 0).replace("\n", "\n  ").rstrip() + "\n"
     x, y = xy(W / 2, H); s += "  " + jack_footprint((x, y), "J1", 270, 0).replace("\n", "\n  ").rstrip() + "\n"   # barrel flush with the top edge, facing up
     x, y = xy(*TP_CENTRE); s += "  " + thing_plus_footprint((x, y), "U1").replace("\n", "\n  ").rstrip() + "\n"
-    for ref, (u, v) in (("TH1", (R, H - R)), ("TH2", (W - R, H - R)), ("TH3", (R, R)), ("TH4", (W - R, R))):
-        s += tooling_hole(ref, u, v)
+    for ref, (u, v) in (("MH1", (R, H - R)), ("MH2", (W - R, H - R)), ("MH3", (R, R)), ("MH4", (W - R, R))):
+        s += mounting_hole(ref, u, v)
     s += ")\n"
     return s
 
@@ -627,7 +627,7 @@ def write_library():
     global _uid_n, _uid_ns
     lib = OUT / "cassette.pretty"
     lib.mkdir(exist_ok=True)
-    for name, make in (("TouchPad_40x20", touch_pad_footprint), ("ToolingHole_1.152mm", tooling_hole), ("RV112FF-40", pot_footprint),
+    for name, make in (("TouchPad_40x20", touch_pad_footprint), ("MountingHole_M3_NPTH", mounting_hole), ("RV112FF-40", pot_footprint),
                        ("C_DCBlock_Dual", dcblock_footprint), ("Kycon_STX-3120-3B", jack_footprint), ("ThingPlus", thing_plus_footprint),
                        (OLED_NAME, oled_footprint), (MIC_NAME, mic_footprint), (JR_NAME, cutjumper_footprint)):
         _uid_ns, _uid_n = f"lib/{name}", 0
@@ -647,7 +647,7 @@ if __name__ == "__main__":
     (OUT / "cassette.pretty" / "RV112FF-40.kicad_mod").write_text(pot_footprint())
     (OUT / "cassette.pretty" / "C_DCBlock_Dual.kicad_mod").write_text(dcblock_footprint())
     (OUT / "cassette.pretty" / "Kycon_STX-3120-3B.kicad_mod").write_text(jack_footprint())
-    (OUT / "cassette.pretty" / "ToolingHole_1.152mm.kicad_mod").write_text(tooling_hole())
+    (OUT / "cassette.pretty" / "MountingHole_M3_NPTH.kicad_mod").write_text(mounting_hole())
     (OUT / "cassette-carrier.kicad_pcb").write_text(build())
     (OUT / "cassette.pretty" / f"{OLED_NAME}.kicad_mod").write_text(oled_footprint())   # written last so board ids don't shift
     pro = OUT / "cassette-carrier.kicad_pro"                   # KiCad owns this file (design rules, settings): only create a stub

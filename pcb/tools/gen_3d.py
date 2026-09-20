@@ -216,9 +216,8 @@ def pot():
     flatted (4.5 across) over the last 12 mm."""
     asm = new("RV112FF")
     asm.add(box(0, -1.0, 0.0, 11.0, 15.4, 8.5), color=SILVER, name="body")
-    for sx in (-1, 1):                                                   # case-clip ears and the tabs that go into the board
-        asm.add(box(sx * 6.5, 0, 0.0, 2.0, 2.1, 0.5), color=SILVER, name=f"ear{sx}")
-        asm.add(box(sx * 6.5, 0, -3.2, 2.0, 0.4, 3.2), color=SILVER, name=f"clip{sx}")
+    for sx in (-1, 1):                                                   # case clips: 2.0 mm wide, 0.5 thick blades on the body's sides
+        asm.add(box(sx * 5.75, 0, -3.2, 0.5, 2.0, 3.2 + 1.0), color=SILVER, name=f"clip{sx}")
     asm.add(cyl(0, 0, 8.5, 3.4, 0.6), color=SILVER, name="boss")
     shaft = cq.Workplane("XY").circle(3.0).extrude(25.0 - 8.5).translate((0, 0, 8.5))
     cut = cq.Workplane("XY").box(8, 3, 12.0, centered=(True, False, False)).translate((0, 1.5, 13.0))   # flat toward +y, last 12 mm

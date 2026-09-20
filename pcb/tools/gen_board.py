@@ -28,7 +28,7 @@ HUB_SPACING = 60.0
 HUB_D = (W - HUB_SPACING) / 2         # hub centre is this far from top AND sides
 HUB_V = H - HUB_D                     # -> 50.000 above the bottom edge
 HUB_X = (HUB_D, HUB_D + HUB_SPACING)
-HUB_HOLE_D = 8.0
+HUB_HOLE_D = 7.0
 HUB_SILK = (6.7 * S, 7.2 * S)         # model hub bore / rim radii, scaled
 M3_D = 3.2
 PAD_W, PAD_H, PAD_R = 40.0, 20.0, 5.0   # touch pads: 40 x 20 mm, both bottom corners rounded r=5, top edge flush with the board edge
@@ -404,6 +404,10 @@ def dcblock_footprint():
 # RV112FF-40 (Taiwan Alpha), shaft up, pins bent down at the factory. Origin = shaft axis; drawn as in the
 # datasheet's "P.C.B. MOUNTING HOLE DETAIL" (pin row 10.0 mm on the +y side of the axis, y down). Pads, left to
 # right in that view: wiper B, power, wiper A, ground.
+# Case clips: the datasheet's hole pattern is two 2.0 x 2.1 mm squares 13.0 mm apart OUTSIDE-to-outside (centres 11.0 apart); the
+# clips are 2.0 mm-wide blades whose centres sit around +-5.75. A plated round 2.4 mm hole centred at +-5.75 clears them with some play.
+CLIP_X = 5.75
+
 POT_PINS = (("1", "WIPER_B", -3.75, "B"), ("2", "PWR", -1.25, "V"), ("3", "WIPER_A", 1.25, "A"), ("4", "GND", 3.75, "G"))
 
 
@@ -413,8 +417,8 @@ def pot_footprint(at=None, ref="RV", rot=0, text_rot=0):
             '(footprint "RV112FF-40" (version 20221018) (generator pcbnew)\n  (layer "F.Cu")\n')
     o = head
     o += ('  (descr "Taiwan Alpha RV112FF-40 dual endless pot, shaft up, factory-bent pins. Footprint per the datasheet PCB '
-          'hole detail: 4x 1.0 mm holes at 2.5 mm pitch, 10.0 mm from the shaft axis; two plated 2.0x2.1 mm case-clip holes on the '
-          'axis, 13.0 mm apart. Origin = shaft axis.")\n  (attr through_hole)\n')
+          'hole detail: 4x 1.0 mm holes at 2.5 mm pitch, 10.0 mm from the shaft axis; two plated round 2.4 mm case-clip holes on the '
+          'axis, 11.5 mm apart (datasheet squares are 13.0 outside-to-outside; widened for play). Origin = shaft axis.")\n  (attr through_hole)\n')
     o += (f'  (fp_text reference "{ref}" (at 0 -9 {text_rot}) (layer "F.Fab")\n'
           f'    (effects (font (size 1 1) (thickness 0.15))) (tstamp {uid()}))\n'
           f'  (fp_text value "RV112FF-40-25A-0B10K" (at 0 13 {text_rot}) (layer "F.Fab")\n'
@@ -426,8 +430,8 @@ def pot_footprint(at=None, ref="RV", rot=0, text_rot=0):
         return ln(x1, y1, x2, y1, layer, w) + ln(x2, y1, x2, y2, layer, w) + ln(x2, y2, x1, y2, layer, w) + ln(x1, y2, x1, y1, layer, w)
     o += box(-5.5, -6.7, 5.5, 8.7, "F.SilkS", 0.15)                       # case outline (11.0 wide, 6.7 / 8.7 mm about the axis)
     o += box(-6.3, -7.0, 6.3, 10.9, "F.CrtYd", 0.05)
-    for num, cx in (("5", -6.5), ("6", 6.5)):                              # case-clip holes: plated so the clips can be soldered
-        o += (f'  (pad "{num}" thru_hole rect (at {cx} 0) (size 3.6 3.7) (drill oval 2.0 2.1) (layers "*.Cu" "*.Mask") '
+    for num, cx in (("5", -CLIP_X), ("6", CLIP_X)):                       # case-clip holes: plated round holes, soldered for strength
+        o += (f'  (pad "{num}" thru_hole circle (at {cx} 0) (size 3.2 3.2) (drill 2.4) (layers "*.Cu" "*.Mask") '
               f'(pinfunction "CASE") (tstamp {uid()}))\n')
     o += (f'  (fp_circle (center 0 0) (end 3 0) (stroke (width 0.1) (type default)) (fill none) (layer "F.Fab") (tstamp {uid()}))\n')
     for num, name, x, lab in POT_PINS:

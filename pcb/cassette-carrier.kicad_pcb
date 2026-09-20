@@ -209,7 +209,7 @@
 
   (footprint "cassette:C_DCBlock_Dual" (layer "F.Cu")
     (tstamp 06ed02d6-1549-4deb-bf99-921bd0f03e4a)
-    (at 185.225 160.05 180)
+    (at 188.15 160.05 180)
     (descr "DC-blocking cap, electrolytic (axial or radial) or film box, kept under 10 mm tall. Pad 1 = + (toward the DAC); pad 2 repeats at 5.0, 7.5, 10.0, 12.5 and 15.0 mm lead spacing (all the same net); fit only the hole that matches your cap.")
     (property "Sheetfile" "cassette-carrier.kicad_sch")
     (property "Sheetname" "")
@@ -249,7 +249,7 @@
 
   (footprint "Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P5.00mm" (layer "F.Cu")
     (tstamp 07bd67a5-1f94-42be-9017-29e410496a38)
-    (at 213.010766 162.55 90)
+    (at 213.696662 162.55 90)
     (descr "C, Disc series, Radial, pin pitch=5.00mm, , diameter*width=5*2.5mm^2, Capacitor, http://cdn-reichelt.de/documents/datenblatt/B300/DS_KERKO_TC.pdf")
     (tags "C Disc series Radial pin pitch 5.00mm  diameter 5mm width 2.5mm Capacitor")
     (property "Sheetfile" "cassette-carrier.kicad_sch")
@@ -383,7 +383,7 @@
 
   (footprint "cassette:C_DCBlock_Dual" (layer "F.Cu")
     (tstamp 1cf5569e-ee1f-42ad-a276-463d0573c459)
-    (at 237.675 160.05)
+    (at 234.625 160.05)
     (descr "DC-blocking cap, electrolytic (axial or radial) or film box, kept under 10 mm tall. Pad 1 = + (toward the DAC); pad 2 repeats at 5.0, 7.5, 10.0, 12.5 and 15.0 mm lead spacing (all the same net); fit only the hole that matches your cap.")
     (property "Sheetfile" "cassette-carrier.kicad_sch")
     (property "Sheetname" "")
@@ -510,7 +510,7 @@
 
   (footprint "Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P5.00mm" (layer "F.Cu")
     (tstamp 29cacb93-579e-4bda-bdb6-5b690e6b39ad)
-    (at 208.789228 162.55 90)
+    (at 209.794996 162.55 90)
     (descr "C, Disc series, Radial, pin pitch=5.00mm, , diameter*width=5*2.5mm^2, Capacitor, http://cdn-reichelt.de/documents/datenblatt/B300/DS_KERKO_TC.pdf")
     (tags "C Disc series Radial pin pitch 5.00mm  diameter 5mm width 2.5mm Capacitor")
     (property "Sheetfile" "cassette-carrier.kicad_sch")
@@ -594,7 +594,7 @@
 
   (footprint "Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P5.00mm" (layer "F.Cu")
     (tstamp 3143567f-c854-47e8-9468-7a9a13d82de1)
-    (at 200.346152 162.55 90)
+    (at 201.991664 162.55 90)
     (descr "C, Disc series, Radial, pin pitch=5.00mm, , diameter*width=5*2.5mm^2, Capacitor, http://cdn-reichelt.de/documents/datenblatt/B300/DS_KERKO_TC.pdf")
     (tags "C Disc series Radial pin pitch 5.00mm  diameter 5mm width 2.5mm Capacitor")
     (property "Sheetfile" "cassette-carrier.kicad_sch")
@@ -656,7 +656,7 @@
 
   (footprint "Resistor_THT:R_Axial_DIN0204_L3.6mm_D1.6mm_P7.62mm_Horizontal" (layer "F.Cu")
     (tstamp 3634923f-05fd-4d87-8a44-d29a8652ae37)
-    (at 193.253076 163.86 90)
+    (at 195.538332 163.86 90)
     (descr "Resistor, Axial_DIN0204 series, Axial, Horizontal, pin pitch=7.62mm, 0.167W, length*diameter=3.6*1.6mm^2, http://cdn-reichelt.de/documents/datenblatt/B400/1_4W%23YAG.pdf")
     (tags "Resistor Axial_DIN0204 series Axial Horizontal pin pitch 7.62mm 0.167W length 3.6mm diameter 1.6mm")
     (property "Sheetfile" "cassette-carrier.kicad_sch")
@@ -722,7 +722,7 @@
 
   (footprint "Resistor_THT:R_Axial_DIN0204_L3.6mm_D1.6mm_P7.62mm_Horizontal" (layer "F.Cu")
     (tstamp 4b08ed25-3a78-4dcb-bb3a-585046c8df8c)
-    (at 220.103842 163.86 90)
+    (at 220.149994 163.86 90)
     (descr "Resistor, Axial_DIN0204 series, Axial, Horizontal, pin pitch=7.62mm, 0.167W, length*diameter=3.6*1.6mm^2, http://cdn-reichelt.de/documents/datenblatt/B400/1_4W%23YAG.pdf")
     (tags "Resistor Axial_DIN0204 series Axial Horizontal pin pitch 7.62mm 0.167W length 3.6mm diameter 1.6mm")
     (property "Sheetfile" "cassette-carrier.kicad_sch")
@@ -919,7 +919,7 @@
 
   (footprint "Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P5.00mm" (layer "F.Cu")
     (tstamp 639d29bc-d2df-485b-bdf4-981571d8969d)
-    (at 204.56769 162.55 90)
+    (at 205.89333 162.55 90)
     (descr "C, Disc series, Radial, pin pitch=5.00mm, , diameter*width=5*2.5mm^2, Capacitor, http://cdn-reichelt.de/documents/datenblatt/B300/DS_KERKO_TC.pdf")
     (tags "C Disc series Radial pin pitch 5.00mm  diameter 5mm width 2.5mm Capacitor")
     (property "Sheetfile" "cassette-carrier.kicad_sch")
@@ -1312,7 +1312,7 @@
 
   (footprint "Resistor_THT:R_Axial_DIN0204_L3.6mm_D1.6mm_P7.62mm_Horizontal" (layer "F.Cu")
     (tstamp 96183867-2ad0-4b39-af8e-142daf4fe624)
-    (at 216.782304 163.86 90)
+    (at 217.148328 163.86 90)
     (descr "Resistor, Axial_DIN0204 series, Axial, Horizontal, pin pitch=7.62mm, 0.167W, length*diameter=3.6*1.6mm^2, http://cdn-reichelt.de/documents/datenblatt/B400/1_4W%23YAG.pdf")
     (tags "Resistor Axial_DIN0204 series Axial Horizontal pin pitch 7.62mm 0.167W length 3.6mm diameter 1.6mm")
     (property "Sheetfile" "cassette-carrier.kicad_sch")
@@ -1378,7 +1378,7 @@
 
   (footprint "Capacitor_THT:CP_Radial_D5.0mm_P2.00mm" (layer "F.Cu")
     (tstamp a12379d3-ee88-40c4-86ae-11e31d7c6815)
-    (at 232.168456 159.094888 -90)
+    (at 229.438326 159.094888 -90)
     (descr "CP, Radial series, Radial, pin pitch=2.00mm, , diameter=5mm, Electrolytic Capacitor")
     (tags "CP Radial series Radial pin pitch 2.00mm  diameter 5mm Electrolytic Capacitor")
     (property "Sheetfile" "cassette-carrier.kicad_sch")
@@ -1931,7 +1931,7 @@
 
   (footprint "Resistor_THT:R_Axial_DIN0204_L3.6mm_D1.6mm_P7.62mm_Horizontal" (layer "F.Cu")
     (tstamp dd663b39-c333-4b2a-8d3a-745d89f78476)
-    (at 196.574614 163.86 90)
+    (at 198.539998 163.86 90)
     (descr "Resistor, Axial_DIN0204 series, Axial, Horizontal, pin pitch=7.62mm, 0.167W, length*diameter=3.6*1.6mm^2, http://cdn-reichelt.de/documents/datenblatt/B400/1_4W%23YAG.pdf")
     (tags "Resistor Axial_DIN0204 series Axial Horizontal pin pitch 7.62mm 0.167W length 3.6mm diameter 1.6mm")
     (property "Sheetfile" "cassette-carrier.kicad_sch")
@@ -1997,7 +1997,7 @@
 
   (footprint "cassette:R_Axial_DIN0204_P7.62mm_CutJumper" (layer "F.Cu")
     (tstamp e3880219-f788-434f-824c-cc00017d3e2e)
-    (at 227.146918 163.86 90)
+    (at 223.75166 163.86 90)
     (descr "1/8 W axial resistor footprint (7.62 mm pitch) with a bridged solder jumper across it, centred between the holes on F.Cu. Cut the copper bridge with a knife BEFORE fitting the resistor; left uncut, the pads are shorted.")
     (tags "resistor solder jumper bridged net tie")
     (property "Sheetfile" "cassette-carrier.kicad_sch")
@@ -2113,7 +2113,7 @@
 
   (footprint "Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P5.00mm" (layer "F.Cu")
     (tstamp e3d2c4d9-4721-4c88-9d67-e0529b794046)
-    (at 189.481538 162.55 90)
+    (at 192.086666 162.55 90)
     (descr "C, Disc series, Radial, pin pitch=5.00mm, , diameter*width=5*2.5mm^2, Capacitor, http://cdn-reichelt.de/documents/datenblatt/B300/DS_KERKO_TC.pdf")
     (tags "C Disc series Radial pin pitch 5.00mm  diameter 5mm width 2.5mm Capacitor")
     (property "Sheetfile" "cassette-carrier.kicad_sch")

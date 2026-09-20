@@ -107,6 +107,7 @@ J_PINS = [("5", "TIP", -10.16, 2.54, 0), ("2", "RING", -10.16, 0, 0), ("1", "SLE
 SYM_J = custom_symbol("STX-3120-3B", "J", "cassette:Kycon_STX-3120-3B", "Kycon STX-3120-3B 3.5 mm stereo jack",
                       [(-7.62, 5.08, 7.62, -5.08)], J_PINS)
 
+# Not on the board in rev 1 (kept for the next rev; see branch feature/pcb-mic-oled).
 # Adafruit I2S MEMS microphone breakout (SPH0645LM4H): 1x6 header, pin order as listed in Adafruit's pinout page
 # (3V, GND, BCLK, DOUT, LRCLK, SEL) - UNVERIFIED against the real module; check its silkscreen when it arrives.
 MIC_PINS = [("1", "3V", -2.54, 11.43, 270), ("2", "GND", -2.54, -11.43, 90), ("6", "SEL", 2.54, -11.43, 90),
@@ -276,7 +277,7 @@ u = symbol("cassette:ThingPlus", "U1", "Thing Plus RA6M5", "cassette:ThingPlus",
            ref_at=(U1[0], U1[1] - 26.0), val_at=(U1[0], U1[1] + 26.0))
 USED_RIGHT = {"TX": "D20", "RX": "D21", "A5": "POT2_B", "A4": "POT2_A", "A3": "POT1_B", "A2": "POT1_A",
               "A1": "DAC_R", "A0": "DAC_L", "VREF": "VREF"}
-USED_LEFT = {"SDA": "I2C_SDA", "SCL": "I2C_SCL", "D6": "D6", "D4": "I2S_BCLK", "D3": "I2S_LRCLK", "D1": "I2S_DATA", "EN": "EN"}
+USED_LEFT = {"D6": "D6", "EN": "EN"}
 names = {str(i + 1): n for i, n in enumerate(TP_LEFT)}
 names.update({str(13 + i): n for i, n in enumerate(TP_RIGHT)})
 for num, nm in names.items():
@@ -285,8 +286,6 @@ for num, nm in names.items():
     net = (USED_LEFT if int(num) <= 12 else USED_RIGHT).get(nm)
     if nm == "GND":
         gnd_from_pin(p, d, (1, 0), 15.24)             # sideways and far enough out to clear the VREF label
-    elif nm == "3V3":
-        p3v3(p, d, 20.32)
     elif net:
         stub_label("cassette:ThingPlus", 0, u, num, net)
     else:
@@ -402,50 +401,15 @@ no_connect(sw["3"])
 text("Closed to GND, the switch holds the Thing Plus's EN pin low, which turns its", (22.0, 39.0), 1.0)
 text("3.3 V regulator off. Use it as the power switch when running on battery.", (22.0, 42.0), 1.0)
 
-# ------------------------------------------------------------------ I2S microphone
-box(20.32, 52.0, 110.0, 116.0, "I2S microphone: Adafruit SPH0645LM4H")
-MIC = (60.96, 78.74)
-m = symbol("cassette:I2S_Mic_Breakout", "MIC1", "SPH0645LM4H", "Connector_PinSocket_2.54mm:PinSocket_1x06_P2.54mm_Vertical", MIC, 0,
-           ref_at=(MIC[0] + 9.0, MIC[1] - 3.0), val_at=(MIC[0] + 9.0, MIC[1] + 3.0))
-p3v3(m["1"])
-(x2, y2), (x6, y6) = m["2"], m["6"]                          # ground and SEL share one ground symbol
-a2, a6, mid = (x2, y2 + 5.08), (x6, y6 + 5.08), ((x2 + x6) / 2, y2 + 5.08)
-wire((x2, y2), a2, mid)
-wire((x6, y6), a6, mid)
-junction(mid)
-gnd(mid)
-stub_label("cassette:I2S_Mic_Breakout", 0, m, "3", "I2S_BCLK")
-stub_label("cassette:I2S_Mic_Breakout", 0, m, "4", "I2S_DATA")
-stub_label("cassette:I2S_Mic_Breakout", 0, m, "5", "I2S_LRCLK")
-text("The MCU is the I2S master: it drives BCLK (P403/D4) and LRCLK (P404/D3); the", (22.0, 103.0), 1.0)
-text("mic answers on DOUT (to P406/D1). BCLK should run at 2-4 MHz. SEL low = left", (22.0, 106.0), 1.0)
-text("channel (tied to GND). Sound port is on the underside; header order unverified.", (22.0, 109.0), 1.0)
-
-# ------------------------------------------------------------------ OLED display
-box(118.0, 246.0, 262.0, 284.0, "OLED display (optional): SSD1306, I2C")
-OLED = (170.18, 266.7)
-d = symbol("cassette:SSD1306_I2C_OLED", "DS1", "SSD1306 OLED", f"cassette:{OLED_NAME}", OLED, 0,
-           ref_at=(OLED[0] + 9.0, OLED[1] - 3.0), val_at=(OLED[0] + 9.0, OLED[1] + 3.0))
-p3v3(d["2"])
-gnd(d["1"])
-stub_label("cassette:SSD1306_I2C_OLED", 0, d, "3", "I2C_SCL")
-stub_label("cassette:SSD1306_I2C_OLED", 0, d, "4", "I2C_SDA")
-text("Optional 4-pin SSD1306 OLED (0.91 in 128x32 outline; a 128x64 covers it).", (200.0, 256.0), 1.0)
-text("Pin order: GND, VCC, SCL, SDA. I2C address 0x3C (or 0x3D).", (200.0, 259.0), 1.0)
-text("SDA/SCL are the Thing Plus's D15/D16, shared with its Qwiic", (200.0, 262.0), 1.0)
-text("port and fuel gauge (0x36); the I2C pull-ups are on the Thing Plus.", (200.0, 265.0), 1.0)
-
 # ------------------------------------------------------------------ Sockets (BOM only)
 box(20.32, 256.5, 110.0, 283.5, "Sockets: BOM lines only (pads are in the footprints)")
 SOCKETS = (("XS1", "1x12 socket", "U1 left column", "HCTL", "PM254-1-12-Z-3.0-C", "C5156451"),
-           ("XS2", "1x16 socket", "U1 right column", "HCTL", "PM254-1-16-Z-3.0-C", "C5159943"),
-           ("XS3", "1x4 socket", "DS1 (OLED)", "HCTL", "PM254-1-04-Z-3.0-C", "C5159936"),
-           ("XS4", "1x6 socket", "MIC1 (mic)", "XFCN", "MF254V-11-06-0743", "C962325"))
+           ("XS2", "1x16 socket", "U1 right column", "HCTL", "PM254-1-16-Z-3.0-C", "C5159943"))
 for k, (ref, val, use, mfr, mpn, lcsc) in enumerate(SOCKETS):
     x = 30.48 + 20.32 * k
     symbol("Mechanical:MountingHole", ref, val, "", (x, 269.5), 0, ref_at=(x - 3.0, 265.5), val_at=(x - 6.0, 274.0), on_board=False,
            props={"Manufacturer": mfr, "MPN": mpn, "LCSC": lcsc, "Used for": use, "Description": "2.54 mm pitch, 3 mm insulation height, round-hole turned pin"})
-text("Low-profile (3 mm) sockets. Module male headers need short pin tails (~3 mm) or trimmed pins.", (22.0, 277.5), 1.0)
+text("Low-profile (3 mm) sockets.", (22.0, 277.5), 1.0)
 text("Standoff between the carrier and the Thing Plus: about 5.5 mm (3 mm socket + 2.5 mm header body).", (22.0, 280.5), 1.0)
 
 # ------------------------------------------------------------------ Mechanical

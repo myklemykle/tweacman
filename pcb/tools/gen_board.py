@@ -304,6 +304,38 @@ def thing_plus_footprint(at=None, ref="U1"):
 
 
 
+# SSD1306 0.91 in 128x32 OLED module (4-pin I2C: GND, VCC, SCL, SDA at 2.54 mm). Outline, panel window and pad positions come from
+# the user's own bloopernet footprint (38 x 12 mm module, pins along one short edge); converted to KiCad 7 format with the origin
+# moved to pin 1. A larger 0.96 in 128x64 module will simply cover this outline. A 1x4 female socket fits the same holes.
+OLED_NAME = "SSD1306_OLED_0.91in_128x32"
+
+
+def oled_footprint():
+    ox, oy = 36.5, 2.19                                    # original coordinates of pad 1
+    def ln(x1, y1, x2, y2, layer, w):
+        return (f'  (fp_line (start {f(x1 - ox)} {f(y1 - oy)}) (end {f(x2 - ox)} {f(y2 - oy)}) (stroke (width {w}) (type default)) '
+                f'(layer "{layer}") (tstamp {uid()}))\n')
+    o = (f'(footprint "{OLED_NAME}" (version 20221018) (generator pcbnew)\n  (layer "F.Cu")\n'
+         '  (descr "SSD1306 0.91 in 128x32 OLED module, 4-pin I2C: 1 GND, 2 VCC, 3 SCL, 4 SDA. Origin = pin 1. Outline from the '
+         'bloopernet library; a 128x64 module covers it. Fits a 1x4 female socket.")\n  (attr through_hole)\n'
+         f'  (fp_text reference "REF**" (at -18 -4) (layer "F.Fab")\n    (effects (font (size 1 1) (thickness 0.15))) (tstamp {uid()}))\n'
+         f'  (fp_text value "{OLED_NAME}" (at -18 11.5) (layer "F.Fab")\n    (effects (font (size 1 1) (thickness 0.15))) (tstamp {uid()}))\n')
+    for (a, b, c, d) in ((0, 0, 38, 0), (38, 0, 38, 12), (38, 12, 0, 12), (0, 12, 0, 0)):
+        o += ln(a, b, c, d, "F.SilkS", 0.12)
+    o += ln(3.5, 0, 3.5, 12, "F.SilkS", 0.12) + ln(33, 0, 33, 12, "F.SilkS", 0.12)          # the panel's edges
+    for (a, b, c, d) in ((0, 0, 38, 0), (38, 0, 38, 12), (38, 12, 0, 12), (0, 12, 0, 0)):
+        o += ln(a, b, c, d, "F.CrtYd", 0.05)
+    o += (f'  (fp_text user "OLED Panel" (at {f(19 - ox)} {f(6 - oy)} 0) (layer "F.SilkS")\n'
+          f'    (effects (font (size 1 1) (thickness 0.15))) (tstamp {uid()}))\n')
+    for i, (num, name) in enumerate((("1", "GND"), ("2", "VCC"), ("3", "SCL"), ("4", "SDA"))):
+        shape = "rect" if num == "1" else "circle"
+        o += (f'  (pad "{num}" thru_hole {shape} (at 0 {f(2.54 * i)}) (size 1.7 1.7) (drill 1.0) (layers "*.Cu" "*.Mask") '
+              f'(pinfunction "{name}") (tstamp {uid()}))\n')
+        o += (f'  (fp_text user "{name}" (at -2.0 {f(2.54 * i)} 270) (layer "F.SilkS")\n'
+              f'    (effects (font (size 0.75 0.75) (thickness 0.15))) (tstamp {uid()}))\n')
+    return o + ")\n"
+
+
 # Dual DC-blocking capacitor footprint: one row of holes so an axial or radial electrolytic OR a film box fits.
 # Pad 1 (+, toward the DAC) is at x=0; pad "2" is repeated at the common lead spacings, all the same net.
 DCBLOCK_PITCHES = (5.0, 7.5, 10.0, 12.5, 15.0)
@@ -449,7 +481,10 @@ if __name__ == "__main__":
     (OUT / "cassette.pretty" / "Kycon_STX-3120-3B.kicad_mod").write_text(jack_footprint())
     (OUT / "cassette.pretty" / "ToolingHole_1.152mm.kicad_mod").write_text(tooling_hole())
     (OUT / "cassette-carrier.kicad_pcb").write_text(build())
-    (OUT / "cassette-carrier.kicad_pro").write_text('{\n  "meta": {\n    "filename": "cassette-carrier.kicad_pro",\n    "version": 1\n  }\n}\n')
+    (OUT / "cassette.pretty" / f"{OLED_NAME}.kicad_mod").write_text(oled_footprint())   # written last so board ids don't shift
+    pro = OUT / "cassette-carrier.kicad_pro"                   # KiCad owns this file (design rules, settings): only create a stub
+    if not pro.exists():
+        pro.write_text('{\n  "meta": {\n    "filename": "cassette-carrier.kicad_pro",\n    "version": 1\n  }\n}\n')
     (OUT / "fp-lib-table").write_text(
         '(fp_lib_table\n  (version 7)\n'
         '  (lib (name "cassette")(type "KiCad")(uri "${KIPRJMOD}/cassette.pretty")(options "")(descr "Project footprints"))\n)\n')

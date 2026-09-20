@@ -12,7 +12,7 @@ Wires are drawn where a signal path reads better that way; everything else is jo
 import math, pathlib, re, sys, uuid
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from gen_board import TP_LEFT, TP_RIGHT                     # Thing Plus pad names, single source of truth
+from gen_board import TP_LEFT, TP_RIGHT, OLED_NAME                    # Thing Plus pad names, single source of truth
 
 OUT = pathlib.Path(__file__).resolve().parent.parent
 KICAD_SYM = pathlib.Path("/Applications/KiCad 7/KiCad.app/Contents/SharedSupport/symbols")
@@ -114,8 +114,14 @@ MIC_PINS = [("1", "3V", -2.54, 11.43, 270), ("2", "GND", -2.54, -11.43, 90), ("6
 SYM_MIC = custom_symbol("I2S_Mic_Breakout", "MIC", "Connector_PinSocket_2.54mm:PinSocket_1x06_P2.54mm_Vertical",
                         "Adafruit I2S MEMS microphone breakout (SPH0645LM4H)", [(-7.62, 8.89, 7.62, -8.89)], MIC_PINS)
 
+# Optional SSD1306 OLED module, 4-pin I2C, pin order GND, VCC, SCL, SDA at 0.1 in (the common layout).
+OLED_PINS = [("2", "VCC", -2.54, 8.89, 270), ("1", "GND", -2.54, -8.89, 90),
+             ("3", "SCL", -10.16, 1.27, 0), ("4", "SDA", -10.16, -1.27, 0)]
+SYM_OLED = custom_symbol("SSD1306_I2C_OLED", "DS", f"cassette:{OLED_NAME}",
+                         "SSD1306 OLED module, 4-pin I2C (GND, VCC, SCL, SDA)", [(-7.62, 6.35, 7.62, -6.35)], OLED_PINS)
+
 CUSTOM = {"cassette:ThingPlus": SYM_TP, "cassette:RV112FF-40": SYM_RV, "cassette:STX-3120-3B": SYM_J,
-          "cassette:I2S_Mic_Breakout": SYM_MIC}
+          "cassette:I2S_Mic_Breakout": SYM_MIC, "cassette:SSD1306_I2C_OLED": SYM_OLED}
 LIB = {
     "Device:R": stock_symbol("Device", "R"),
     "Device:C": stock_symbol("Device", "C"),
@@ -265,7 +271,7 @@ u = symbol("cassette:ThingPlus", "U1", "Thing Plus RA6M5", "cassette:ThingPlus",
            ref_at=(U1[0], U1[1] - 26.0), val_at=(U1[0], U1[1] + 26.0))
 USED_RIGHT = {"TX": "D20", "RX": "D21", "A5": "POT2_B", "A4": "POT2_A", "A3": "POT1_B", "A2": "POT1_A",
               "A1": "DAC_R", "A0": "DAC_L", "VREF": "VREF"}
-USED_LEFT = {"D6": "D6", "D4": "I2S_BCLK", "D3": "I2S_LRCLK", "D1": "I2S_DATA", "EN": "EN"}
+USED_LEFT = {"SDA": "I2C_SDA", "SCL": "I2C_SCL", "D6": "D6", "D4": "I2S_BCLK", "D3": "I2S_LRCLK", "D1": "I2S_DATA", "EN": "EN"}
 names = {str(i + 1): n for i, n in enumerate(TP_LEFT)}
 names.update({str(13 + i): n for i, n in enumerate(TP_RIGHT)})
 for num, nm in names.items():
@@ -408,6 +414,20 @@ stub_label("cassette:I2S_Mic_Breakout", 0, m, "5", "I2S_LRCLK")
 text("The MCU is the I2S master: it drives BCLK (P403/D4) and LRCLK (P404/D3); the", (22.0, 103.0), 1.0)
 text("mic answers on DOUT (to P406/D1). BCLK should run at 2-4 MHz. SEL low = left", (22.0, 106.0), 1.0)
 text("channel (tied to GND). Sound port is on the underside; header order unverified.", (22.0, 109.0), 1.0)
+
+# ------------------------------------------------------------------ OLED display
+box(118.0, 246.0, 262.0, 284.0, "OLED display (optional): SSD1306, I2C")
+OLED = (170.18, 266.7)
+d = symbol("cassette:SSD1306_I2C_OLED", "DS1", "SSD1306 OLED", f"cassette:{OLED_NAME}", OLED, 0,
+           ref_at=(OLED[0] + 9.0, OLED[1] - 3.0), val_at=(OLED[0] + 9.0, OLED[1] + 3.0))
+p3v3(d["2"])
+gnd(d["1"])
+stub_label("cassette:SSD1306_I2C_OLED", 0, d, "3", "I2C_SCL")
+stub_label("cassette:SSD1306_I2C_OLED", 0, d, "4", "I2C_SDA")
+text("Optional 4-pin SSD1306 OLED (0.91 in 128x32 outline; a 128x64 covers it).", (200.0, 256.0), 1.0)
+text("Pin order: GND, VCC, SCL, SDA. I2C address 0x3C (or 0x3D).", (200.0, 259.0), 1.0)
+text("SDA/SCL are the Thing Plus's D15/D16, shared with its Qwiic", (200.0, 262.0), 1.0)
+text("port and fuel gauge (0x36); the I2C pull-ups are on the Thing Plus.", (200.0, 265.0), 1.0)
 
 # ------------------------------------------------------------------ Mechanical
 box(20.32, 216.0, 110.0, 254.0, "Board-only parts")

@@ -11,7 +11,7 @@ the table below, and exits non-zero if there is one.
 import sys
 import xml.etree.ElementTree as ET
 
-# pin numbers: mic 1=3V 2=GND 3=BCLK 4=DOUT 5=LRCLK 6=SEL; switch 2=common; Thing Plus pads (see gen_board.TP_LEFT/TP_RIGHT), RV112FF 1=B 2=PWR 3=A 4=GND 5,6=CASE, jack 1=S 2=ring 5=tip
+# pin numbers: OLED 1=GND 2=VCC 3=SCL 4=SDA; mic 1=3V 2=GND 3=BCLK 4=DOUT 5=LRCLK 6=SEL; switch 2=common; Thing Plus pads (see gen_board.TP_LEFT/TP_RIGHT), RV112FF 1=B 2=PWR 3=A 4=GND 5,6=CASE, jack 1=S 2=ring 5=tip
 EXPECTED = {
     "DAC_L": {("U1", "24"), ("R1", "1")},
     "AUDIO_L": {("C3", "2"), ("J1", "5")},
@@ -30,10 +30,12 @@ EXPECTED = {
     "I2S_LRCLK": {("U1", "6"), ("MIC1", "5")},
     "I2S_DATA": {("U1", "8"), ("MIC1", "4")},
     "EN": {("U1", "11"), ("SW1", "2")},
-    "+3V3": {("U1", "27"), ("MIC1", "1")},
+    "+3V3": {("U1", "27"), ("MIC1", "1"), ("DS1", "2")},
+    "I2C_SDA": {("U1", "1"), ("DS1", "4")},
+    "I2C_SCL": {("U1", "2"), ("DS1", "3")},
     "GND": {("U1", "25"), ("C1", "2"), ("C2", "2"), ("J1", "1"), ("C5", "2"), ("C6", "2"), ("C7", "2"), ("C8", "2"),
             ("C9", "2"), ("C10", "2"), ("RV1", "4"), ("RV1", "5"), ("RV1", "6"), ("RV2", "4"), ("RV2", "5"), ("RV2", "6"),
-            ("MIC1", "2"), ("MIC1", "6"), ("SW1", "1")},
+            ("MIC1", "2"), ("MIC1", "6"), ("SW1", "1"), ("DS1", "1")},
 }
 # nets without a label: identified by their pins
 UNNAMED = [

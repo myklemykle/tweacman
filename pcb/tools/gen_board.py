@@ -464,7 +464,7 @@ DCBLOCK_PITCHES = (5.0, 7.5, 10.0, 12.5, 15.0)
 def dcblock_footprint():
     o = ('(footprint "C_DCBlock_Dual" (version 20221018) (generator pcbnew)\n  (layer "F.Cu")\n'
          '  (descr "DC-blocking cap, electrolytic (axial or radial) or film box, kept under 10 mm tall. Pad 1 = + (toward the DAC); '
-         'pad 2 repeats at 5.0, 7.5, 10.0, 12.5 and 15.0 mm lead spacing (all the same net); fit only the hole that matches your cap.")\n'
+         'pad 2 repeats at 5.0, 7.5, 10.0, 12.5 and 15.0 mm lead spacing, all joined by a strip of F.Cu; fit only the hole that matches your cap.")\n'
          '  (attr through_hole)\n'
          f'  (fp_text reference "REF**" (at 7.5 -3.2 0) (layer "F.Fab")\n    (effects (font (size 1 1) (thickness 0.15))) (tstamp {uid()}))\n'
          f'  (fp_text value "C_DCBlock_Dual" (at 7.5 3.2 0) (layer "F.Fab")\n    (effects (font (size 1 1) (thickness 0.15))) (tstamp {uid()}))\n'
@@ -472,6 +472,9 @@ def dcblock_footprint():
     o += (f'  (pad "1" thru_hole rect (at 0 0) (size 1.8 1.8) (drill 1.0) (layers "*.Cu" "*.Mask") (pinfunction "+") (tstamp {uid()}))\n')
     for p in DCBLOCK_PITCHES:
         o += (f'  (pad "2" thru_hole circle (at {p} 0) (size 1.8 1.8) (drill 1.0) (layers "*.Cu" "*.Mask") (pinfunction "-") (tstamp {uid()}))\n')
+    # F.Cu strip under every "-" hole: overlapping same-number pads count as one connection, so no wire needs routing between them
+    lo, hi = DCBLOCK_PITCHES[0], DCBLOCK_PITCHES[-1]
+    o += (f'  (pad "2" smd rect (at {f((lo + hi) / 2)} 0) (size {f(hi - lo)} 1.0) (layers "F.Cu") (pinfunction "-") (tstamp {uid()}))\n')
     o += (f'  (fp_line (start -1.5 -1.5) (end 16.5 -1.5) (stroke (width 0.12) (type default)) (layer "F.SilkS") (tstamp {uid()}))\n'
           f'  (fp_line (start -1.5 1.5) (end 16.5 1.5) (stroke (width 0.12) (type default)) (layer "F.SilkS") (tstamp {uid()}))\n')
     return o + ")\n"

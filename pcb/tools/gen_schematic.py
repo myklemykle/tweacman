@@ -12,7 +12,7 @@ Wires are drawn where a signal path reads better that way; everything else is jo
 import math, pathlib, re, sys, uuid
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from gen_board import TP_LEFT, TP_RIGHT, OLED_NAME                    # Thing Plus pad names, single source of truth
+from gen_board import TP_LEFT, TP_RIGHT, OLED_NAME, JR_NAME                    # Thing Plus pad names, single source of truth
 
 OUT = pathlib.Path(__file__).resolve().parent.parent
 KICAD_SYM = pathlib.Path("/Applications/KiCad 7/KiCad.app/Contents/SharedSupport/symbols")
@@ -160,7 +160,11 @@ def out_dir(rot, pin_angle):
     return round(dx), round(-dy)
 
 
-def symbol(lib_id, ref, value, footprint, at, rot=0, ref_at=None, val_at=None, hide_ref=False):
+def yn(flag):
+    return "yes" if flag else "no"
+
+
+def symbol(lib_id, ref, value, footprint, at, rot=0, ref_at=None, val_at=None, hide_ref=False, in_bom=True, on_board=True):
     pins = {n: sch_pt(at, rot, (x, y)) for n, (x, y, a) in PINS[lib_id].items()}
     refs[ref] = pins
     horiz = rot in (90, 270)
@@ -172,7 +176,7 @@ def symbol(lib_id, ref, value, footprint, at, rot=0, ref_at=None, val_at=None, h
     pin_txt = "".join(f'    (pin "{n}" (uuid {uid()}))\n' for n in PINS[lib_id])
     items.append(
         f'  (symbol (lib_id "{lib_id}") (at {f(at[0])} {f(at[1])} {rot}) (unit 1)\n'
-        f'    (in_bom yes) (on_board yes) (dnp no) (fields_autoplaced)\n    (uuid {uid()})\n'
+        f'    (in_bom {yn(in_bom)}) (on_board {yn(on_board)}) (dnp no) (fields_autoplaced)\n    (uuid {uid()})\n'
         f'    (property "Reference" "{ref}" (at {f(ref_at[0])} {f(ref_at[1])} 0) {eff(1.27, just + (" hide" if hide_ref else ""))})\n'
         f'    (property "Value" "{value}" (at {f(val_at[0])} {f(val_at[1])} 0) {eff(1.27, just)})\n'
         f'    (property "Footprint" "{footprint}" (at {f(at[0])} {f(at[1])} 0) {eff(1.27, " hide")})\n'
@@ -351,9 +355,10 @@ for k, (cy, na, nb, ca, cb) in enumerate(((162.56, "POT1_A", "POT1_B", 5, 6), (2
 box(274.0, 126.0, 400.0, 186.0, "Pot supply: VREF through an optional filter resistor")
 xr, y = 304.8, 149.86
 label("VREF", (289.56, y), 180)
-r3 = symbol("Device:R", "R3", "22", R_FP, (xr, y), 90)
+r3 = symbol("Device:R", "R3", "22", f"cassette:{JR_NAME}", (xr, y), 90)
 wire((289.56, y), r3["1"])
-jp = symbol("Jumper:SolderJumper_2_Bridged", "JP1", "Bridged", JP_FP, (xr, y + 12.7), 0, ref_at=(xr, y + 17.78), val_at=(xr, y + 20.32))
+jp = symbol("Jumper:SolderJumper_2_Bridged", "JP1", "Bridged", JP_FP, (xr, y + 12.7), 0, ref_at=(xr, y + 17.78), val_at=(xr, y + 20.32),
+            in_bom=False, on_board=False)          # the jumper is part of R3's footprint; JP1 only documents it here
 p1, p2 = jp["1"], jp["2"]
 wire(r3["1"], (r3["1"][0], p1[1]), p1)
 wire(r3["2"], (r3["2"][0], p2[1]), p2)
@@ -366,8 +371,8 @@ label("POT_V", (xn + 7.62, y), 0)
 c9 = symbol("Device:C_Polarized", "C9", "10u", CP_FP, (xn, y + 10.16), 0, ref_at=(xn + 2.54, y + 8.89), val_at=(xn + 2.54, y + 11.43))
 wire((xn, y), c9["1"])
 gnd(c9["2"])
-text("R3 is optional: JP1 is closed by default. Cut the JP1 trace and fit a resistor (22 ohm suggested) to filter", (276.0, 178.0))
-text("the pot supply. C9 stabilises it.", (276.0, 181.0))
+text("R3 is optional: its footprint has the jumper (JP1) built in, closed by default. Cut the bridge, then fit a", (276.0, 178.0))
+text("resistor (22 ohm suggested) to filter the pot supply. JP1 is not a separate part. C9 stabilises the supply.", (276.0, 181.0))
 
 # ------------------------------------------------------------------ Touch
 box(274.0, 192.0, 400.0, 246.0, "Touch pads (CTSU): 560 ohm damping resistors, shared TSCAP capacitor")

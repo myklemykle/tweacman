@@ -303,6 +303,28 @@ def thing_plus_footprint(at=None, ref="U1"):
     return o + ")\n"
 
 
+
+# Dual DC-blocking capacitor footprint: one row of holes so an axial or radial electrolytic OR a film box fits.
+# Pad 1 (+, toward the DAC) is at x=0; pad "2" is repeated at the common lead spacings, all the same net.
+DCBLOCK_PITCHES = (5.0, 7.5, 10.0, 12.5, 15.0)
+
+
+def dcblock_footprint():
+    o = ('(footprint "C_DCBlock_Dual" (version 20221018) (generator pcbnew)\n  (layer "F.Cu")\n'
+         '  (descr "DC-blocking cap, electrolytic (axial or radial) or film box, kept under 10 mm tall. Pad 1 = + (toward the DAC); '
+         'pad 2 repeats at 5.0, 7.5, 10.0, 12.5 and 15.0 mm lead spacing (all the same net); fit only the hole that matches your cap.")\n'
+         '  (attr through_hole)\n'
+         f'  (fp_text reference "REF**" (at 7.5 -3.2 0) (layer "F.Fab")\n    (effects (font (size 1 1) (thickness 0.15))) (tstamp {uid()}))\n'
+         f'  (fp_text value "C_DCBlock_Dual" (at 7.5 3.2 0) (layer "F.Fab")\n    (effects (font (size 1 1) (thickness 0.15))) (tstamp {uid()}))\n'
+         f'  (fp_text user "+" (at -2 -1.6 0) (layer "F.SilkS")\n    (effects (font (size 1.2 1.2) (thickness 0.2))) (tstamp {uid()}))\n')
+    o += (f'  (pad "1" thru_hole rect (at 0 0) (size 1.8 1.8) (drill 1.0) (layers "*.Cu" "*.Mask") (pinfunction "+") (tstamp {uid()}))\n')
+    for p in DCBLOCK_PITCHES:
+        o += (f'  (pad "2" thru_hole circle (at {p} 0) (size 1.8 1.8) (drill 1.0) (layers "*.Cu" "*.Mask") (pinfunction "-") (tstamp {uid()}))\n')
+    o += (f'  (fp_line (start -1.5 -1.5) (end 16.5 -1.5) (stroke (width 0.12) (type default)) (layer "F.SilkS") (tstamp {uid()}))\n'
+          f'  (fp_line (start -1.5 1.5) (end 16.5 1.5) (stroke (width 0.12) (type default)) (layer "F.SilkS") (tstamp {uid()}))\n')
+    return o + ")\n"
+
+
 # RV112FF-40 (Taiwan Alpha), shaft up, pins bent down at the factory. Origin = shaft axis; drawn as in the
 # datasheet's "P.C.B. MOUNTING HOLE DETAIL" (pin row 10.0 mm on the +y side of the axis, y down). Pads, left to
 # right in that view: wiper B, power, wiper A, ground.
@@ -423,6 +445,7 @@ if __name__ == "__main__":
     (OUT / "cassette.pretty" / "TouchPad_40x20.kicad_mod").write_text(touch_pad_footprint())
     (OUT / "cassette.pretty" / "ThingPlus.kicad_mod").write_text(thing_plus_footprint())
     (OUT / "cassette.pretty" / "RV112FF-40.kicad_mod").write_text(pot_footprint())
+    (OUT / "cassette.pretty" / "C_DCBlock_Dual.kicad_mod").write_text(dcblock_footprint())
     (OUT / "cassette.pretty" / "Kycon_STX-3120-3B.kicad_mod").write_text(jack_footprint())
     (OUT / "cassette.pretty" / "ToolingHole_1.152mm.kicad_mod").write_text(tooling_hole())
     (OUT / "cassette-carrier.kicad_pcb").write_text(build())

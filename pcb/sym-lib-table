@@ -1,0 +1,4 @@
+(sym_lib_table
+  (version 7)
+  (lib (name "cassette")(type "KiCad")(uri "${KIPRJMOD}/cassette.kicad_sym")(options "")(descr "Project symbols"))
+)

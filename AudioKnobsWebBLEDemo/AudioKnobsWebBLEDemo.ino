@@ -415,6 +415,30 @@ void handleBLELine(const String &line) {
     return;
   }
 
+  // Checked in every mode, not just the command-mode branch: the module
+  // asks to leave Binary mode by sending "+++" on the UART and retrying
+  // every two seconds until the host answers, and an unanswered request
+  // just repeats forever. Confirmed live - it arrived while the link was
+  // believed binary, where it was being handed to the application as an
+  // unrecognised command.
+  //
+  // Per UM-140 the acknowledging side replies with any AT command to
+  // confirm it is back in Command mode, optionally then AT+BINREQEXITACK.
+  // Dropping to LINK_PENDING rather than LINK_COMMAND is deliberate: if
+  // this really was the module leaving Binary mode, the probe will find the
+  // echo and stay put, and if it was not, the probe promotes and the link
+  // recovers on its own. LINK_COMMAND would instead sit waiting for a
+  // +BINREQ that Binary mode can never send.
+  if (line == "+++") {
+    Serial.println("Module requested Binary mode exit - acknowledging.");
+    bleWriteRaw("AT\r");
+    bleWriteRaw("AT+BINREQEXITACK\r");
+    linkMode = LINK_PENDING;
+    probeSentMillis = 0;
+    awaitingProbeEcho = false;
+    return;
+  }
+
   // Checked regardless of mode: a disconnect needs catching either way, to
   // start advertising again and to reset state for the next handshake. (Only
   // ever seen while the module is still in command mode - once it is in
@@ -460,18 +484,6 @@ void handleBLELine(const String &line) {
       linkMode = LINK_PENDING;
       probeSentMillis = 0;
       awaitingProbeEcho = false;
-    } else if (line == "+++") {
-      // The module is asking to leave Binary mode - it retries this every two
-      // seconds until the host answers, which is what an unanswered escape
-      // sequence looks like from this end. Per UM-140 the acknowledging side
-      // replies with any AT command to confirm it is back in Command mode,
-      // optionally followed by AT+BINREQEXITACK.
-      Serial.println("Module requested Binary mode exit - acknowledging.");
-      bleCommand("AT");
-      bleCommand("AT+BINREQEXITACK");
-      linkMode = LINK_COMMAND;
-      awaitingProbeEcho = false;
-      lastTelemetrySent = "";
     } else {
       // +AWAKE, +COMMAND MODE SUPPORTED, +BINARY MODE SUPPORTED and friends.
       // Printed rather than dropped: which of them appear, and in what order,

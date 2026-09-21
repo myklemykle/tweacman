@@ -140,18 +140,25 @@
 
   Nothing is loaded or played until a BLE PLAY: command asks for it -
   the board boots silent, with no SD reads happening in loop() at all.
-  This isn't just a UX choice: while chasing a real bug where inbound
-  BLE commands never reached the board at all despite a confirmed-clean
-  CodeLess Binary mode handshake (ruled out with a from-scratch bleak
-  script, independent of the web page or browser entirely), the prime
-  remaining suspect was loop()'s own greedy, unthrottled SD refill -
-  the one thing structurally different from AudioKnobsWebBLEDemo (whose
-  BLE inbound path is independently confirmed working), which never
-  touches SD at all. A `wav.readSamples()` call, however brief, taking
-  long enough to let Serial2's RX buffer overflow before the next
-  ble.available() check would silently drop exactly this kind of small,
-  rare inbound write. Not touching SD until a file is actually wanted
-  removes that variable during the always-important connect/LIST moment.
+  This started as a fix for a bug it turned out not to cause. Inbound BLE
+  commands were never reaching the board, and loop()'s greedy, unthrottled
+  SD refill was the prime suspect - the one thing structurally different
+  from AudioKnobsWebBLEDemo, which never touches SD. The theory was that a
+  `wav.readSamples()` call could take long enough to let Serial2's RX
+  buffer overflow before the next ble.available() check, silently dropping
+  exactly this kind of small, rare inbound write.
+
+  The handshake described as "confirmed clean" at the time was not clean.
+  The sketch set its Binary mode flag on faith, while the module was still
+  in AT-command mode for the whole session - so inbound data was being fed
+  to a command parser rather than a pipe, and outbound data was echoed
+  straight back. See the BLE section below and AudioKnobsWebBLEDemo.ino's
+  header comment for what was actually happening.
+
+  Staying off the SD card until a file is wanted is kept anyway: it is
+  still the right shape for a demo whose whole point is to measure the
+  card's sustained throughput honestly, and it removes one variable from
+  the always-important connect/LIST moment. It just isn't a bug fix.
 
   Switching files: audioCallback() runs on a hardware interrupt totally
   independent of loop(), so swapping the WavReader/ring buffer/resampler
@@ -484,15 +491,93 @@ bool loadFile(const String &filename, String &errorOut) {
 
 // -- BLE control -------------------------------------------------------
 // CodeLess Binary mode / DSPS bidirectional protocol - see the header
-// comment and AudioKnobsWebBLEDemo.ino, whose handshake this copies
-// exactly. Once binaryModeActive, Serial2 is a raw pipe: ble.readOutput()
-// for inbound lines, Serial2.print() directly for outbound (not
-// ble.sendCommand(), which expects an OK/ERROR reply Binary mode no
-// longer sends).
+// comment and AudioKnobsWebBLEDemo.ino, whose handshake this mirrors and
+// whose header comment documents the whole thing. Once the link is binary,
+// Serial2 is a raw pipe: ble.readOutput() for inbound lines, and a direct
+// Serial2 write for outbound (not ble.sendCommand(), which blocks waiting
+// for an OK/ERROR reply that Binary mode no longer sends).
 
 CodelessPeripheralDevice ble;
 bool bleConnected = false;
-bool binaryModeActive = false;
+
+// Set to 1 to mirror every byte crossing Serial2 to the USB monitor,
+// timestamped and escaped. This is the diagnostic that made the handshake
+// legible in the first place; off by default because it is noisy.
+#define BLE_TRACE 0
+
+#if BLE_TRACE
+void bleTrace(const char *arrow, const String &bytes) {
+  Serial.print("[");
+  Serial.print(millis());
+  Serial.print("ms] ");
+  Serial.print(arrow);
+  Serial.print(" \"");
+  for (unsigned int i = 0; i < bytes.length(); i++) {
+    char c = bytes[i];
+    if (c == '\r') Serial.print("\\r");
+    else if (c == '\n') Serial.print("\\n");
+    else if (c >= 32 && c <= 126) Serial.print(c);
+    else {
+      Serial.print("\\x");
+      if ((uint8_t)c < 0x10) Serial.print('0');
+      Serial.print((uint8_t)c, HEX);
+    }
+  }
+  Serial.print("\" (");
+  Serial.print(bytes.length());
+  Serial.println(" bytes)");
+}
+#else
+#define bleTrace(arrow, bytes) ((void)0)
+#endif
+
+// Blocking AT command. Fine at boot, never in the runtime path - it spins
+// until the module answers OK/ERROR/+READY or its two-second timeout
+// expires, which would stall loop() and therefore the SD refill.
+String bleCommand(const String &cmd) {
+  bleTrace("host ->", cmd + "\r");
+  String reply = ble.sendCommand(cmd);
+  bleTrace("mod  ->", reply);
+  return reply;
+}
+
+// Non-blocking raw write, for everything after boot.
+void bleWriteRaw(const String &data) {
+  bleTrace("host ->", data);
+  Serial2.print(data);
+}
+
+// Last full line of application data handed to the module, kept so the loop
+// can recognise its own words coming back at it - see handleBLELine().
+String lastLineSent = "";
+
+void blePrintLine(const String &line) {
+  lastLineSent = line;
+  bleWriteRaw(line + "\n");
+}
+
+// What the Serial2 link is actually doing. Approving a Binary mode request
+// does not switch the module over there and then: measured on the wire, it
+// stays in command mode for the rest of that connection and only switches
+// when the connection ends, so approval means "pending", not "active".
+//
+// There is also no status line to wait for - once the module IS in Binary
+// mode it stops emitting +CONNECTED, +BINREQ and +DISCONNECTED entirely,
+// because the CodeLess parser is bypassed. What it does give us is an echo:
+// in command mode it echoes every byte received on the UART, and in Binary
+// mode it does not. So one line of telemetry doubles as a probe - echoed
+// means command mode, silence means the pipe is open.
+enum BleLinkMode {
+  LINK_COMMAND,  // AT-command link; application data would just bounce
+  LINK_PENDING,  // we approved Binary mode; probing to find out if it took
+  LINK_BINARY    // confirmed transparent: data flows, no echo
+};
+BleLinkMode linkMode = LINK_COMMAND;
+
+const unsigned long BINARY_PROBE_INTERVAL = 2000;
+const unsigned long BINARY_PROBE_TIMEOUT = 300;
+unsigned long probeSentMillis = 0;
+bool awaitingProbeEcho = false;
 
 // Set after sending anything large (currently just the file list) to
 // hold off the periodic telemetry line below for a bit longer, as a
@@ -501,7 +586,7 @@ bool binaryModeActive = false;
 unsigned long telemetrySuppressedUntilMillis = 0;
 
 void sendFileList() {
-  Serial2.print("FILES:BEGIN\n");
+  blePrintLine("FILES:BEGIN");
   DIR *dir = opendir("/sd");
   if (dir) {
     struct dirent *ent;
@@ -511,8 +596,7 @@ void sendFileList() {
       String upper = name;
       upper.toUpperCase();
       if (upper.endsWith(".WAV")) {
-        Serial2.print(name);
-        Serial2.print("\n");
+        blePrintLine(name);
         // Paces our own send rate to roughly match how fast the module
         // can actually relay each line over the air. Confirmed live:
         // sending all lines back-to-back with no delay reliably let
@@ -533,7 +617,7 @@ void sendFileList() {
     }
     closedir(dir);
   }
-  Serial2.print("FILES:END\n");
+  blePrintLine("FILES:END");
   // Piggybacked here rather than sent separately right after the
   // handshake: a client already reliably requests LIST once on
   // connect, so answering "what's currently playing" as part of that
@@ -541,9 +625,7 @@ void sendFileList() {
   // earlier attempt at a connect-time-only PLAYING: sync collided with
   // the AT+BINREQACK echo (see git history) precisely because that
   // moment is far more collision-prone than this one.
-  Serial2.print("PLAYING:");
-  Serial2.print(fileLoaded ? currentFilename : "NONE");
-  Serial2.print("\n");
+  blePrintLine("PLAYING:" + String(fileLoaded ? currentFilename : "NONE"));
   telemetrySuppressedUntilMillis = millis() + 1000;
 }
 
@@ -556,20 +638,129 @@ void handleBLECommand(String line) {
     filename.trim();
     String err;
     if (loadFile(filename, err)) {
-      Serial2.print("PLAYING:");
-      Serial2.print(filename);
-      Serial2.print("\n");
+      blePrintLine("PLAYING:" + filename);
     } else {
-      Serial2.print("ERR:");
-      Serial2.print(filename);
-      Serial2.print(":");
-      Serial2.print(err);
-      Serial2.print("\n");
+      blePrintLine("ERR:" + filename + ":" + err);
     }
   } else if (line.length() > 0) {
     Serial.print("Unrecognized BLE command: \"");
     Serial.print(line);
     Serial.println("\"");
+  }
+}
+
+// Recovers the module from a leftover Binary mode session.
+//
+// The DA14531 is a separate coprocessor: pressing RST on the RA6M5, or
+// re-flashing it, does not reset it. A sketch that boots into a module left
+// in Binary mode has its "ATR"/"AT+ADVSTOP"/"AT+ADVSTART" swallowed as raw
+// pipe data - startup appears to succeed, nothing works, and restarting
+// either side does not help. The escape sequence from UM-140 is a guard time
+// of silence, "+++" with NO carriage return, another guard time, then an AT
+// command. "+++" alone only *suspends* binary operation locally; it is the
+// ATR below that actually resets the module, and it only gets through after
+// the escape. Harmless when the module is already in Command mode, which is
+// why it runs unconditionally - there is no way to ask which mode it is in.
+const unsigned long BINARY_ESCAPE_GUARD_MS = 1100;
+
+void bleExitBinaryMode() {
+  Serial.println("Clearing any leftover Binary mode on the module...");
+  delay(BINARY_ESCAPE_GUARD_MS);
+  bleTrace("host ->", "+++");
+  Serial2.print("+++");            // no "\r" - that would make it data
+  delay(BINARY_ESCAPE_GUARD_MS);
+
+  String reply = bleCommand("AT+BINREQEXIT");
+  if (reply.indexOf("ERROR") != -1) {
+    Serial.println("  ...module was already in Command mode. Fine.");
+  } else if (reply.length() == 0) {
+    Serial.println("  !! No reply to AT+BINREQEXIT - the module may still be wedged.");
+  } else {
+    Serial.println("  ...module returned to Command mode.");
+  }
+}
+
+// Handles one complete line pulled out of a Serial2 burst by loop().
+void handleBLELine(const String &line) {
+  // The echo test comes first: it is the one measurement valid in every
+  // state. Our own output coming back verbatim means the module is in
+  // command mode, whatever this sketch currently believes.
+  if (line == lastLineSent && lastLineSent.length() > 0) {
+    awaitingProbeEcho = false;
+    if (linkMode != LINK_PENDING) {
+      Serial.println("Output echoed back - module is in command mode. Probing.");
+      linkMode = LINK_PENDING;
+    }
+    return;
+  }
+
+  // Checked in every mode, not just the command-mode branch: the module
+  // asks to leave Binary mode by sending "+++" on the UART and retrying
+  // every two seconds until the host answers, and an unanswered request
+  // just repeats forever. Confirmed live - it arrived while the link was
+  // believed binary, where it was being handed to the application as an
+  // unrecognised command.
+  //
+  // Per UM-140 the acknowledging side replies with any AT command to
+  // confirm it is back in Command mode, optionally then AT+BINREQEXITACK.
+  // Dropping to LINK_PENDING rather than LINK_COMMAND is deliberate: if
+  // this really was the module leaving Binary mode, the probe will find the
+  // echo and stay put, and if it was not, the probe promotes and the link
+  // recovers on its own. LINK_COMMAND would instead sit waiting for a
+  // +BINREQ that Binary mode can never send.
+  if (line == "+++") {
+    Serial.println("Module requested Binary mode exit - acknowledging.");
+    bleWriteRaw("AT\r");
+    bleWriteRaw("AT+BINREQEXITACK\r");
+    linkMode = LINK_PENDING;
+    probeSentMillis = 0;
+    awaitingProbeEcho = false;
+    return;
+  }
+
+  if (line.indexOf("+DISCONNECTED") != -1) {
+    bleConnected = false;
+    linkMode = LINK_COMMAND;
+    awaitingProbeEcho = false;
+    lastLineSent = "";
+    Serial.println("BLE central disconnected. Advertising again.");
+    // Direct write, not bleCommand(): that blocks for its full timeout
+    // waiting for a reply - fine at boot, a real problem here, where it
+    // would stall loop() and therefore ble.available() itself for a second
+    // or more right as a new connection might already be starting up.
+    bleWriteRaw("AT+ADVSTART\r");
+  } else if (line.indexOf("+CONNECTED") != -1) {
+    // A fresh +CONNECTED always means a fresh handshake is starting, even if
+    // the link was still believed binary from a previous session -
+    // +DISCONNECTED isn't guaranteed to arrive for every disconnect
+    // (confirmed live: a browser-side reconnect can start a brand new
+    // session with no +DISCONNECTED ever seen for the old one), and trusting
+    // stale state here would wedge the link until the board is reset.
+    bleConnected = true;
+    linkMode = LINK_COMMAND;
+    awaitingProbeEcho = false;
+    lastLineSent = "";
+  } else if (linkMode != LINK_BINARY) {
+    if (line.indexOf("+BINREQ") != -1) {
+      // Direct write again, and this one matters even more: it sits in the
+      // path of a handshake the client is actively waiting on, and blocking
+      // here risks swallowing whatever the client sends immediately after
+      // (confirmed live - this was intermittently eating a LIST sent right
+      // after connecting).
+      //
+      // The module answers this with "OK", but holds that reply until the
+      // mode transition completes at disconnect, so there is nothing useful
+      // to wait for here anyway. Approval means pending, not active - the
+      // probe below is what establishes when the pipe is really open.
+      bleWriteRaw("AT+BINREQACK\r");
+      linkMode = LINK_PENDING;
+      probeSentMillis = 0;
+      awaitingProbeEcho = false;
+    }
+    // Other status lines (+AWAKE, +COMMAND MODE SUPPORTED, ...) are expected
+    // here and ignored.
+  } else {
+    handleBLECommand(line);
   }
 }
 
@@ -639,8 +830,24 @@ void setup() {
   analogWrite(A1, 2048);
 
   ble.begin();
-  ble.setupDefault();
-  Serial2.setTimeout(20);  // default 1000ms Stream timeout stalls every BLE round trip
+  // Set before anything else talks AT: Arduino's default 1000ms Stream
+  // timeout stalls every BLE round trip, including the recovery below.
+  Serial2.setTimeout(20);
+
+  // Before any AT command can mean anything, make sure the module is
+  // actually listening for AT commands - see bleExitBinaryMode().
+  bleExitBinaryMode();
+
+  // Anything the module echoed or complained about above is still in the
+  // receive buffer; drop it so the first real command starts clean.
+  while (Serial2.available()) Serial2.read();
+
+  // What setupDefault() does, written out so each step is traced. The
+  // library version issues exactly these three and discards every reply, so
+  // when one fails there is nothing to see.
+  bleCommand("ATR");
+  bleCommand("AT+ADVSTOP");
+  bleCommand("AT+ADVSTART");
 
   // A hardware timer fires at a fixed 48000Hz; the speed knob changes
   // how far the resampler steps through the source each tick, not this
@@ -662,53 +869,33 @@ void loop() {
   // is a cheap check when nothing's waiting (see AudioKnobsWebBLEDemo
   // for the same reasoning).
   if (ble.available()) {
-    String line = ble.readOutput();
-    if (line.indexOf("+DISCONNECTED") != -1) {
-      bleConnected = false;
-      binaryModeActive = false;
-      Serial.println("BLE central disconnected. Advertising again.");
-      // Direct Serial2 write, not ble.sendCommand(): that call blocks
-      // for its full timeout waiting for an OK/ERROR/+READY reply -
-      // fine at boot (setupDefault()'s one-time calls), but a real
-      // problem here, where it would stall loop() - and therefore
-      // ble.available() itself - for a second or more right as a new
-      // connection might already be starting up.
-      Serial2.print("AT+ADVSTART\r");
-    } else if (line.indexOf("+CONNECTED") != -1) {
-      // A fresh +CONNECTED always means a fresh handshake is starting,
-      // even if binaryModeActive was still true from a previous session
-      // - +DISCONNECTED isn't guaranteed to arrive for every disconnect
-      // (confirmed live: a browser-side reconnect can start a brand new
-      // session with no +DISCONNECTED ever seen for the old one), and
-      // trusting stale state here would permanently wedge the link until
-      // the board itself is reset - it would never re-send
-      // AT+BINREQACK for the new session's +BINREQ.
-      bleConnected = true;
-      binaryModeActive = false;
-    } else if (!binaryModeActive) {
-      if (line.indexOf("+BINREQ") != -1) {
-        // Direct Serial2 write, not ble.sendCommand() - see the
-        // AT+ADVSTART comment above. This one matters even more: it
-        // sits directly in the path of the handshake a client is
-        // actively waiting on, and blocking here risks swallowing
-        // whatever the client sends immediately after (confirmed live -
-        // this was intermittently eating a LIST sent right after
-        // connecting, before this fix).
-        Serial2.print("AT+BINREQACK\r");
-        binaryModeActive = true;
-        // No immediate sync write here on purpose - AudioKnobsWebBLEDemo's
-        // own BINREQ handler does nothing beyond setting the flag, and
-        // sending anything else right in this exact spot risks landing
-        // on top of the ack itself (confirmed live: an immediate
-        // PLAYING: sync here showed up merged with the ack, with no
-        // separator, in a raw trace). The next periodic status tick
-        // (well under a second away) already includes FILE:currentFilename,
-        // so a freshly-connected client learns the current state almost
-        // immediately anyway without needing a special-cased extra write.
-      }
-    } else {
-      handleBLECommand(line);
+    String burst = ble.readOutput();
+    bleTrace("mod  ->", burst);
+
+    // readOutput() is Serial2.readString(): it returns everything that
+    // arrived in one burst, which at 57600 baud is routinely several
+    // \r\n-terminated status lines at once. Running indexOf() over the whole
+    // burst and acting on the first match silently discards the rest, so a
+    // "+CONNECTED\r\n+BINREQ\r\n" pair loses the +BINREQ entirely and the
+    // handshake stalls with nothing logged. Split first, dispatch each line.
+    int start = 0;
+    while (start < (int)burst.length()) {
+      int end = start;
+      while (end < (int)burst.length() && burst[end] != '\r' && burst[end] != '\n') end++;
+      String line = burst.substring(start, end);
+      start = end + 1;
+      line.trim();
+      if (line.length() > 0) handleBLELine(line);
     }
+  }
+
+  // A probe that was never echoed means the module stopped echoing, i.e. the
+  // pipe is finally open. Checked every pass so the promotion is prompt.
+  if (linkMode == LINK_PENDING && awaitingProbeEcho &&
+      millis() - probeSentMillis >= BINARY_PROBE_TIMEOUT) {
+    awaitingProbeEcho = false;
+    linkMode = LINK_BINARY;
+    Serial.println("Probe went unechoed - Binary mode is live.");
   }
 
   // Greedy, unthrottled SD refill: the whole point of this demo is to
@@ -841,11 +1028,23 @@ void loop() {
     // a file list mid-send turned out to be telemetrySuppressedUntilMillis
     // above, not message size (an isolated short-form test still showed
     // the same symptom before that cooldown existed).
-    if (binaryModeActive && millis() >= telemetrySuppressedUntilMillis) {
+    // LINK_BINARY sends this every tick. LINK_PENDING sends the same line
+    // far more rarely, as the mode probe: if it comes back echoed the module
+    // is still in command mode (handled in handleBLELine), and if nothing
+    // comes back the pipe is open and loop() promotes the link. LINK_COMMAND
+    // sends nothing at all - there is nobody to send to, and the bytes would
+    // only be fed to a command parser.
+    bool probing = (linkMode == LINK_PENDING) &&
+                    (millis() - probeSentMillis >= BINARY_PROBE_INTERVAL);
+    if ((linkMode == LINK_BINARY || probing) &&
+        millis() >= telemetrySuppressedUntilMillis) {
       String stat = "SPD:" + String(ratio, 2) +
                      ",BUF:" + String((int)fillPercent) + ",UND:" + String(underrunTicks);
-      Serial2.print(stat);
-      Serial2.print("\n");
+      if (probing) {
+        probeSentMillis = millis();
+        awaitingProbeEcho = true;
+      }
+      blePrintLine(stat);
     }
 
     minRatioSeen = 1e9f;

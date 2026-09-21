@@ -22,8 +22,11 @@ See AudioKnobsWebBLEDemo.ino's header comment for the protocol, and Renesas'
 UM-140 manual section 8.6 for the handshake this is replicating.
 
 Usage:
-    tools/venv/bin/python3 tools/ble_binary_test.py
+    tools/venv/bin/python3 tools/ble_binary_test.py [command ...]
     (or just: make ble-binary-test)
+
+Any arguments are sent to the board over the DSPS pipe once it is open, one
+every two seconds, instead of the default AudioKnobsWebBLEDemo commands.
 
 Press Ctrl-C to stop.
 """
@@ -36,6 +39,12 @@ from bleak import BleakClient, BleakScanner
 
 DEVICE_NAME = "CLv2-CodeLess"
 SCAN_TIMEOUT_S = 10.0
+
+# Commands written to DSPS RX once the pipe is up, to prove the inbound
+# direction. Defaults suit AudioKnobsWebBLEDemo; pass others on the command
+# line for a different sketch, e.g. for SDResampleDemo:
+#     tools/venv/bin/python3 tools/ble_binary_test.py LIST
+COMMANDS = sys.argv[1:] or ["T1:1", "T1:0", "T2:1", "T2:0"]
 
 # CodeLess AT-command service - used only to negotiate Binary mode.
 AT_SERVICE = "866d3b04-e674-40dc-9c05-b7f91bec6e83"
@@ -161,7 +170,7 @@ async def main() -> int:
         # Give the handshake a moment, then exercise the inbound direction too,
         # so a one-way failure can be told apart from a total one.
         await asyncio.sleep(5)
-        for cmd in ("T1:1", "T1:0", "T2:1", "T2:0"):
+        for cmd in COMMANDS:
             log(f"WRITE dsps-rx       {pretty(cmd.encode())}")
             try:
                 await client.write_gatt_char(DSPS_RX, cmd.encode(), response=False)

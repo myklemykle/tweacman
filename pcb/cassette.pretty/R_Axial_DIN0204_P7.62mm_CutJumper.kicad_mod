@@ -18,7 +18,7 @@
   (fp_line (start 3.46 1.7) (end 3.81 2) (stroke (width 0.12) (type default)) (layer "F.SilkS") (tstamp 937f088d-4d6b-5004-845c-7a005992fb0e))
   (fp_line (start 4.16 1.7) (end 3.81 2) (stroke (width 0.12) (type default)) (layer "F.SilkS") (tstamp 0741f48c-0145-569c-b709-b485e374c9df))
   (fp_text user "CUT" (at 3.81 2.7) (layer "F.SilkS")
-    (effects (font (size 0.8 0.8) (thickness 0.12))) (tstamp 2eeebed6-dd6e-568f-91e3-cad449643c50))
+    (effects (font (size 1.0 1.0) (thickness 0.15))) (tstamp 2eeebed6-dd6e-568f-91e3-cad449643c50))
   (fp_line (start -1.05 -1.65) (end 8.67 -1.65) (stroke (width 0.05) (type default)) (layer "F.CrtYd") (tstamp 40dd509f-a38a-5518-aaee-674efcf62ba7))
   (fp_line (start 8.67 -1.65) (end 8.67 1.65) (stroke (width 0.05) (type default)) (layer "F.CrtYd") (tstamp 2e4dee8c-6196-595a-87c4-ef25dac2edec))
   (fp_line (start 8.67 1.65) (end -1.05 1.65) (stroke (width 0.05) (type default)) (layer "F.CrtYd") (tstamp 0e831d1f-f8ec-519b-b5bc-b7787ee24d8d))

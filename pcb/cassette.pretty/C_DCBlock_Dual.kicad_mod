@@ -2,7 +2,7 @@
   (layer "F.Cu")
   (descr "DC-blocking cap, electrolytic (axial or radial) or film box, kept under 10 mm tall. Pad 1 = + (toward the DAC); pad 2 repeats at 5.0, 7.5, 10.0, 12.5 and 15.0 mm lead spacing, all joined by a strip of F.Cu; fit only the hole that matches your cap.")
   (attr through_hole)
-  (fp_text reference "REF**" (at 7.5 -3.2 0) (layer "F.Fab")
+  (fp_text reference "REF**" (at 7.5 -3.2 0) (layer "F.SilkS")
     (effects (font (size 1 1) (thickness 0.15))) (tstamp 3bae4bc6-7825-5653-b4fe-e5ac181105ad))
   (fp_text value "C_DCBlock_Dual" (at 7.5 3.2 0) (layer "F.Fab")
     (effects (font (size 1 1) (thickness 0.15))) (tstamp 87daa403-7398-5a64-95b4-8729e3182d4d))

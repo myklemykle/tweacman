@@ -1,6 +1,6 @@
 (footprint "TouchPad_40x20" (version 20221018) (generator pcbnew)
   (layer "F.Cu")
-  (descr "Exposed-copper capacitive touch pad, 40 x 20 mm, top edge on the board edge, with two plated M3 holes in the top corners for bolt-on antennas and two B.Cu wire-tap pads in the bottom corners. Origin = middle of the top edge.")
+  (descr "Exposed-copper capacitive touch pad, 40 x 20 mm (copper stops 0.5 mm inside the board edge at the top), with two plated M3 holes in the top corners for bolt-on antennas and two B.Cu wire-tap pads in the bottom corners. Origin = middle of the top edge of the board outline.")
   (attr through_hole)
   (fp_text reference "TCH" (at 0 -3) (layer "F.Fab")
     (effects (font (size 1 1) (thickness 0.15))) (tstamp 84a3f99f-bcae-5776-b64a-e6b77c7559de))
@@ -11,8 +11,8 @@
     (primitives
       (gr_poly
         (pts
-            (xy -4.242857 -4.242857)
-            (xy 35.757143 -4.242857)
+            (xy -4.242857 -3.742857)
+            (xy 35.757143 -3.742857)
             (xy 35.757143 10.757143)
             (xy 35.757143 10.757143)
             (xy 35.746437 11.084159)

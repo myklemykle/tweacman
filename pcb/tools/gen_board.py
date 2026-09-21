@@ -31,8 +31,9 @@ HUB_X = (HUB_D, HUB_D + HUB_SPACING)
 HUB_HOLE_D = 7.0
 HUB_SILK = (6.7 * S, 7.2 * S)         # model hub bore / rim radii, scaled
 M3_D = 3.2
-PAD_W, PAD_H, PAD_R = 40.0, 20.0, 5.0   # touch pads: 40 x 20 mm, both bottom corners rounded r=5, top edge flush with the board edge
+PAD_W, PAD_H, PAD_R = 40.0, 20.0, 5.0   # touch pads: 40 x 20 mm, both bottom corners rounded r=5, top edge PAD_SETBACK inside the board edge
 PAD_INSET = 15.0                      # distance from the side edges to the pad
+PAD_SETBACK = 0.5                     # pad copper stops this far inside the board edge (unplated edge: keep clear of the router)
 ANT_M = R                             # plated M3 antenna holes sit this far in from the pad's top corners
 MOUNT_D = M3_D                        # NPTH case-mounting holes: M3 clearance, no copper or mask ring
 # mounting holes sit on the centres of the four board-corner arcs (R from each edge)
@@ -151,10 +152,10 @@ def arc_pts(cx, cy, r, a0, a1, n=24):
 
 
 def touch_pad_polygon():
-    """Copper outline of one touch pad in footprint coords (origin = middle of the pad's top edge, which sits on
-    the board edge; y down). Top corners square (edge-plating), bottom corners rounded."""
+    """Copper outline of one touch pad in footprint coords (origin = middle of the top edge, on the board edge; y down).
+    The copper's top edge is PAD_SETBACK below the origin; bottom corners are rounded."""
     hw = PAD_W / 2
-    pts = [(-hw, 0), (hw, 0), (hw, PAD_H - PAD_R)]
+    pts = [(-hw, PAD_SETBACK), (hw, PAD_SETBACK), (hw, PAD_H - PAD_R)]
     pts += arc_pts(hw - PAD_R, PAD_H - PAD_R, PAD_R, 0, 90)          # bottom right
     pts += arc_pts(-hw + PAD_R, PAD_H - PAD_R, PAD_R, 90, 180)       # bottom left
     return pts
@@ -186,8 +187,8 @@ def touch_pad_footprint(at=None, ref="TCH"):
              '(version 20221018) (generator pcbnew)\n  (layer "F.Cu")\n'))
     return (
         head +
-        f'  (descr "Exposed-copper capacitive touch pad, {PAD_W:g} x {PAD_H:g} mm, top edge on the board edge, with two '
-        f'plated M3 holes in the top corners for bolt-on antennas and two B.Cu wire-tap pads in the bottom corners. Origin = middle of the top edge.")\n'
+        f'  (descr "Exposed-copper capacitive touch pad, {PAD_W:g} x {PAD_H:g} mm (copper stops {PAD_SETBACK:g} mm inside the board edge at the top), with two '
+        f'plated M3 holes in the top corners for bolt-on antennas and two B.Cu wire-tap pads in the bottom corners. Origin = middle of the top edge of the board outline.")\n'
         f'  (attr through_hole)\n'
         f'  (fp_text reference "{ref}" (at 0 -3) (layer "F.Fab")\n'
         f'    (effects (font (size 1 1) (thickness 0.15))) (tstamp {uid()}))\n'
@@ -284,7 +285,7 @@ def thing_plus_footprint(at=None, ref="U1"):
         return (f'  (fp_circle (center {f(cx)} {f(cy)}) (end {f(cx + r)} {f(cy)}) (stroke (width {w}) (type default)) '
                 f'(fill none) (layer "{layer}") (tstamp {uid()}))\n')
 
-    def label(txt, x, y, size=0.9, justify="", ang=0):
+    def label(txt, x, y, size=1.0, justify="", ang=0):
         j = f" (justify {justify})" if justify else ""
         return (f'  (fp_text user "{txt}" (at {f(x)} {f(y)} {ang}) (layer "F.SilkS")\n'
                 f'    (effects (font (size {size} {size}) (thickness 0.15)){j}) (tstamp {uid()}))\n')
@@ -316,12 +317,12 @@ def thing_plus_footprint(at=None, ref="U1"):
             ("USR", (0.531, 0.715), (0.641, 0.539), (0.587, 0.631), (0.586, 0.77)),
             ("RST", (0.618, 0.453), (0.783, 0.343), (0.700, 0.396), (0.700, 0.28))):
         (x1, y1), (x2, y2) = L(a1, b1), L(a2, b2)
-        o += box(x1, y1, x2, y2) + circ(*L(pcx, pcy), 0.8, w=0.12) + label(name, *L(tx, ty), size=0.8)
+        o += box(x1, y1, x2, y2) + circ(*L(pcx, pcy), 0.8, w=0.12) + label(name, *L(tx, ty), size=1.0)
     for name, (a1, b1), (a2, b2), y_in in (("RGB", (0.040, 2.620), (0.126, 2.535), 2.578),   # LEDs
                                            ("PWR", (0.030, 2.490), (0.140, 2.440), 2.465),
                                            ("STAT", (0.030, 2.380), (0.140, 2.335), 2.358)):
         (x1, y1), (x2, y2) = L(a1, b1), L(a2, b2)
-        o += box(x1, y1, x2, y2) + label(name, -4.9, L(0, y_in)[1], size=0.8, ang=90)
+        o += box(x1, y1, x2, y2) + label(name, -6.8 if name == "PWR" else -4.9, L(0, y_in)[1], size=1.0, ang=90)   # PWR sits a column over so it clears STAT
     for (x1, y1, x2, y2, layer, w) in ((-11.7, -38.9, 11.7, -38.9, "F.CrtYd", 0.05), (11.7, -38.9, 11.7, 35.7, "F.CrtYd", 0.05),
                                         (11.7, 35.7, -11.7, 35.7, "F.CrtYd", 0.05), (-11.7, 35.7, -11.7, -38.9, "F.CrtYd", 0.05)):
         o += ln(x1, y1, x2, y2, layer, w)
@@ -428,7 +429,7 @@ def cutjumper_footprint():
     o += ln(0.8, 0, bx0, 0) + ln(bx1, 0, JR_PITCH - 0.8, 0)
     # "cut here" mark, well clear of the body so it stays visible once the resistor is fitted
     o += ln(cx, 1.15, cx, 2.0) + ln(cx - 0.35, 1.7, cx, 2.0) + ln(cx + 0.35, 1.7, cx, 2.0)
-    o += (f'  (fp_text user "CUT" (at {f(cx)} 2.7) (layer "F.SilkS")\n    (effects (font (size 0.8 0.8) (thickness 0.12))) (tstamp {uid()}))\n')
+    o += (f'  (fp_text user "CUT" (at {f(cx)} 2.7) (layer "F.SilkS")\n    (effects (font (size 1.0 1.0) (thickness 0.15))) (tstamp {uid()}))\n')
     for layer, w in (("F.CrtYd", 0.05),):
         o += ln(-1.05, -1.65, JR_PITCH + 1.05, -1.65, layer, w) + ln(JR_PITCH + 1.05, -1.65, JR_PITCH + 1.05, 1.65, layer, w)
         o += ln(JR_PITCH + 1.05, 1.65, -1.05, 1.65, layer, w) + ln(-1.05, 1.65, -1.05, -1.65, layer, w)
@@ -466,7 +467,7 @@ def dcblock_footprint():
          '  (descr "DC-blocking cap, electrolytic (axial or radial) or film box, kept under 10 mm tall. Pad 1 = + (toward the DAC); '
          'pad 2 repeats at 5.0, 7.5, 10.0, 12.5 and 15.0 mm lead spacing, all joined by a strip of F.Cu; fit only the hole that matches your cap.")\n'
          '  (attr through_hole)\n'
-         f'  (fp_text reference "REF**" (at 7.5 -3.2 0) (layer "F.Fab")\n    (effects (font (size 1 1) (thickness 0.15))) (tstamp {uid()}))\n'
+         f'  (fp_text reference "REF**" (at 7.5 -3.2 0) (layer "F.SilkS")\n    (effects (font (size 1 1) (thickness 0.15))) (tstamp {uid()}))\n'
          f'  (fp_text value "C_DCBlock_Dual" (at 7.5 3.2 0) (layer "F.Fab")\n    (effects (font (size 1 1) (thickness 0.15))) (tstamp {uid()}))\n'
          f'  (fp_text user "+" (at -2 -1.6 0) (layer "F.SilkS")\n    (effects (font (size 1.2 1.2) (thickness 0.2))) (tstamp {uid()}))\n')
     o += (f'  (pad "1" thru_hole rect (at 0 0) (size 1.8 1.8) (drill 1.0) (layers "*.Cu" "*.Mask") (pinfunction "+") (tstamp {uid()}))\n')

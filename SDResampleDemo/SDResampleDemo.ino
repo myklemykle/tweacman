@@ -585,38 +585,51 @@ bool awaitingProbeEcho = false;
 // that function's comment for why a fixed cooldown alone isn't enough.
 unsigned long telemetrySuppressedUntilMillis = 0;
 
-void sendFileList() {
-  blePrintLine("FILES:BEGIN");
-  DIR *dir = opendir("/sd");
-  if (dir) {
-    struct dirent *ent;
-    while ((ent = readdir(dir)) != nullptr) {
-      if (ent->d_type != DT_REG) continue;
-      String name(ent->d_name);
-      String upper = name;
-      upper.toUpperCase();
-      if (upper.endsWith(".WAV")) {
-        blePrintLine(name);
-        // Paces our own send rate to roughly match how fast the module
-        // can actually relay each line over the air. Confirmed live:
-        // sending all lines back-to-back with no delay reliably let
-        // the periodic telemetry tick below fire while the module was
-        // still mid-relay, which just serializes whatever arrives next
-        // on top of it - splicing a telemetry line into the middle of
-        // the client's file list. A fixed post-send cooldown alone
-        // isn't enough to fix this on its own: a bigger list can
-        // legitimately take longer to drain than any single fixed
-        // window, so the real fix is not to outrun the link in the
-        // first place. This does mean a LIST during active playback
-        // pauses the SD refill for the duration of the list (a
-        // deliberate, occasional user action, not a continuous one) -
-        // acceptable for now, worth revisiting if it causes an audible
-        // glitch in practice.
-        delay(40);
-      }
-    }
-    closedir(dir);
+// Sending the file list is spread across loop() passes rather than done in
+// one go, because it has to be paced and pacing it with delay() blocks
+// everything else.
+//
+// The pacing itself is necessary: sending all lines back-to-back reliably
+// outruns how fast the module can relay them over the air, and whatever the
+// sketch writes next - the periodic telemetry tick - just gets serialised on
+// top, splicing a status line into the middle of the client's file list. But
+// the original delay(40) per name meant a LIST stalled loop() for 40ms times
+// however many .WAV files are on the card. With 34 files that is 1.4 seconds
+// with no SD refill happening at all, and since the audio interrupt keeps
+// draining the ring buffer the whole time, playback audibly drops out - right
+// at connect, because clients request LIST as soon as they attach.
+//
+// So: one name per pumpFileList() call, at the same 40ms spacing, with the
+// directory handle held open in between. Same rate on the wire, no blocking.
+// Telemetry is suppressed for the duration rather than relying on a fixed
+// cooldown afterwards, which is also strictly more correct - a long list can
+// legitimately take longer to drain than any fixed window.
+const unsigned long FILE_LIST_LINE_INTERVAL = 40;  // ms between names
+
+void finishFileList();
+
+DIR *fileListDir = nullptr;
+unsigned long nextFileLineMillis = 0;
+
+bool fileListInProgress() { return fileListDir != nullptr; }
+
+void abortFileList() {
+  if (fileListDir) {
+    closedir(fileListDir);
+    fileListDir = nullptr;
   }
+}
+
+void startFileList() {
+  abortFileList();  // a second LIST mid-send restarts cleanly
+  blePrintLine("FILES:BEGIN");
+  fileListDir = opendir("/sd");
+  nextFileLineMillis = millis() + FILE_LIST_LINE_INTERVAL;
+  if (!fileListDir) finishFileList();
+}
+
+void finishFileList() {
+  abortFileList();
   blePrintLine("FILES:END");
   // Piggybacked here rather than sent separately right after the
   // handshake: a client already reliably requests LIST once on
@@ -629,10 +642,31 @@ void sendFileList() {
   telemetrySuppressedUntilMillis = millis() + 1000;
 }
 
+// Emits at most one name per call. Cheap and returns immediately when no
+// list is in flight, so loop() can call it unconditionally.
+void pumpFileList() {
+  if (!fileListDir) return;
+  if ((long)(millis() - nextFileLineMillis) < 0) return;
+
+  struct dirent *ent;
+  while ((ent = readdir(fileListDir)) != nullptr) {
+    if (ent->d_type != DT_REG) continue;
+    String name(ent->d_name);
+    String upper = name;
+    upper.toUpperCase();
+    if (upper.endsWith(".WAV")) {
+      blePrintLine(name);
+      nextFileLineMillis = millis() + FILE_LIST_LINE_INTERVAL;
+      return;
+    }
+  }
+  finishFileList();  // directory exhausted
+}
+
 void handleBLECommand(String line) {
   line.trim();
   if (line == "LIST") {
-    sendFileList();
+    startFileList();
   } else if (line.startsWith("PLAY:")) {
     String filename = line.substring(5);
     filename.trim();
@@ -723,6 +757,7 @@ void handleBLELine(const String &line) {
     linkMode = LINK_COMMAND;
     awaitingProbeEcho = false;
     lastLineSent = "";
+    abortFileList();  // nobody left to send it to
     Serial.println("BLE central disconnected. Advertising again.");
     // Direct write, not bleCommand(): that blocks for its full timeout
     // waiting for a reply - fine at boot, a real problem here, where it
@@ -889,6 +924,9 @@ void loop() {
     }
   }
 
+  // Emits the next file-list line if one is due - see pumpFileList().
+  pumpFileList();
+
   // A probe that was never echoed means the module stopped echoing, i.e. the
   // pipe is finally open. Checked every pass so the promotion is prompt.
   if (linkMode == LINK_PENDING && awaitingProbeEcho &&
@@ -1036,7 +1074,7 @@ void loop() {
     // only be fed to a command parser.
     bool probing = (linkMode == LINK_PENDING) &&
                     (millis() - probeSentMillis >= BINARY_PROBE_INTERVAL);
-    if ((linkMode == LINK_BINARY || probing) &&
+    if ((linkMode == LINK_BINARY || probing) && !fileListInProgress() &&
         millis() >= telemetrySuppressedUntilMillis) {
       String stat = "SPD:" + String(ratio, 2) +
                      ",BUF:" + String((int)fillPercent) + ",UND:" + String(underrunTicks);

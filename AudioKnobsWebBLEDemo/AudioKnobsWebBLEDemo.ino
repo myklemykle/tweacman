@@ -286,7 +286,7 @@ unsigned long previousTelemetryMillis = 0;
 // first place (see the header comment); it lives in the sketch permanently
 // because that handshake is undocumented enough to need re-checking whenever
 // anything about the link changes.
-#define BLE_TRACE 1
+#define BLE_TRACE 0
 
 #if BLE_TRACE
 // Prints one direction of traffic as printable text: "\r", "\n" and "\xNN"

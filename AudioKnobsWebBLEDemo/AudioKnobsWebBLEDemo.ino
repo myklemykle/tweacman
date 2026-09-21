@@ -53,25 +53,54 @@
   notification - no AT parsing, no pipe-prefix convention, in either
   direction.
 
-  Entering Binary mode is a short local/remote handshake, and - found
-  only by tracing every raw byte on Serial2 during a live attempt - the
-  local host (this sketch) is an active participant, not a bystander:
-  the module does NOT grant Binary mode unilaterally just because the
-  remote central asked for it.
+  Entering Binary mode is a three-party handshake - web page, module,
+  and this sketch - and every step below was established by tracing raw
+  bytes on Serial2 with BLE_TRACE while driving the link from a laptop
+  (see tools/ble_binary_test.py, which replays exactly what the web page
+  does but with a readable log). None of it is documented upstream in
+  the form you need, and two of the steps are actively counter-intuitive.
 
     1. Web page writes "AT+BINREQ" to the Inbound Command characteristic
        (866d3b04-.../914f8fb9-...-5425) - the normal AT-command link,
-       still used only for this one negotiation step.
+       still used only for this one negotiation step. It must do this
+       AFTER subscribing to the DSPS notifications and writing 0x01 to
+       DSPS flow control, not before.
     2. The module announces this to the local host as an unsolicited
-       "+BINREQ" line on Serial2 - see loop() below, which is what
-       actually approves it by replying with ble.sendCommand("AT+BINREQACK").
-    3. Once approved, Serial2 becomes the transparent DSPS pipe described
-       above; binaryModeActive latches true and stays true until the
-       next disconnect.
+       "+BINREQ" line on Serial2 - see handleBLELine() below, which
+       approves it with ble.sendCommand("AT+BINREQACK").
+    3. That approval is answered with NEITHER "OK" NOR "ERROR" - only a
+       bare echo, after sendCommand() burns its full two-second timeout.
+       Do not read the missing "OK" as failure; it is the normal reply.
+    4. The module then relays "AT+BINREQACK" to the web page on the AT
+       Outbound characteristic - and carries on in command mode for the
+       rest of this connection. The switch to Binary mode only takes
+       effect when the connection ENDS. So the first connection after a
+       request never carries data, and the web page deliberately hangs
+       up and reconnects at this point to pick the pipe up.
+
+  Two consequences worth knowing before changing any of this:
+
+    - Once the module IS in Binary mode it stops emitting status lines
+      altogether: no +CONNECTED, no +BINREQ, no +DISCONNECTED, because
+      the CodeLess parser is bypassed. Waiting for an announcement to
+      confirm the mode is waiting for something that cannot arrive.
+      What the module does offer is an echo - in command mode it echoes
+      every byte received on the UART ("ATR\r" comes back as
+      "ATR\r\r\n\r\n+READY\r\n"), and in Binary mode it does not. That
+      echo is the only honest local test of which mode is in force, and
+      it is what BleLinkMode's LINK_PENDING probe uses.
+
+    - Binary mode survives a reset of THIS chip. The DA14531 is a
+      separate coprocessor; pressing RST or re-flashing the RA6M5 does
+      not touch it. A sketch that boots into a module left in Binary
+      mode will have its "ATR"/"AT+ADVSTOP"/"AT+ADVSTART" swallowed as
+      raw pipe data - startup appears to succeed, nothing works, and no
+      amount of restarting either side helps. bleExitBinaryMode() runs
+      first for exactly this reason.
 
   From there:
     Outbound (this board -> phone), every BLE_TELEMETRY_INTERVAL, once
-      binaryModeActive: a plain line, no prefix -
+      the link is confirmed binary: a plain line, no prefix -
       "F1:<hz>,F2:<hz>,T1:<0|1>,T2:<0|1>\n" - written straight to
       Serial2 with Serial2.print(), not through ble.sendCommand() (which
       expects an AT-style OK/ERROR reply that Binary mode no longer
@@ -199,20 +228,152 @@ unsigned long previousControlMillis = 0;
 CodelessPeripheralDevice ble;
 bool bleConnected = false;
 
-// Latches true once the local host (this sketch) has approved the web
-// page's Binary mode request - see the header comment for the full
-// handshake. Serial2 only becomes a transparent DSPS pipe after this;
-// before it, everything on Serial2 is still normal CodeLess AT-command
-// traffic. Reset on every disconnect so a fresh connection renegotiates
-// from scratch rather than assuming stale state.
-bool binaryModeActive = false;
+// What the Serial2 link is actually doing right now.
+//
+// Approving the web page's Binary mode request does NOT switch the module
+// over there and then - measured on the wire, AT+BINREQACK is answered with
+// neither OK nor ERROR, only an echo, and the module stays in command mode
+// for the rest of that connection. The switch lands later, around the next
+// disconnect/connect. So approval means "pending", not "active".
+//
+// Worse, there is no status line to wait for: once the module IS in Binary
+// mode it stops emitting +CONNECTED, +BINREQ and +DISCONNECTED entirely,
+// because the CodeLess parser is bypassed. Waiting for an announcement that
+// can never arrive is exactly how this sketch used to deadlock.
+//
+// What the module does give us is an echo. In command mode it echoes every
+// byte it receives on the UART (visible in any AT exchange: "ATR\r" comes
+// back as "ATR\r\r\n\r\n+READY\r\n"). In Binary mode it does not, because the
+// bytes leave over the DSPS pipe instead. That makes a single telemetry line
+// a perfectly good probe: echoed means command mode, silence means the pipe
+// is open. LINK_PENDING probes on a slow timer until one comes back unechoed.
+enum BleLinkMode {
+  LINK_COMMAND,  // normal AT-command link; telemetry would just bounce
+  LINK_PENDING,  // we approved Binary mode; probing to find out if it took
+  LINK_BINARY    // confirmed transparent: telemetry flows, no echo
+};
+BleLinkMode linkMode = LINK_COMMAND;
+
+// Probe pacing while LINK_PENDING. The probe is a real telemetry line, so
+// nothing is wasted if the link turns out to be live; 2s is slow enough to
+// stay quiet in the common case where the page never asks for Binary mode.
+const unsigned long BINARY_PROBE_INTERVAL = 2000;
+// An echo comes back in ~26ms at 57600 baud, so 300ms is a wide margin.
+const unsigned long BINARY_PROBE_TIMEOUT = 300;
+unsigned long probeSentMillis = 0;
+bool awaitingProbeEcho = false;
 
 const unsigned long BLE_TELEMETRY_INTERVAL = 200;  // milliseconds (5 Hz) -
                                                      // plenty for a readout
 unsigned long previousTelemetryMillis = 0;
 
+// -- Serial2 wire trace ---------------------------------------------------
+
+// Set to 0 to compile all of this out. When 1, every byte crossing Serial2
+// in either direction is mirrored to the USB serial monitor, timestamped,
+// with control characters escaped - so the handshake with the DA14531 can be
+// read as a conversation rather than guessed at. This is the same technique
+// that turned up the local-host-must-approve behaviour of Binary mode in the
+// first place (see the header comment); it lives in the sketch permanently
+// because that handshake is undocumented enough to need re-checking whenever
+// anything about the link changes.
+#define BLE_TRACE 1
+
+#if BLE_TRACE
+// Prints one direction of traffic as printable text: "\r", "\n" and "\xNN"
+// for anything non-printable, so an invisible stray byte (a NUL terminator, a
+// high-bit character from a half-configured UART) shows up instead of
+// silently vanishing into the monitor.
+void bleTrace(const char *arrow, const String &bytes) {
+  Serial.print("[");
+  Serial.print(millis());
+  Serial.print("ms] ");
+  Serial.print(arrow);
+  Serial.print(" \"");
+  for (unsigned int i = 0; i < bytes.length(); i++) {
+    char c = bytes[i];
+    if (c == '\r') Serial.print("\\r");
+    else if (c == '\n') Serial.print("\\n");
+    else if (c >= 32 && c <= 126) Serial.print(c);
+    else {
+      Serial.print("\\x");
+      if ((uint8_t)c < 0x10) Serial.print('0');
+      Serial.print((uint8_t)c, HEX);
+    }
+  }
+  Serial.print("\" (");
+  Serial.print(bytes.length());
+  Serial.println(" bytes)");
+}
+#else
+#define bleTrace(arrow, bytes) ((void)0)
+#endif
+
+// Traced wrappers, so nothing reaches Serial2 without being logged first.
+// ble.sendCommand() blocks until the module answers "OK"/"ERROR"/"+READY" or
+// its 2-second timeout expires, and until now that reply was thrown away at
+// every call site - including the one that matters most, the Binary mode
+// approval below.
+String bleCommand(const String &cmd) {
+  bleTrace("host ->", cmd + "\r");
+  String reply = ble.sendCommand(cmd);
+  bleTrace("mod  ->", reply);
+  return reply;
+}
+
+void bleWriteRaw(const String &data) {
+  bleTrace("host ->", data);
+  Serial2.print(data);
+}
+
+// Last telemetry line handed to Serial2, kept only so the loop can recognise
+// its own words coming back at it (see loop()).
+String lastTelemetrySent = "";
+
+// Gets the module out of a leftover Binary mode session.
+//
+// The DA14531 is a separate coprocessor with its own state: pressing RST on
+// the RA6M5, or re-flashing it, does not reset the module. If a previous run
+// left the module in Binary mode - which it will, since nothing ever exits it
+// cleanly - then its CodeLess AT parser is bypassed and every command this
+// sketch sends at startup ("ATR", "AT+ADVSTOP", "AT+ADVSTART") is not parsed
+// at all: it is pushed into the DSPS buffers as raw data. Startup appears to
+// succeed, no reply is checked, and the sketch then spends the whole session
+// talking to a pipe instead of a command interpreter. Observed directly: a
+// central connected and the module emitted no "+CONNECTED" on Serial2 at all.
+//
+// The way out is the escape sequence from UM-140: a guard time of silence,
+// the three characters "+++" with NO carriage return appended, another guard
+// time, then "AT+BINREQEXIT" as a normal AT command. The guard times are what
+// distinguish an escape sequence from three plus signs that happen to appear
+// in the data, so they are not optional and not shortenable.
+//
+// Harmless when the module is already in Command mode: the escape does
+// nothing and AT+BINREQEXIT simply answers ERROR, which is why this runs
+// unconditionally at startup rather than trying to detect the mode first -
+// there is no way to ask the module which mode it is in.
+const unsigned long BINARY_ESCAPE_GUARD_MS = 1100;
+
+void bleExitBinaryMode() {
+  Serial.println("Clearing any leftover Binary mode on the module...");
+
+  delay(BINARY_ESCAPE_GUARD_MS);   // guard time before
+  bleTrace("host ->", "+++");
+  Serial2.print("+++");            // no "\r" - that would make it data, not an escape
+  delay(BINARY_ESCAPE_GUARD_MS);   // guard time after
+
+  String reply = bleCommand("AT+BINREQEXIT");
+  if (reply.indexOf("ERROR") != -1) {
+    Serial.println("  ...module was already in Command mode (AT+BINREQEXIT -> ERROR). Fine.");
+  } else if (reply.length() == 0) {
+    Serial.println("  !! No reply to AT+BINREQEXIT - the module may still be wedged.");
+  } else {
+    Serial.println("  ...module returned to Command mode.");
+  }
+}
+
 // Handles one line of DSPS pass-through data (see the header comment) -
-// only ever called once binaryModeActive, so this is genuinely raw text
+// only ever called once linkMode is LINK_BINARY, so this is genuinely raw text
 // from the web page, not AT-command traffic. Logs anything it doesn't
 // recognize to Serial (USB) for live debugging.
 void handleBLECommand(String line) {
@@ -225,6 +386,90 @@ void handleBLECommand(String line) {
     Serial.print("Unrecognized BLE command: \"");
     Serial.print(line);
     Serial.println("\"");
+  }
+}
+
+// Handles one complete line pulled out of a Serial2 burst by loop(). Split
+// out of loop() so each line of a multi-line burst gets the same treatment -
+// see the comment at the call site.
+void handleBLELine(const String &line) {
+  // The echo test comes first, because it is the one measurement that is
+  // valid in every state - see BleLinkMode. Our own telemetry coming back
+  // verbatim means the module is in command mode, whatever this sketch
+  // currently believes.
+  if (line == lastTelemetrySent && lastTelemetrySent.length() > 0) {
+    awaitingProbeEcho = false;
+    if (linkMode != LINK_PENDING) {
+      Serial.println("Telemetry echoed back - module is in command mode. Probing.");
+      linkMode = LINK_PENDING;
+    }
+    return;
+  }
+
+  // Checked regardless of mode: a disconnect needs catching either way, to
+  // start advertising again and to reset state for the next handshake. (Only
+  // ever seen while the module is still in command mode - once it is in
+  // Binary mode it stops announcing anything at all.)
+  if (line.indexOf("+DISCONNECTED") != -1) {
+    bleConnected = false;
+    linkMode = LINK_COMMAND;
+    awaitingProbeEcho = false;
+    lastTelemetrySent = "";
+    bleTouch1Held = false;  // don't leave a virtual pad "stuck" held
+    bleTouch2Held = false;  // across a dropped connection
+    Serial.println("BLE central disconnected. Advertising again.");
+    bleCommand("AT+ADVSTART");
+  } else if (linkMode != LINK_BINARY) {
+    if (line.indexOf("+CONNECTED") != -1) {
+      bleConnected = true;
+      Serial.println("BLE central connected.");
+    } else if (line.indexOf("+BINREQ") != -1) {
+      // The web page has asked to enter Binary mode - see the header comment
+      // for the full sequence.
+      //
+      // Deliberately left as a permissive indexOf() for now, because that is
+      // exactly the open question: it matches the central's own command text
+      // "AT+BINREQ" (if the module relays inbound AT commands to the local
+      // UART) just as readily as a genuine unsolicited "+BINREQ" status line.
+      // Those two mean opposite things about whose turn it is to speak, and
+      // approving the wrong one earns a bare ERROR. The trace below prints
+      // the exact line that matched, and the module's exact reply, so the
+      // next run settles it instead of guessing.
+      Serial.print("Binary mode request matched on line: \"");
+      Serial.print(line);
+      Serial.println("\"");
+      String reply = bleCommand("AT+BINREQACK");
+      if (reply.indexOf("ERROR") != -1) {
+        Serial.println("!! Module answered ERROR to AT+BINREQACK - Binary mode was NOT granted.");
+      }
+      // A bare echo with no OK/ERROR is the normal, expected answer here, so
+      // it is not treated as a failure - it just means "pending", which is
+      // what the probe below is for.
+      linkMode = LINK_PENDING;
+      probeSentMillis = 0;
+      awaitingProbeEcho = false;
+    } else if (line == "+++") {
+      // The module is asking to leave Binary mode - it retries this every two
+      // seconds until the host answers, which is what an unanswered escape
+      // sequence looks like from this end. Per UM-140 the acknowledging side
+      // replies with any AT command to confirm it is back in Command mode,
+      // optionally followed by AT+BINREQEXITACK.
+      Serial.println("Module requested Binary mode exit - acknowledging.");
+      bleCommand("AT");
+      bleCommand("AT+BINREQEXITACK");
+      linkMode = LINK_COMMAND;
+      awaitingProbeEcho = false;
+      lastTelemetrySent = "";
+    } else {
+      // +AWAKE, +COMMAND MODE SUPPORTED, +BINARY MODE SUPPORTED and friends.
+      // Printed rather than dropped: which of them appear, and in what order,
+      // is part of what the trace is here to establish.
+      Serial.print("BLE status line (ignored): \"");
+      Serial.print(line);
+      Serial.println("\"");
+    }
+  } else {
+    handleBLECommand(line);
   }
 }
 
@@ -241,17 +486,34 @@ void setup() {
 
   // Bring up the BLE coprocessor - same as HelloWorldBLE.
   ble.begin();
-  ble.setupDefault();
 
-  // CodelessBase never sets this, so it stays at Arduino's default
-  // Stream timeout (1000ms) - meaning every internal readString() call
-  // in sendCommand()/readOutput() can block for up to a full second
-  // waiting for more bytes that were never coming. At 57600 baud a
-  // whole reply arrives in well under a millisecond, so 20ms is a huge
-  // margin while cutting the worst case ~50x. This was silently
-  // stalling the knob-control loop on every BLE round-trip once real
-  // traffic started flowing.
+  // CodelessBase never sets this, so it stays at Arduino's default Stream
+  // timeout (1000ms) - meaning every internal readString() call in
+  // sendCommand()/readOutput() can block for up to a full second waiting for
+  // more bytes that were never coming. At 57600 baud a whole reply arrives in
+  // well under a millisecond, so 20ms is a huge margin while cutting the
+  // worst case ~50x. Set before setupDefault() rather than after it, because
+  // every AT round-trip below now depends on it - including the Binary mode
+  // recovery.
   Serial2.setTimeout(20);
+
+  // Before any AT command can mean anything, make sure the module is actually
+  // listening for AT commands - see bleExitBinaryMode().
+  bleExitBinaryMode();
+
+  // Anything the module echoed or complained about above is still sitting in
+  // the receive buffer; drop it so the first real command below starts from a
+  // clean slate rather than parsing the tail of the previous exchange.
+  while (Serial2.available()) Serial2.read();
+
+  // This is what CodelessPeripheralDevice::setupDefault() does, written out
+  // so each step goes through bleCommand() and lands in the trace. The
+  // library version issues exactly these three and discards every reply, so
+  // when one of them fails there is nothing to see - which is precisely the
+  // situation this sketch kept ending up in.
+  bleCommand("ATR");
+  bleCommand("AT+ADVSTOP");
+  bleCommand("AT+ADVSTART");
 
   synth.init(SAMPLE_RATE);
 
@@ -284,38 +546,26 @@ void loop() {
   // check when there's nothing waiting. ble.readOutput() is just a thin
   // Serial2 wrapper (see the header comment) - it reads the same raw
   // bytes whether they're AT-command status lines or, once
-  // binaryModeActive, DSPS pass-through data.
+  // once the link is binary, DSPS pass-through data.
   if (ble.available()) {
-    String line = ble.readOutput();
+    String burst = ble.readOutput();
+    bleTrace("mod  ->", burst);
 
-    // Checked regardless of binaryModeActive: a disconnect needs
-    // catching either way, to stop advertising being needed again and
-    // to reset binaryModeActive for the next connection's handshake.
-    if (line.indexOf("+DISCONNECTED") != -1) {
-      bleConnected = false;
-      binaryModeActive = false;
-      bleTouch1Held = false;  // don't leave a virtual pad "stuck" held
-      bleTouch2Held = false;  // across a dropped connection
-      Serial.println("BLE central disconnected. Advertising again.");
-      ble.sendCommand("AT+ADVSTART");
-    } else if (!binaryModeActive) {
-      if (line.indexOf("+CONNECTED") != -1) {
-        bleConnected = true;
-        Serial.println("BLE central connected.");
-      } else if (line.indexOf("+BINREQ") != -1) {
-        // The web page has asked to enter Binary mode. Confirmed live:
-        // the module doesn't grant this unilaterally just because the
-        // remote central requested it - it waits for exactly this local
-        // approval first. See the header comment for the full sequence.
-        Serial.println("BLE central requested Binary mode - approving.");
-        ble.sendCommand("AT+BINREQACK");
-        binaryModeActive = true;
-      }
-      // Other unsolicited status lines (+AWAKE, +COMMAND MODE
-      // SUPPORTED, +BINARY MODE SUPPORTED, ...) are expected here and
-      // otherwise ignored.
-    } else {
-      handleBLECommand(line);
+    // readOutput() is Serial2.readString(): it hands back everything that
+    // arrived in one burst, which at 57600 baud is routinely several
+    // \r\n-terminated status lines at once. Running indexOf() over the whole
+    // burst and acting on the first match - as this did - silently discards
+    // the rest, so a "+CONNECTED\r\n+BINREQ\r\n" pair loses the +BINREQ
+    // entirely and the handshake stalls with nothing logged. Split the burst
+    // into lines first, then dispatch each one.
+    int start = 0;
+    while (start < (int)burst.length()) {
+      int end = start;
+      while (end < (int)burst.length() && burst[end] != '\r' && burst[end] != '\n') end++;
+      String line = burst.substring(start, end);
+      start = end + 1;
+      line.trim();
+      if (line.length() > 0) handleBLELine(line);
     }
   }
 
@@ -337,17 +587,36 @@ void loop() {
     *freq2Ptr = angleToFrequency(angle2);
     *gain2Ptr = pot2.isCalibrated() ? 1.0 : 0.0;
 
-    // Gated on binaryModeActive, not just bleConnected: before the
-    // handshake completes, Serial2 is still the AT-command link, and
-    // ble.sendCommand() would block waiting for an OK/ERROR reply that
-    // Binary mode no longer sends at all - see the header comment.
-    if (binaryModeActive && currentMillis - previousTelemetryMillis >= BLE_TELEMETRY_INTERVAL) {
+    // Gated on linkMode, not on bleConnected: while the module is still on
+    // the AT-command link, a telemetry line is not data, it is nonsense fed
+    // to a command parser, and it comes straight back as an echo.
+    //
+    // LINK_BINARY sends at the full rate. LINK_PENDING sends the same line,
+    // just rarely, as a probe: if it is echoed the link is still in command
+    // mode (handled in handleBLELine), and if nothing comes back within
+    // BINARY_PROBE_TIMEOUT the pipe is open and the link is promoted.
+    unsigned long telemetryInterval =
+        (linkMode == LINK_BINARY) ? BLE_TELEMETRY_INTERVAL : BINARY_PROBE_INTERVAL;
+
+    if (linkMode == LINK_PENDING && awaitingProbeEcho &&
+        currentMillis - probeSentMillis >= BINARY_PROBE_TIMEOUT) {
+      awaitingProbeEcho = false;
+      linkMode = LINK_BINARY;
+      Serial.println("Probe went unechoed - Binary mode is live. Streaming telemetry.");
+    }
+
+    if (linkMode != LINK_COMMAND &&
+        currentMillis - previousTelemetryMillis >= telemetryInterval) {
       previousTelemetryMillis = currentMillis;
       String telemetry = "F1:" + String(*freq1Ptr, 1) + ",F2:" + String(*freq2Ptr, 1) +
                           ",T1:" + String(effectiveTouched1 ? 1 : 0) +
                           ",T2:" + String(effectiveTouched2 ? 1 : 0);
-      Serial2.print(telemetry);
-      Serial2.print("\n");
+      lastTelemetrySent = telemetry;
+      if (linkMode == LINK_PENDING) {
+        probeSentMillis = currentMillis;
+        awaitingProbeEcho = true;
+      }
+      bleWriteRaw(telemetry + "\n");
     }
   }
 }

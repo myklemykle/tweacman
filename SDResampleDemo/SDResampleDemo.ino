@@ -120,6 +120,12 @@
   underrunTicks (printed periodically over Serial, along with live ring
   buffer occupancy) is this demo's actual headline measurement - watch
   it, and the occupancy trending toward zero, as you turn the ratio up.
+  It counts underruns for the *current file only*, resetting on every
+  load, and does not tick at all while no file is loaded: with nothing
+  playing there is no producer to fall behind, so idling is not an
+  underrun. Before that distinction existed the counter accumulated
+  48000 phantom underruns a second while the board sat idle at boot,
+  which made the real figure meaningless.
 
   BLE control: connect with web/wav-remote.html (self-hosted with real
   HTTPS - can't be a Claude Artifact, see CLAUDE.md's Bluetooth section)
@@ -350,7 +356,10 @@ SDCardBlockDevice sdBlockDevice(PIN_SDHI_CLK, PIN_SDHI_CMD, PIN_SDHI_D0, PIN_SDH
 FATFileSystem sdFs("sd");
 WavReader wav;
 
-bool fileLoaded = false;
+// volatile because audioCallback() reads it - see the idle branch there.
+// Only ever written by loadFile(), which disables the audio interrupt around
+// the whole state swap, so no further guarding is needed.
+volatile bool fileLoaded = false;
 String currentFilename = "NONE";
 float rateFactor = 1.0f;  // wav's native sample rate / 48000 - recomputed on every file load
 
@@ -396,7 +405,15 @@ void audioCallback(timer_callback_args_t *args) {
   int16_t y[4];
   int16_t outSample;
 
-  if (ring.peek4(resampler.index, y)) {
+  if (!fileLoaded) {
+    // Nothing loaded: idle, not starved. An underrun means the producer
+    // could not keep up with the consumer, and with no file there is no
+    // producer and nothing is expected - counting these would (and did)
+    // bury the real measurement under 48000 phantom underruns per second
+    // for as long as the board sat at the menu. Hold the output steady and
+    // leave the resampler alone.
+    outSample = lastGoodSample;
+  } else if (ring.peek4(resampler.index, y)) {
     outSample = (int16_t)catmullRom(y[0], y[1], y[2], y[3], resampler.frac);
     lastGoodSample = outSample;
     // No ring.release() anymore: the consumer no longer publishes
@@ -456,6 +473,11 @@ bool loadFile(const String &filename, String &errorOut) {
   resampler.index = 0;
   resampler.frac = 0.0f;
   lastGoodSample = 0;  // don't carry a stale sample into the new file
+  // Per-file, not cumulative: the interesting number is how badly *this*
+  // file underruns at the ratio being asked for, which is not comparable
+  // across files with different native sample rates anyway. Safe to write
+  // bare here - the audio interrupt is disabled for this whole block.
+  underrunTicks = 0;
   rateFactor = wav.nativeSampleRate() / 48000.0f;
   // Every fresh sample starts at native speed, regardless of wherever
   // the (relative, not absolute - see resetVirtualKnobToNative()'s

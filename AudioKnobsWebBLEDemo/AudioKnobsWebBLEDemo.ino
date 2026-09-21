@@ -68,9 +68,16 @@
     2. The module announces this to the local host as an unsolicited
        "+BINREQ" line on Serial2 - see handleBLELine() below, which
        approves it with ble.sendCommand("AT+BINREQACK").
-    3. That approval is answered with NEITHER "OK" NOR "ERROR" - only a
-       bare echo, after sendCommand() burns its full two-second timeout.
-       Do not read the missing "OK" as failure; it is the normal reply.
+    3. That approval is answered with "OK" - but not when the module
+       receives it. The "OK" is deferred until the mode transition
+       actually completes, which is at disconnect (step 4), so it can
+       arrive anywhere from a few hundred milliseconds to many seconds
+       later depending on how long the central stays connected. Measured:
+       481ms when the page hung up immediately, 14.3s when a test client
+       sat connected first. sendCommand() gives up after two seconds, so
+       usually all it returns is the echo. That is not a failure, and
+       lengthening the timeout is the wrong fix - sendCommand() blocks,
+       and waiting seconds here would stall the knob and touch loop.
     4. The module then relays "AT+BINREQACK" to the web page on the AT
        Outbound characteristic - and carries on in command mode for the
        rest of this connection. The switch to Binary mode only takes
@@ -231,10 +238,12 @@ bool bleConnected = false;
 // What the Serial2 link is actually doing right now.
 //
 // Approving the web page's Binary mode request does NOT switch the module
-// over there and then - measured on the wire, AT+BINREQACK is answered with
-// neither OK nor ERROR, only an echo, and the module stays in command mode
-// for the rest of that connection. The switch lands later, around the next
-// disconnect/connect. So approval means "pending", not "active".
+// over there and then - measured on the wire, the module stays in command
+// mode for the rest of that connection and only switches when the connection
+// ends. So approval means "pending", not "active". (The module does answer
+// AT+BINREQACK with "OK", but it holds that reply back until the transition
+// completes at disconnect, so sendCommand() has normally timed out long
+// before it arrives - see the header comment.)
 //
 // Worse, there is no status line to wait for: once the module IS in Binary
 // mode it stops emitting +CONNECTED, +BINREQ and +DISCONNECTED entirely,
@@ -442,9 +451,12 @@ void handleBLELine(const String &line) {
       if (reply.indexOf("ERROR") != -1) {
         Serial.println("!! Module answered ERROR to AT+BINREQACK - Binary mode was NOT granted.");
       }
-      // A bare echo with no OK/ERROR is the normal, expected answer here, so
-      // it is not treated as a failure - it just means "pending", which is
-      // what the probe below is for.
+      // Getting only an echo back is the normal, expected outcome here: the
+      // module holds its "OK" until the mode transition completes at
+      // disconnect, which is usually long after sendCommand()'s two-second
+      // timeout. So it is not treated as a failure - it just means
+      // "pending", which is what the probe below is for. The late "OK"
+      // turns up later as an ordinary unsolicited status line.
       linkMode = LINK_PENDING;
       probeSentMillis = 0;
       awaitingProbeEcho = false;

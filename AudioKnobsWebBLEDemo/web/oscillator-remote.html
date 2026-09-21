@@ -336,6 +336,11 @@
   const DSPS_FLOWCTRL_UUID = "0783b03e-8535-b5a0-7140-a304d2495cb9";  // notify + write: part of the handshake
   const DSPS_RX_UUID       = "0783b03e-8535-b5a0-7140-a304d2495cba";  // write-without-response: phone -> board
 
+  // The board's advertised name, as set by the CodeLess firmware.
+  const DEVICE_NAME = "CLv2-CodeLess";
+  // false falls back to listing every BLE device in range - see connect().
+  const USE_DEVICE_FILTER = true;
+
   const dot = document.getElementById("dot");
   const statusText = document.getElementById("statusText");
   const connectBtn = document.getElementById("connectBtn");
@@ -356,15 +361,50 @@
 
   let device = null;
   let dspsRxChar = null;
-  let dspsBuffer = "";  // accumulates raw DSPS TX bytes until a newline
+  let dspsBuffer = "";   // accumulates raw DSPS TX bytes until a newline
+  let telemetrySeen = false;  // has the pipe ever actually delivered anything?
+  let reconnecting = false;   // suppresses the disconnect handler during the
+                              // deliberate reconnect described in openLink()
+  let disconnectHandlerAdded = false;
+  // The reconnect below is a normal part of the handshake, but if something
+  // else is wrong it would otherwise retry forever on a phone in someone's
+  // pocket. Reset once the pipe actually delivers something.
+  let reconnectAttempts = 0;
+  const MAX_RECONNECT_ATTEMPTS = 3;
 
-  function setConnected(connected) {
+  // Web Bluetooth permits exactly one GATT operation in flight at a time;
+  // starting a second while the first is pending rejects it outright with
+  // "GATT operation already in progress". That is easy to trip here without
+  // writing anything obviously concurrent: the AT flow-control doorbell can
+  // ring twice in quick succession, and since its handler is async, two
+  // reads overlap and one is thrown away. Confirmed live - the read that
+  // got dropped was the relayed AT+BINREQACK, i.e. exactly the message the
+  // handshake depends on, which is why connecting worked only sometimes.
+  //
+  // Funnel every GATT call through one promise chain so they run strictly
+  // one at a time, in the order they were requested.
+  let gattQueue = Promise.resolve();
+  function gatt(operation) {
+    const result = gattQueue.then(operation, operation);
+    // Keep the chain alive even when one operation rejects, so a single
+    // failure doesn't wedge every later call behind it.
+    gattQueue = result.then(() => {}, () => {});
+    return result;
+  }
+
+  // "Connected" now means the DSPS pipe has actually delivered a line, not
+  // merely that the GATT writes resolved. The old version called this with
+  // true the moment enterBinaryMode() returned, which says nothing about
+  // whether the module granted anything - it reported a healthy green dot
+  // through every one of the failures this page was built to debug.
+  function setStatus(state, label) {
+    const connected = state === "live";
     dot.classList.toggle("connected", connected);
-    statusText.textContent = connected ? "Connected" : "Disconnected";
-    connectBtn.hidden = connected;
+    statusText.textContent = label;
+    connectBtn.hidden = state !== "down";
     pad1.setAttribute("aria-disabled", String(!connected));
     pad2.setAttribute("aria-disabled", String(!connected));
-    if (!connected) {
+    if (state === "down") {
       hz1.innerHTML = "&mdash;<span class=\"unit\">Hz</span>";
       hz2.innerHTML = "&mdash;<span class=\"unit\">Hz</span>";
       chip1.textContent = "slow"; chip1.classList.remove("fast");
@@ -408,6 +448,12 @@
       const line = dspsBuffer.slice(0, nl).trim();
       dspsBuffer = dspsBuffer.slice(nl + 1);
       if (line.length === 0) continue;
+      if (!telemetrySeen) {
+        telemetrySeen = true;
+        reconnectAttempts = 0;
+        log("Pipe is live - telemetry arriving.");
+        setStatus("live", "Connected");
+      }
       log(`< ${line}`);
       handleTelemetry(line);
     }
@@ -424,7 +470,7 @@
       // all. Per spec, writeValue() picks whichever write type the
       // characteristic itself declares, so this still works correctly
       // even though DSPS RX only supports write-without-response.
-      await dspsRxChar.writeValue(new TextEncoder().encode(text));
+      await gatt(() => dspsRxChar.writeValue(new TextEncoder().encode(text)));
       log(`> ${text}`);
     } catch (err) {
       log(`! write failed: ${err.message}`);
@@ -448,17 +494,63 @@
   async function enterBinaryMode(atService, dspsTxChar, dspsFlowChar) {
     const inboundChar = await atService.getCharacteristic(AT_INBOUND_UUID);
     const atFlowChar = await atService.getCharacteristic(AT_FLOWCTRL_UUID);
+    const outboundChar = await atService.getCharacteristic(AT_OUTBOUND_UUID);
+
+    // The AT flow-control notification is a doorbell with no payload: the
+    // module's actual reply is sitting in the Outbound characteristic, to be
+    // read on each ring (the same notify-then-read dance HelloWorldBLE uses).
+    // An earlier version of this page subscribed here and never listened,
+    // which is why the module's half of the handshake was invisible from the
+    // phone - including the one message that says the request was granted.
+    atFlowChar.addEventListener("characteristicvaluechanged", async () => {
+      let reply;
+      try {
+        reply = await gatt(() => outboundChar.readValue());
+      } catch (err) {
+        log(`! AT outbound read failed: ${err.message}`);
+        return;
+      }
+      const text = new TextDecoder().decode(reply).replace(/\0+$/, "").trim();
+      if (text.length) log(`AT< ${text}`);
+
+      // The module relays the board's Binary mode approval here. Measured on
+      // the wire: the module does NOT switch over during this connection - it
+      // applies the grant when this connection ends. So the only way to get a
+      // working pipe is to hang up and dial again, which is what this does.
+      if (text.includes("AT+BINREQACK") && !reconnecting &&
+          reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+        reconnectAttempts += 1;
+        log("Board approved Binary mode. It takes effect on the next connection - reconnecting...");
+        reconnecting = true;
+        setStatus("busy", "Reconnecting");
+        setTimeout(() => {
+          try { device.gatt.disconnect(); } catch (err) { /* already gone */ }
+          setTimeout(() => { openLink().catch((err) => {
+            log(`Reconnect failed: ${err.message}`);
+            reconnecting = false;
+            setStatus("down", "Disconnected");
+          }); }, 1200);
+        }, 400);
+      }
+    });
+
+    // DSPS flow control: 0x01 is "go ahead", 0x02 is "stop". Also previously
+    // subscribed and ignored - so the page never noticed being told to stop.
+    dspsFlowChar.addEventListener("characteristicvaluechanged", (event) => {
+      const v = new Uint8Array(event.target.value.buffer)[0];
+      log(`flow< 0x${v.toString(16).padStart(2, "0")} (${v === 1 ? "go" : v === 2 ? "stop" : "?"})`);
+    });
 
     await atFlowChar.startNotifications();    // step 1
     await dspsTxChar.startNotifications();    // step 2
     await dspsFlowChar.startNotifications();  // step 3
     dspsTxChar.addEventListener("characteristicvaluechanged", onDspsData);
 
-    await dspsFlowChar.writeValue(new Uint8Array([0x01]));  // step 4 - see sendCommand()'s comment on writeValue() vs writeValueWithoutResponse()
+    await gatt(() => dspsFlowChar.writeValue(new Uint8Array([0x01])));  // step 4 - see sendCommand()'s comment on writeValue() vs writeValueWithoutResponse()
 
     log("Requesting Binary mode...");
     const atBinreq = new Uint8Array([0x41, 0x54, 0x2b, 0x42, 0x49, 0x4e, 0x52, 0x45, 0x51, 0x00]);  // "AT+BINREQ\0"
-    await inboundChar.writeValue(atBinreq);  // step 5
+    await gatt(() => inboundChar.writeValue(atBinreq));  // step 5
   }
 
   async function connect() {
@@ -467,48 +559,92 @@
       return;
     }
     try {
-      // acceptAllDevices rather than filtering by name: a name filter
-      // worked fine in desktop Chrome, but third-party Web Bluetooth
-      // implementations like Bluefy/WebBLE reimplement the API
-      // themselves rather than using a real browser engine's native
-      // support, and can have incomplete filter handling even when
-      // basic connect/read/write/notify all work - "CLv2-CodeLess"
-      // simply not appearing in Bluefy's device picker, despite the
-      // board confirmed advertising via an independent scan at the same
-      // time, is exactly that symptom. Neither the CodeLess nor DSPS
-      // service UUID is in the board's advertisement anyway (confirmed
-      // via a bleak scan while building this - only Dialog/Renesas's
-      // own manufacturer UUIDs are), so both still need to be listed in
-      // optionalServices to be usable after connecting regardless of
-      // how the device itself gets picked.
-      device = await navigator.bluetooth.requestDevice({
-        acceptAllDevices: true,
-        optionalServices: [AT_SERVICE_UUID, DSPS_SERVICE_UUID],
-      });
+      // Show only this board in the picker, rather than every BLE device
+      // in range.
+      //
+      // There is no "class mask" to filter on: Class of Device is a
+      // Bluetooth Classic concept and BLE has no equivalent. Web
+      // Bluetooth does have a mask, but only inside a manufacturerData
+      // filter - and a scan shows this board advertises no manufacturer
+      // data at all, so there is nothing for such a mask to match.
+      //
+      // What the board does advertise is its name and the DSPS service
+      // UUID (plus Dialog's DFU service). Filtering on the DSPS UUID is
+      // the more meaningful of the two - it asks for "a device offering
+      // this pipe" rather than trusting a name string - but both are
+      // listed as separate filter entries, which Web Bluetooth ORs
+      // together, because third-party Web Bluetooth implementations
+      // reimplement this API themselves and their filter handling is not
+      // always complete. Bluefy has previously failed to show
+      // "CLv2-CodeLess" for a name filter while the board was confirmed
+      // advertising by an independent scan; giving it two ways to match
+      // costs nothing. If the board still fails to appear in some
+      // browser's picker, set USE_DEVICE_FILTER to false to get the old
+      // show-everything behaviour back as a debugging aid.
+      //
+      // The AT service is NOT advertised, so it still has to be named in
+      // optionalServices to be reachable after connecting - a filter only
+      // grants access to the services it actually matched on.
+      device = await navigator.bluetooth.requestDevice(
+        USE_DEVICE_FILTER
+          ? {
+              filters: [
+                { services: [DSPS_SERVICE_UUID] },
+                { name: DEVICE_NAME },
+              ],
+              optionalServices: [AT_SERVICE_UUID, DSPS_SERVICE_UUID],
+            }
+          : {
+              acceptAllDevices: true,
+              optionalServices: [AT_SERVICE_UUID, DSPS_SERVICE_UUID],
+            }
+      );
       log(`Picked ${device.name || device.id}.`);
-      device.addEventListener("gattserverdisconnected", () => {
-        log("Disconnected.");
-        dspsRxChar = null;
-        dspsBuffer = "";
-        setConnected(false);
-      });
 
-      const server = await device.gatt.connect();
+      // Added once per device, not once per connection: openLink() runs again
+      // on the deliberate reconnect below, and stacking a handler each time
+      // was a real leak in the previous version (same for the DSPS TX
+      // listener, which now attaches to freshly-fetched characteristics).
+      if (!disconnectHandlerAdded) {
+        disconnectHandlerAdded = true;
+        device.addEventListener("gattserverdisconnected", () => {
+          dspsRxChar = null;
+          dspsBuffer = "";
+          if (reconnecting) {
+            log("Disconnected (expected - reconnecting to pick up Binary mode).");
+            return;
+          }
+          log("Disconnected.");
+          telemetrySeen = false;
+          setStatus("down", "Disconnected");
+        });
+      }
 
-      const atService = await server.getPrimaryService(AT_SERVICE_UUID);
-      const dspsService = await server.getPrimaryService(DSPS_SERVICE_UUID);
-      const dspsTxChar = await dspsService.getCharacteristic(DSPS_TX_UUID);
-      const dspsFlowChar = await dspsService.getCharacteristic(DSPS_FLOWCTRL_UUID);
-      dspsRxChar = await dspsService.getCharacteristic(DSPS_RX_UUID);
-
-      await enterBinaryMode(atService, dspsTxChar, dspsFlowChar);
-
-      setConnected(true);
-      log("Connected. Waiting for telemetry...");
+      await openLink();
     } catch (err) {
       log(`Connect failed: ${err.message}`);
-      setConnected(false);
+      reconnecting = false;
+      setStatus("down", "Disconnected");
     }
+  }
+
+  // Opens (or re-opens) the GATT link on the already-chosen device and runs
+  // the Binary mode negotiation. Separate from connect() so the reconnect
+  // that the handshake requires doesn't need another device-picker prompt -
+  // permission for this device persists for the page's lifetime.
+  async function openLink() {
+    setStatus("busy", "Negotiating");
+    const server = await device.gatt.connect();
+
+    const atService = await server.getPrimaryService(AT_SERVICE_UUID);
+    const dspsService = await server.getPrimaryService(DSPS_SERVICE_UUID);
+    const dspsTxChar = await dspsService.getCharacteristic(DSPS_TX_UUID);
+    const dspsFlowChar = await dspsService.getCharacteristic(DSPS_FLOWCTRL_UUID);
+    dspsRxChar = await dspsService.getCharacteristic(DSPS_RX_UUID);
+
+    await enterBinaryMode(atService, dspsTxChar, dspsFlowChar);
+    reconnecting = false;
+    log("Negotiated. Waiting for the pipe to deliver something...");
   }
 
   connectBtn.addEventListener("click", connect);

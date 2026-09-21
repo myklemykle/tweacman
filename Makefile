@@ -62,7 +62,7 @@ BLE_PYTHON ?= $(BLE_VENV)/bin/python3
 FAUST ?= faust
 
 .DEFAULT_GOAL := build
-.PHONY: build upload monitor run clean ports boards info help require-port ble-venv ble-test faust
+.PHONY: build upload monitor run clean ports boards info help require-port ble-venv ble-test ble-binary-test faust
 
 # ---------------------------------------------------------------------------
 
@@ -113,6 +113,13 @@ ble-venv:
 ble-test: ble-venv
 	$(BLE_PYTHON) -u tools/ble_test.py
 
+# Drives AudioKnobsWebBLEDemo's CodeLess "Binary mode" handshake from here
+# instead of from the phone, logging every GATT step and notification. Run it
+# next to `make monitor` in another terminal to see both halves of the
+# conversation at once. Same requirements as ble-test above.
+ble-binary-test: ble-venv
+	$(BLE_PYTHON) -u tools/ble_binary_test.py
+
 # Regenerates AudioKnobsDemo's synth.h from synth.dsp. Not needed for a
 # normal build - the generated header is committed - only after editing
 # the .dsp source. Needs the `faust` compiler on PATH.
@@ -142,6 +149,7 @@ help:
 	@echo "  monitor   open the serial monitor at $(BAUD) baud"
 	@echo "  run       upload, then open the monitor"
 	@echo "  ble-test  watch the board's Bluetooth LE output (sets up a venv on first run)"
+	@echo "  ble-binary-test  drive the CodeLess Binary mode handshake from here, with a full trace"
 	@echo "  faust     regenerate AudioKnobsDemo/synth.h from synth.dsp (needs faust on PATH)"
 	@echo "  clean     remove build output"
 	@echo "  ports     list connected boards"

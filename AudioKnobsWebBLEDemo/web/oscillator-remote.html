@@ -336,6 +336,11 @@
   const DSPS_FLOWCTRL_UUID = "0783b03e-8535-b5a0-7140-a304d2495cb9";  // notify + write: part of the handshake
   const DSPS_RX_UUID       = "0783b03e-8535-b5a0-7140-a304d2495cba";  // write-without-response: phone -> board
 
+  // The board's advertised name, as set by the CodeLess firmware.
+  const DEVICE_NAME = "CLv2-CodeLess";
+  // false falls back to listing every BLE device in range - see connect().
+  const USE_DEVICE_FILTER = true;
+
   const dot = document.getElementById("dot");
   const statusText = document.getElementById("statusText");
   const connectBtn = document.getElementById("connectBtn");
@@ -554,24 +559,46 @@
       return;
     }
     try {
-      // acceptAllDevices rather than filtering by name: a name filter
-      // worked fine in desktop Chrome, but third-party Web Bluetooth
-      // implementations like Bluefy/WebBLE reimplement the API
-      // themselves rather than using a real browser engine's native
-      // support, and can have incomplete filter handling even when
-      // basic connect/read/write/notify all work - "CLv2-CodeLess"
-      // simply not appearing in Bluefy's device picker, despite the
-      // board confirmed advertising via an independent scan at the same
-      // time, is exactly that symptom. Neither the CodeLess nor DSPS
-      // service UUID is in the board's advertisement anyway (confirmed
-      // via a bleak scan while building this - only Dialog/Renesas's
-      // own manufacturer UUIDs are), so both still need to be listed in
-      // optionalServices to be usable after connecting regardless of
-      // how the device itself gets picked.
-      device = await navigator.bluetooth.requestDevice({
-        acceptAllDevices: true,
-        optionalServices: [AT_SERVICE_UUID, DSPS_SERVICE_UUID],
-      });
+      // Show only this board in the picker, rather than every BLE device
+      // in range.
+      //
+      // There is no "class mask" to filter on: Class of Device is a
+      // Bluetooth Classic concept and BLE has no equivalent. Web
+      // Bluetooth does have a mask, but only inside a manufacturerData
+      // filter - and a scan shows this board advertises no manufacturer
+      // data at all, so there is nothing for such a mask to match.
+      //
+      // What the board does advertise is its name and the DSPS service
+      // UUID (plus Dialog's DFU service). Filtering on the DSPS UUID is
+      // the more meaningful of the two - it asks for "a device offering
+      // this pipe" rather than trusting a name string - but both are
+      // listed as separate filter entries, which Web Bluetooth ORs
+      // together, because third-party Web Bluetooth implementations
+      // reimplement this API themselves and their filter handling is not
+      // always complete. Bluefy has previously failed to show
+      // "CLv2-CodeLess" for a name filter while the board was confirmed
+      // advertising by an independent scan; giving it two ways to match
+      // costs nothing. If the board still fails to appear in some
+      // browser's picker, set USE_DEVICE_FILTER to false to get the old
+      // show-everything behaviour back as a debugging aid.
+      //
+      // The AT service is NOT advertised, so it still has to be named in
+      // optionalServices to be reachable after connecting - a filter only
+      // grants access to the services it actually matched on.
+      device = await navigator.bluetooth.requestDevice(
+        USE_DEVICE_FILTER
+          ? {
+              filters: [
+                { services: [DSPS_SERVICE_UUID] },
+                { name: DEVICE_NAME },
+              ],
+              optionalServices: [AT_SERVICE_UUID, DSPS_SERVICE_UUID],
+            }
+          : {
+              acceptAllDevices: true,
+              optionalServices: [AT_SERVICE_UUID, DSPS_SERVICE_UUID],
+            }
+      );
       log(`Picked ${device.name || device.id}.`);
 
       // Added once per device, not once per connection: openLink() runs again

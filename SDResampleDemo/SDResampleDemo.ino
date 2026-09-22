@@ -90,8 +90,10 @@
   instead; sitting still, rpm() reads 0 and it contributes nothing at
   all - all three cases fall out of one plain sum (see the control-rate
   block in loop()), no special-casing needed. SCRUB_SCALE (how much
-  speed-ratio contribution one RPM is worth) is a starting guess meant
-  to be tuned by ear, same as DEADBAND_T.
+  speed-ratio contribution one RPM is worth) is tuned by ear, same as
+  DEADBAND_T - see its own comment for the seconds-of-audio-per-turn
+  arithmetic, and for why scrubbing against ordinary forward playback
+  partly cancels itself.
 
   Relative speed control: the first pot is RELATIVE (like a DJ jog wheel
   or a DAW's jog control), not ABSOLUTE (like a normal volume knob, where
@@ -841,11 +843,29 @@ CapTouch touch1(20);
 // smoothed at that same 0.02s) it's derived from.
 RV112FF pot2(A4, A5, 0.02f, 0.15f, 0.02f);
 
-// Maps pot2's RPM onto an equivalent contribution to currentStep - a
-// starting guess (60 RPM, one turn per second, contributing roughly
-// +/-1x) meant to be tuned by ear on the actual hardware, same as
-// DEADBAND_T above.
-const float SCRUB_SCALE = 1.0f / 60.0f;
+// Maps pot2's RPM onto an equivalent contribution to currentStep.
+//
+// The useful way to think about this is in seconds of audio per turn.
+// Position advances by `step` every output tick at 48000 ticks/s, and the
+// scrub contribution to step is rpm * SCRUB_SCALE, so one full revolution
+// displaces the cursor by 48000 * 60 * SCRUB_SCALE source samples - i.e.
+// 60 * SCRUB_SCALE seconds of a 48kHz file.
+//
+// The original 1/60 therefore bought exactly one second of audio per turn,
+// which is why scrubbing felt like it went nowhere: knob1 keeps playing
+// forward underneath (this is a sum, not an override), so at 1x on a
+// 44.1kHz file the forward motion eats 44100 samples/s while a turn only
+// yields 48000. The two cancel at about 0.92 turns per second, and any
+// gesture slower than that still drifts *forward* while sounding like it is
+// going backward.
+//
+// 1/15 gives four seconds per turn, so the cancellation point drops to
+// roughly a quarter turn per second and an ordinary half-turn flick moves a
+// couple of seconds of speech. Still a tuned-by-ear number, same as
+// DEADBAND_T - raise it for coarser scrubbing, lower it for finer. Note it
+// scales the wow/flutter warble mode by the same factor, since that is the
+// same sum with knob1 left running.
+const float SCRUB_SCALE = 1.0f / 15.0f;
 
 const unsigned long CONTROL_INTERVAL = 10;  // ms (~100Hz)
 unsigned long previousControlMillis = 0;

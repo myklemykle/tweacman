@@ -148,7 +148,8 @@
   whether the transport is running. `SPD:` is the effective ratio, so it
   reads 0.00 while stopped and follows scrub while running; `REQ:` is the
   speed knob's requested ratio, which survives being stopped, so a client
-  can show what the transport *would* run at.
+  can show what the transport *would* run at; `PIT:` is the pitch ratio,
+  1.000 meaning unshifted.
 
   Transport: touch pad D21 held runs the tape, released stops it. Pressing
   D20 while D21 is held latches it on, so playback continues after the finger
@@ -1394,6 +1395,7 @@ void loop() {
 
 
 
+
     float physicalNow = knob1.read();
     if (physicalNow != -1.0f) {
       // Whichever mode is active drives its own accumulator; the other
@@ -1668,6 +1670,7 @@ void loop() {
       // stopped.
       String stat = "SPD:" + String(ratio, 2) +
                      ",REQ:" + String(lastKnownRatio, 2) +
+                     ",PIT:" + String(pitchRatio, 3) +
                      ",BUF:" + String((int)fillPercent) + ",UND:" + String(underrunTicks) +
                      ",RUN:" + String(transportRunning ? 1 : 0);
       if (probing) {

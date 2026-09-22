@@ -364,6 +364,10 @@
       <div class="label">Underruns</div>
       <div class="value" id="underruns">&mdash;</div>
     </div>
+    <div class="stat">
+      <div class="label">Pitch</div>
+      <div class="value" id="pitch">&mdash;<span class="unit">x</span></div>
+    </div>
   </div>
 
   <div>
@@ -422,6 +426,7 @@
   const bufferEl = document.getElementById("buffer");
   const underrunsEl = document.getElementById("underruns");
   const transportEl = document.getElementById("transport");
+  const pitchEl = document.getElementById("pitch");
   const fileListEl = document.getElementById("fileList");
   const logBody = document.getElementById("logBody");
   const copyLogBtn = document.getElementById("copyLogBtn");
@@ -446,6 +451,7 @@
     if (!connected) {
       nowPlaying.textContent = "—";
       transportEl.textContent = "—";
+      pitchEl.innerHTML = "&mdash;<span class=\"unit\">x</span>";
       transportEl.classList.remove("running");
       speedEl.innerHTML = "&mdash;<span class=\"unit\">x</span>";
       speedEl.classList.remove("potential");
@@ -550,6 +556,12 @@
     if (parts.RUN !== undefined) {
       transportEl.textContent = running ? "Running" : "Stopped";
       transportEl.classList.toggle("running", running);
+    }
+    if (parts.PIT !== undefined) {
+      // Dimmed at unity, because "not shifted" is the resting state and
+      // should not compete for attention with a value that is doing work.
+      pitchEl.innerHTML = `${Number(parts.PIT).toFixed(3)}<span class="unit">x</span>`;
+      pitchEl.classList.toggle("potential", Math.abs(Number(parts.PIT) - 1) < 0.001);
     }
     if (parts.UND !== undefined) {
       underrunsEl.textContent = parts.UND;

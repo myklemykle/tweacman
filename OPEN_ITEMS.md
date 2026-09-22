@@ -9,6 +9,33 @@ than repeated: see `CodelessPipe_design.md`.
 
 ## SDResampleDemo - tape transport
 
+- **Spurious transport latching: a common-mode disturbance on TSCAP.**
+  PARKED for the PCB, where better shielding should make it straightforward.
+  Measured 2026-09-21, and the measurements rule out every software fix tried
+  or considered:
+  - Touch deltas are sharply *bimodal* - either ~20 (idle) or ~3500-7800.
+    Across 209 samples exactly one landed in the whole 100-2999 band. So the
+    spurious events are full-strength capacitive signals reaching more than
+    twice the 3000 threshold, not marginal noise. **No threshold and no
+    debounce can reject them**, because they are larger than a real touch.
+  - They are *common-mode*: 8 of 11 events fired on both pads at once, and
+    when both fired the two channels agreed to within 163 counts on ~7000
+    (2.3%). A finger is local to one pad; this moves both together, which
+    points at the TSCAP reference they share on D6.
+  - It happens with hands completely away from the board, so it is not
+    proximity to the bare-wire pads.
+  - It correlates weakly with system load: 340k loop passes/sec during
+    events versus 358k without, so supply or reference coupling from CPU and
+    SD activity is the likely path.
+  - **Rejecting by similarity does not work either.** A deliberate two-pad
+    chord was measured at 0.0%-7.9% mismatch (mean 4.0%), overlapping the
+    2.3% of the disturbance - with real chord samples *tighter* than it. No
+    separating threshold exists.
+  - **D31/TS11 is not usable as a common-mode reference.** It is the onboard
+    USR button with its own circuitry attached, and swings 0 to ~12000 on its
+    own while both real pads sit quiet.
+  Remaining avenues are all physical: TSCAP capacitor value, a grounded guard
+  between the pads, and supply decoupling - i.e. the carrier board.
 - **Touch chatter now has consequences.** Latching play is implemented (D20
   chorded with D21). A momentary hold forgives a spurious touch edge as a
   brief dropout, but a latch does not: a stray rising edge on D21 silently

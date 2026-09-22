@@ -1075,7 +1075,25 @@ void loop() {
     // the intuitive direction, same as knob1 originally did.
     float scrub = pot2.isCalibrated() ? -pot2.rpm() * SCRUB_SCALE : 0.0f;
 
-    currentStep = lastKnownRatio * rateFactor + scrub;
+    // Scale the scrub with playback speed, but never below 1x.
+    //
+    // A fixed scrub contribution is a shrinking fraction of the motion
+    // already happening: at 20x, a scrub worth +/-1 step perturbs the
+    // cursor by five percent and is essentially inaudible. Multiplying by
+    // the speed magnitude keeps it a constant *proportion* of whatever is
+    // playing, so the gesture feels the same at any speed - and it makes
+    // the turn rate needed to overcome forward playback speed-independent
+    // too, since both sides of the sum scale together.
+    //
+    // The floor at 1x is what stops this scaling *down*, and it is not
+    // optional: the primary tape-scrub case parks knob1 in its pause
+    // deadband, where the ratio is 0 - a bare multiply would there
+    // multiply the scrub by zero and disable the feature precisely where
+    // it matters most. Below 1x the scrub keeps its absolute feel.
+    float speedMagnitude = fabsf(lastKnownRatio);
+    float scrubGain = (speedMagnitude > 1.0f) ? speedMagnitude : 1.0f;
+
+    currentStep = lastKnownRatio * rateFactor + scrub * scrubGain;
   }
 
   // Deliberately short and infrequent: Serial here is native USB CDC

@@ -9,11 +9,22 @@ than repeated: see `CodelessPipe_design.md`.
 
 ## SDResampleDemo - tape transport
 
-- **Latching play.** The transport is currently momentary: touch pad D21 held
-  runs the tape, released stops it. A real deck's Play button latches. Agreed
-  to add "soon". Worth knowing before then: if the touch pad chatters at all,
-  a latching toggle amplifies that far more than a momentary hold does, since
-  every spurious edge flips state instead of causing a brief dropout.
+- **Touch chatter now has consequences.** Latching play is implemented (D20
+  chorded with D21). A momentary hold forgives a spurious touch edge as a
+  brief dropout, but a latch does not: a stray rising edge on D21 silently
+  clears the latch, and you only find out when lifting your finger stops
+  playback unexpectedly. If this shows up in use, debounce D21's rising edge
+  specifically rather than the pads in general.
+- **`FastLED.show()` versus the audio interrupt.** show() bit-bangs WS2812
+  timing and blocks for tens of microseconds - long enough to straddle a
+  48kHz audio tick, and on most platforms it masks interrupts while doing it.
+  Mitigated by only calling it when the colour actually changes (a few times
+  a second while blinking, not 100Hz), but it has not been confirmed
+  click-free by ear. Listen at blink transitions.
+- **Pause versus restart.** Every start rewinds to the top, including after
+  the latch is cleared and the transport stopped. Consistent, and chosen
+  deliberately, but once a latch exists people tend to expect stop-then-play
+  to resume rather than restart. Revisit if it feels wrong in use.
 - **Clicks on start/stop.** Deferred until actually heard. Stopping mid-waveform
   holds a DC value on the DAC and resuming jumps back into the waveform; through
   A1's 4.7uF coupling cap that is a click, and A0 has no cap at all. Now that
@@ -81,6 +92,29 @@ RPM over a 10ms tick.
     right after `AT+BINREQACK` - instead of waiting for the central to hang
     up. Untested. If it works, the handshake gets much simpler and the `+++`
     churn above probably disappears with it.
+
+## Toolchain / bench reliability
+
+- **USB and DFU flakiness makes iteration slow.** Raised as a real cost, to be
+  tackled deliberately rather than worked around. Observed repeatedly on
+  2026-09-21:
+  - `make upload` fails with `dfu-util: Cannot set alternate interface zero:
+    LIBUSB_ERROR_OTHER` (exit status 74) while the board still enumerates
+    perfectly well as a serial port. Retrying sometimes works immediately;
+    at one point it failed seven times running and was only cleared by
+    physically unplugging, waiting, and replugging.
+  - Separately, the serial device node vanished entirely for several minutes
+    after a DFU attempt - no `/dev/cu.usbmodem*`, nothing in
+    `arduino-cli board list`, and `dfu-util -l` saw no DFU device either -
+    until an unplug/replug.
+  - An inline USB power monitor was in the chain for most of the session and
+    has since been removed; a plausible contributor, not yet confirmed.
+  - Our own tooling handles the post-reset re-enumeration only partly: the
+    upload/monitor sequence waits for the device *node* to exist, but the
+    node can appear before the CDC endpoint is ready, which is what produced
+    `Port monitor error: timeout waiting for message` mid-session. A
+    readiness check (or a short retry on first read) would be more honest
+    than the current existence check plus a fixed sleep.
 
 ## Web pages
 

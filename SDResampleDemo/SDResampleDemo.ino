@@ -20,8 +20,10 @@
   Otherwise same as DACAudioTest (3.5mm jack on A0/A1/GND) plus two pots
   (RV112FF wipers on A2/A3 for speed, A4/A5 for tape scrub, both pots'
   track ends on 3.3V/GND) and two CapTouch pads (D20 gates the speed
-  knob's fast/slow sweep, D21 is the transport - hold it to run, release
-  to stop; both share the TSCAP capacitor on D6 - see CapTouch.h). The DA14531MOD Bluetooth
+  knob's fast/slow sweep and, chorded with D21, latches the transport;
+  D21 is the transport itself - hold it to run, release to stop; both
+  share the TSCAP capacitor on D6 - see CapTouch.h). The onboard WS2812
+  on D13 is used as the transport indicator - no extra wiring. The DA14531MOD Bluetooth
   module used for BLE control is already onboard -
   no extra wiring for that part.
 
@@ -148,10 +150,20 @@
   speed knob's requested ratio, which survives being stopped, so a client
   can show what the transport *would* run at.
 
-  Transport: touch pad D21 held runs the tape, released stops it. Starting
-  rewinds to the top of the file, so each press plays from the beginning
-  rather than resuming where scrubbing left off. Scrubbing still works while
-  stopped - that is the point of expressing "stopped" as a speed of zero. This demo only plays
+  Transport: touch pad D21 held runs the tape, released stops it. Pressing
+  D20 while D21 is held latches it on, so playback continues after the finger
+  lifts; the next press of D21 clears the latch, without interrupting
+  playback, since that press is holding the transport up by itself. Starting
+  rewinds to the top of the file, so each start plays from the beginning
+  rather than resuming where scrubbing left off - engaging or clearing the
+  latch mid-playback does not rewind, because playback never stops. Scrubbing
+  still works while stopped - that is the point of expressing "stopped" as a
+  speed of zero.
+
+  The onboard WS2812 on D13 shows transport state: dark when stopped,
+  blinking at half brightness while running from a held finger, steady at
+  full brightness when latched. "Full" is RGBLED_MAX_BRIGHTNESS, which is 20%
+  of what the LED can actually do - it is startlingly bright otherwise. This demo only plays
   mono 16-bit PCM; picking anything else from the pile of real-world
   samples (stereo, 8/24-bit, float, WAVE_FORMAT_EXTENSIBLE - all present
   on a real sample library) will cleanly error via BLE until WavReader
@@ -248,6 +260,7 @@
 #include <RV112FF.h>
 #include <MultiTurnKnob.h>
 #include <CapTouch.h>
+#include <FastLED.h>
 #include <codelessBLEPeripheral.h>
 #include "SDCardBlockDevice.h"
 #include "FATFileSystem.h"
@@ -881,9 +894,42 @@ void handleBLELine(const String &line) {
 RV112FF pot1(A2, A3);
 MultiTurnKnob knob1(pot1);
 CapTouch touch1(20);
-// Transport control: held = running, released = stopped. See the control
-// block in loop().
+// Transport control: held = running, released = stopped - or latched on, via
+// the touch1 chord. See the control block in loop().
 CapTouch touch2(21);
+
+// Latched transport. Set by pressing touch1 while touch2 is held, cleared by
+// the next press of touch2 - at which point playback carries on uninterrupted
+// because that same press is also holding the transport up. So the latch is
+// engaged and released without playback ever stopping, which is the point.
+bool transportLatched = false;
+bool touch1WasTouched = false;
+bool touch2WasTouched = false;
+
+// -- Onboard RGB LED (transport indicator) -------------------------------
+// Blinking = running from a held finger, steady = latched, dark = stopped.
+// Same WS2812 on D13 that WS2812TouchDemo drives.
+const uint8_t RGB_LED_PIN = 13;
+const uint8_t NUM_LEDS = 1;
+CRGB leds[NUM_LEDS];
+
+// This LED is startlingly bright at full scale, so everything here is
+// expressed as a percentage of it and kept low. Adjustable by hand for now.
+const uint8_t RGBLED_MAX_BRIGHTNESS = 20;                          // percent
+const uint8_t RGBLED_DIM_BRIGHTNESS = RGBLED_MAX_BRIGHTNESS / 2;   // percent
+const unsigned long RGBLED_BLINK_INTERVAL = 300;                   // ms on, ms off
+
+inline uint8_t rgbLevel(uint8_t percent) { return (uint8_t)((255 * percent) / 100); }
+
+// When the current blink cycle began. The phase is measured from here rather
+// than from absolute millis(), so the blink always starts lit: taking it
+// straight from the clock meant a short tap could land in the dark half of
+// the cycle and look like nothing had happened, even though audio was
+// playing correctly. Re-anchored on entry to the blinking state, which
+// covers both starting playback and releasing the latch back to a held
+// finger - the latter would otherwise drop straight from steady-on to dark.
+unsigned long blinkPhaseStartMillis = 0;
+bool wasBlinking = false;
 
 // The second pot: a tape-scrub control, not a position control - no
 // MultiTurnKnob wrapper needed, since scrubbing only cares about how
@@ -940,6 +986,10 @@ void setup() {
 
   touch1.begin();
   touch2.begin();
+
+  FastLED.addLeds<WS2812B, RGB_LED_PIN, GRB>(leds, NUM_LEDS);
+  leds[0] = CRGB::Black;
+  FastLED.show();
 
   if (sdFs.mount(&sdBlockDevice) != 0) {
     Serial.println("SD card mount failed - check it's inserted and FAT32-formatted.");
@@ -1092,6 +1142,7 @@ void loop() {
     CapTouch::scan();
 
     float turnsPerSweep = touch1.isTouched() ? TURNS_PER_SWEEP_FAST : TURNS_PER_SWEEP_SLOW;
+
     float physicalNow = knob1.read();
     if (physicalNow != -1.0f) {
       if (!virtualKnobAnchored) {
@@ -1190,9 +1241,33 @@ void loop() {
     // "knob1 parked at its pause deadband" case the scrub was designed
     // around, now reachable with a finger instead of by hunting for the
     // deadband.
-    // Edge-triggered, not level: rewind once when the pad is first pressed,
-    // not on every control tick while it is held down.
-    bool nowRunning = touch2.isTouched();
+    // Transport, with a latch.
+    //
+    //   touch2 held                -> running, for as long as it is held
+    //   touch1 pressed while held  -> latched on; running survives release
+    //   touch2 pressed again       -> latch cleared
+    //
+    // Clearing the latch never interrupts playback: the press that clears it
+    // is also holding the transport up by itself, so running only ends when
+    // that finger lifts. Both triggers are edge-detected so they fire once
+    // per press rather than continuously while held.
+    //
+    // Note touch1 keeps its existing job of gating the speed knob's
+    // fast/slow sweep - the chord only means "latch" when touch2 is also
+    // down, so the two uses do not collide.
+    bool touch1Now = touch1.isTouched();
+    bool touch2Now = touch2.isTouched();
+
+    if (touch1Now && !touch1WasTouched && touch2Now) transportLatched = true;
+    if (touch2Now && !touch2WasTouched && transportLatched) transportLatched = false;
+
+    touch1WasTouched = touch1Now;
+    touch2WasTouched = touch2Now;
+
+    bool nowRunning = touch2Now || transportLatched;
+
+    // Rewind on the rising edge of *running*, not of the pad, so engaging or
+    // releasing the latch mid-playback does not jump back to the top.
     if (nowRunning && !transportRunning && fileLoaded) rewindToStart();
     transportRunning = nowRunning;
 
@@ -1208,6 +1283,31 @@ void loop() {
     float scrubGain = (speedMagnitude > 1.0f) ? speedMagnitude : 1.0f;
 
     currentStep = transportRatio * rateFactor + scrub * scrubGain;
+
+    // Transport indicator: steady at full level when latched, blinking at
+    // half level when running from a held finger, dark when stopped.
+    //
+    // FastLED.show() bit-bangs the WS2812's timing and blocks (and on most
+    // platforms masks interrupts) for tens of microseconds - long enough to
+    // straddle a 48kHz audio tick. So it is called only when the colour
+    // actually changes, which during a blink is a handful of times a second
+    // rather than a hundred.
+    bool blinking = transportRunning && !transportLatched;
+    if (blinking && !wasBlinking) blinkPhaseStartMillis = currentMillis;
+    wasBlinking = blinking;
+
+    CRGB wanted = CRGB::Black;
+    if (transportLatched) {
+      wanted = CRGB(0, rgbLevel(RGBLED_MAX_BRIGHTNESS), 0);
+    } else if (blinking) {
+      unsigned long phase = currentMillis - blinkPhaseStartMillis;
+      bool blinkOn = ((phase / RGBLED_BLINK_INTERVAL) % 2) == 0;
+      if (blinkOn) wanted = CRGB(0, rgbLevel(RGBLED_DIM_BRIGHTNESS), 0);
+    }
+    if (wanted != leds[0]) {
+      leds[0] = wanted;
+      FastLED.show();
+    }
   }
 
   // Deliberately short and infrequent: Serial here is native USB CDC

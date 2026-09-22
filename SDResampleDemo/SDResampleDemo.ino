@@ -164,8 +164,10 @@
   toggles knob1 between setting speed and setting pitch. Each mode keeps its
   own virtual knob position, so switching back and forth leaves both settings
   where they were, and pitch survives a file change since it is a setting the
-  player dialled in rather than a property of the file. Range is one octave
-  either way. Speed and pitch are genuinely independent: the nominal playback
+  player dialled in rather than a property of the file. Range is
+  PITCH_OCTAVE_RANGE octaves either way, and the pitch dial parks at its
+  extremes rather than wrapping round to the opposite one - unlike the speed
+  dial, which wraps deliberately. Speed and pitch are genuinely independent: the nominal playback
   position still advances at the speed ratio alone - which is what the SD
   refill is built around - while a two-tap granular shifter reads around it
   at speed * pitch. See the pitch shifting comment further down for how that
@@ -184,6 +186,13 @@
 
   Nothing is loaded or played until a BLE PLAY: command asks for it -
   the board boots silent, with no SD reads happening in loop() at all.
+  At boot the first playable file on the card is cued automatically, so the
+  board works standing on its own: hold the transport pad and it makes a
+  sound, with no phone or BLE connection involved. Files this demo cannot
+  open are skipped rather than stopping the search, which matters on a real
+  sample card. Nothing is read from the card after that until the transport
+  actually runs.
+
   This started as a fix for a bug it turned out not to cause. Inbound BLE
   commands were never reaching the board, and loop()'s greedy, unthrottled
   SD refill was the prime suspect - the one thing structurally different
@@ -348,14 +357,45 @@ float angleForRatio(float ratio) {
 // The deadband exists so unity is findable by hand rather than being an
 // infinitely thin point on the dial.
 const float PITCH_DEADBAND_T = 0.02f;
-const float PITCH_NEUTRAL_ANGLE = 180.0f;  // where angleToPitchRatio() returns 1.0
 
-float angleToPitchRatio(float wrappedAngle) {
-  float t = 1.0f - (wrappedAngle / 180.0f);  // +1 .. -1, same sense as speed
+// How far the shift goes, in octaves either side of unity, and how much
+// physical knob a single octave costs. Expressed this way round because
+// these are the two numbers worth tuning by ear - everything else is derived.
+//
+// On range: nothing in the signal path limits this. Both taps read a fixed
+// GRAIN_LENGTH_SAMPLES behind the nominal position no matter what the ratio
+// is, so the buffer margin does not care; the nominal position still
+// advances at the speed ratio alone, so the SD bandwidth does not care; and
+// it is two taps either way, so the CPU does not care. What changes with
+// range is only the *character*: shifting up reads faster and aliases (past
+// a read rate of about 2x, high frequencies fold down and go crunchy), and
+// the grain rate rises as |1 - pitchRatio| grows, so at wide settings the
+// crossfade seam climbs into the audible band and the shifter starts to
+// behave like a ring modulator. At +2 octaves the grains tick past at around
+// 70Hz. That is a straightforwardly musical effect rather than a malfunction,
+// so the limit is taste, not headroom - push these numbers and see.
+// NOTE these are octaves EITHER SIDE of unity, so the full sweep is twice
+// this many octaves and takes PITCH_TURNS_PER_OCTAVE * 2 * range turns end to
+// end. At the values below that is ten octaves across ten turns of the knob -
+// a long way, but this pot spins freely and the far ends are meant to be a
+// destination you go looking for.
+const float PITCH_OCTAVE_RANGE = 5.0f;      // +/- octaves
+const float PITCH_TURNS_PER_OCTAVE = 1.0f;  // physical turns to travel one octave
+
+// Accumulated physical degrees spanning the whole dial, top end to bottom.
+const float PITCH_KNOB_SPAN_DEGREES =
+    360.0f * PITCH_TURNS_PER_OCTAVE * PITCH_OCTAVE_RANGE * 2.0f;
+
+// Takes a position along the dial in [0,360] - NOT wrapped, see the control
+// block - and returns the pitch ratio. Exponential in ratio, so equal
+// rotation buys equal musical intervals. The deadband exists so unity is
+// findable by hand rather than being an infinitely thin point on the dial.
+float angleToPitchRatio(float dialAngle) {
+  float t = 1.0f - (dialAngle / 180.0f);  // +1 .. -1, same sense as speed
   float magT = fabsf(t);
   if (magT < PITCH_DEADBAND_T) return 1.0f;
   float scaledT = (magT - PITCH_DEADBAND_T) / (1.0f - PITCH_DEADBAND_T);
-  return powf(2.0f, copysignf(scaledT, t));  // 2^(+/-1) == one octave either way
+  return powf(2.0f, copysignf(scaledT * PITCH_OCTAVE_RANGE, t));
 }
 
 // Retained from when touch1 gated a fast/slow sweep; touch1 is the mode
@@ -745,6 +785,41 @@ void rewindToStart() {
   }
 
   audioTimer.enable_overflow_irq();
+}
+
+// Loads the first file on the card this demo can actually play. Returns
+// whether anything was cued. See the call site in setup() for why.
+bool cueFirstPlayableFile() {
+  DIR *dir = opendir("/sd");
+  if (!dir) {
+    Serial.println("Could not open /sd to look for a file to cue.");
+    return false;
+  }
+
+  struct dirent *ent;
+  while ((ent = readdir(dir)) != nullptr) {
+    if (ent->d_type != DT_REG) continue;
+    String name(ent->d_name);
+    String upper = name;
+    upper.toUpperCase();
+    if (!upper.endsWith(".WAV")) continue;
+
+    String err;
+    if (loadFile(name, err)) {
+      closedir(dir);
+      Serial.print("Cued ");
+      Serial.println(name);
+      return true;
+    }
+    Serial.print("  skipping ");
+    Serial.print(name);
+    Serial.print(" - ");
+    Serial.println(err);
+  }
+
+  closedir(dir);
+  Serial.println("No playable file found on the card - waiting for a BLE PLAY command.");
+  return false;
 }
 
 // -- BLE control -------------------------------------------------------
@@ -1168,15 +1243,19 @@ void setup() {
     while (1) {}
   }
 
-  // Deliberately does not auto-load anything at boot: the board starts
-  // silent and idle, with no SD reads happening in loop() at all, until
-  // a BLE PLAY: command picks a file (see fileLoaded's use in loop()).
-  // This isn't just a UX choice - loop()'s greedy SD refill (however
-  // brief per call) turned out to be a real suspect for corrupting
-  // inbound BLE UART traffic during testing, and never touching the SD
-  // card until a file is actually wanted removes that variable entirely
-  // during the always-important connect/LIST moment.
-  Serial.println("No file loaded yet - waiting for a BLE PLAY command.");
+  // Cue the first file the demo can actually play, so the board is usable
+  // standing on its own - hold the transport pad and it makes a sound, with
+  // no phone, no browser and no BLE connection needed. Skipping files that
+  // fail to load matters on a real card: a sample library is full of stereo,
+  // 24-bit, float and WAVE_FORMAT_EXTENSIBLE files this demo cannot open, and
+  // stopping at the first *name* rather than the first playable file would
+  // leave it silent for no visible reason.
+  //
+  // This does not reintroduce the SD activity the demo used to avoid: with
+  // the transport stopped, step is 0 and loop()'s refill takes its explicit
+  // paused branch, so nothing touches the card until playback actually
+  // starts. And it all happens long before any BLE connection exists.
+  cueFirstPlayableFile();
 
   // Open and start both DAC channels through the normal Arduino path
   // once, then let the audio interrupt write the data register
@@ -1318,29 +1397,49 @@ void loop() {
     float physicalNow = knob1.read();
     if (physicalNow != -1.0f) {
       // Whichever mode is active drives its own accumulator; the other
-      // simply holds its value until selected again.
-      float *knobDegrees = pitchMode ? &pitchKnobDegrees : &speedKnobDegrees;
-      bool *knobAnchored = pitchMode ? &pitchKnobAnchored : &speedKnobAnchored;
-
-      if (!*knobAnchored) {
-        // First calibration, or a reset just requested one (new file
-        // loaded): anchor the virtual knob at native (1.0x) speed right
-        // here, ignoring physicalNow's absolute position entirely - the
-        // whole point of relative control is that wherever the real
-        // knob happens to be sitting doesn't matter.
-        *knobDegrees = (pitchMode ? PITCH_NEUTRAL_ANGLE : angleForRatio(1.0f)) *
-                        TURNS_PER_SWEEP * 2.0f;
-        *knobAnchored = true;
-      } else {
-        *knobDegrees += physicalNow - lastPhysicalKnobDegrees;
-      }
+      // simply holds its value until selected again. lastPhysicalKnobDegrees
+      // is shared and updated every tick either way, which is what makes a
+      // mode switch seamless instead of jumpy.
+      float delta = physicalNow - lastPhysicalKnobDegrees;
       lastPhysicalKnobDegrees = physicalNow;
 
-      float angle = knobAngle(*knobDegrees, TURNS_PER_SWEEP);
-      if (angle >= 0) {
-        if (pitchMode) {
-          pitchRatio = angleToPitchRatio(angle);
+      if (pitchMode) {
+        if (!pitchKnobAnchored) {
+          pitchKnobDegrees = PITCH_KNOB_SPAN_DEGREES * 0.5f;  // unity, mid-dial
+          pitchKnobAnchored = true;
         } else {
+          pitchKnobDegrees += delta;
+        }
+
+        // Pitch parks at its extremes instead of wrapping round to the
+        // opposite one. Speed wraps deliberately - its dial is continuous
+        // through the seam, since fastest-forward and fastest-backward are
+        // genuinely adjacent ideas. Pitch has two hard ends and running off
+        // one to reappear at the other is just disorienting, so the
+        // accumulator is clamped and the dial position computed directly
+        // rather than through knobAngle()'s fmod.
+        if (pitchKnobDegrees < 0.0f) pitchKnobDegrees = 0.0f;
+        if (pitchKnobDegrees > PITCH_KNOB_SPAN_DEGREES) {
+          pitchKnobDegrees = PITCH_KNOB_SPAN_DEGREES;
+        }
+
+        pitchRatio = angleToPitchRatio(
+            (pitchKnobDegrees / PITCH_KNOB_SPAN_DEGREES) * 360.0f);
+      } else {
+        if (!speedKnobAnchored) {
+          // First calibration, or a reset just requested one (new file
+          // loaded): anchor the virtual knob at native (1.0x) speed right
+          // here, ignoring physicalNow's absolute position entirely - the
+          // whole point of relative control is that wherever the real
+          // knob happens to be sitting doesn't matter.
+          speedKnobDegrees = angleForRatio(1.0f) * TURNS_PER_SWEEP * 2.0f;
+          speedKnobAnchored = true;
+        } else {
+          speedKnobDegrees += delta;
+        }
+
+        float angle = knobAngle(speedKnobDegrees, TURNS_PER_SWEEP);
+        if (angle >= 0) {
           float ratio = angleToSpeedRatio(angle);
           lastKnownRatio = ratio;
           if (ratio < minRatioSeen) minRatioSeen = ratio;

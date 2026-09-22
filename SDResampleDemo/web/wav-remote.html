@@ -212,6 +212,12 @@
     flex-shrink: 0;
     white-space: nowrap;
   }
+  /* The speed tile showing what the transport *would* run at, rather than
+     what it is doing - see handleStats(). */
+  .value.potential {
+    color: var(--text-dim);
+  }
+
   .transport.running {
     color: var(--surface-2);
     background: var(--good);
@@ -442,6 +448,7 @@
       transportEl.textContent = "—";
       transportEl.classList.remove("running");
       speedEl.innerHTML = "&mdash;<span class=\"unit\">x</span>";
+      speedEl.classList.remove("potential");
       bufferEl.innerHTML = "&mdash;<span class=\"unit\">%</span>";
       underrunsEl.textContent = "—";
       underrunsEl.classList.remove("bad");
@@ -518,19 +525,29 @@
     log(`! ${filename}: ${reason}`);
   }
 
-  // The board sends a stats line like "SPD:2.35,BUF:78,UND:0,RUN:1\n"
+  // The board sends a stats line like
+  // "SPD:2.35,REQ:2.35,BUF:78,UND:0,RUN:1\n"
   // (see SDResampleDemo.ino's header
   // comment) over the DSPS pipe once Binary mode is active.
   function handleTelemetry(line) {
     const parts = Object.fromEntries(
       line.split(",").map((p) => p.split(":")).filter((kv) => kv.length === 2)
     );
-    if (parts.SPD !== undefined) speedEl.innerHTML = `${Number(parts.SPD).toFixed(2)}<span class="unit">x</span>`;
+    // While stopped, SPD: is the effective ratio and so reads 0.00 - which
+    // would throw away the speed setting every time the tape is stopped.
+    // Show REQ: (what the knob is asking for) instead, dimmed, so the tile
+    // reads as "this is what it would run at" rather than a live value.
+    const running = parts.RUN === "1";
+    const showPotential = !running && parts.REQ !== undefined;
+    const shownSpeed = showPotential ? parts.REQ : parts.SPD;
+    if (shownSpeed !== undefined) {
+      speedEl.innerHTML = `${Number(shownSpeed).toFixed(2)}<span class="unit">x</span>`;
+      speedEl.classList.toggle("potential", showPotential);
+    }
     if (parts.BUF !== undefined) {
       bufferEl.innerHTML = `${parts.BUF}<span class="unit">%</span>`;
     }
     if (parts.RUN !== undefined) {
-      const running = parts.RUN === "1";
       transportEl.textContent = running ? "Running" : "Stopped";
       transportEl.classList.toggle("running", running);
     }

@@ -144,7 +144,14 @@
   file is a normal, reported failure, not a hang. The periodic stats line
   carries `RUN:0|1` alongside `SPD:`/`BUF:`/`UND:`, so a client can show
   whether the transport is running. `SPD:` is the effective ratio, so it
-  reads 0.00 while stopped and follows scrub while running. This demo only plays
+  reads 0.00 while stopped and follows scrub while running; `REQ:` is the
+  speed knob's requested ratio, which survives being stopped, so a client
+  can show what the transport *would* run at.
+
+  Transport: touch pad D21 held runs the tape, released stops it. Starting
+  rewinds to the top of the file, so each press plays from the beginning
+  rather than resuming where scrubbing left off. Scrubbing still works while
+  stopped - that is the point of expressing "stopped" as a speed of zero. This demo only plays
   mono 16-bit PCM; picking anything else from the pile of real-world
   samples (stereo, 8/24-bit, float, WAVE_FORMAT_EXTENSIBLE - all present
   on a real sample library) will cleanly error via BLE until WavReader
@@ -520,6 +527,43 @@ bool loadFile(const String &filename, String &errorOut) {
   currentFilename = filename;
   fileLoaded = true;
   return true;
+}
+
+// Returns the playback cursor to the top of the file.
+//
+// Called when the transport starts, so every press of the pad plays from the
+// beginning rather than resuming wherever scrubbing left off - the tape deck
+// metaphor's rewind, folded into play.
+//
+// Takes the same care loadFile() does around the shared playback state: the
+// audio interrupt reads resampler.index and the ring buffer continuously, so
+// it is disabled across the whole swap rather than trusting any single
+// write to be atomic. The buffer is re-primed before the interrupt comes
+// back, for the same reason loadFile() primes - so playback does not wake
+// into an instant underrun. Priming does block loop() briefly, which is
+// acceptable here for the same reason it is in loadFile(): it happens on a
+// deliberate, occasional user action, and nothing is playing at that instant
+// anyway.
+void rewindToStart() {
+  audioTimer.disable_overflow_irq();
+
+  ring.reset();
+  resampler.index = 0;
+  resampler.frac = 0.0f;
+  lastGoodSample = 0;   // don't carry a stale sample across the jump
+  // Same per-playback logic as loadFile(): the interesting figure is how
+  // this pass underruns, not one accumulated across every previous pass.
+  underrunTicks = 0;
+
+  int16_t primer[1024];
+  while (ring.freeSpace() >= 1024) {
+    uint32_t offset = fileOffsetFor(ring.validHigh(), wav.totalSamples());
+    size_t got = wav.readSamplesAt(offset, primer, 1024);
+    if (got == 0) break;
+    ring.pushHigh(primer, got);
+  }
+
+  audioTimer.enable_overflow_irq();
 }
 
 // -- BLE control -------------------------------------------------------
@@ -1146,7 +1190,12 @@ void loop() {
     // "knob1 parked at its pause deadband" case the scrub was designed
     // around, now reachable with a finger instead of by hunting for the
     // deadband.
-    transportRunning = touch2.isTouched();
+    // Edge-triggered, not level: rewind once when the pad is first pressed,
+    // not on every control tick while it is held down.
+    bool nowRunning = touch2.isTouched();
+    if (nowRunning && !transportRunning && fileLoaded) rewindToStart();
+    transportRunning = nowRunning;
+
     float transportRatio = transportRunning ? lastKnownRatio : 0.0f;
 
     // Scrub gain follows the *effective* ratio, not the knob's. Stopped with
@@ -1211,7 +1260,13 @@ void loop() {
       // of this field and RUN: does not change it - but it does mean a
       // client cannot show "1.5x (stopped)"; the requested ratio would need
       // its own field.
+      // REQ: is the speed knob's *requested* ratio, which SPD: cannot show
+      // while stopped (SPD: is the effective ratio, so it reads 0.00 then).
+      // Lets a client display the speed the transport would run at if
+      // started, rather than losing the setting whenever the tape is
+      // stopped.
       String stat = "SPD:" + String(ratio, 2) +
+                     ",REQ:" + String(lastKnownRatio, 2) +
                      ",BUF:" + String((int)fillPercent) + ",UND:" + String(underrunTicks) +
                      ",RUN:" + String(transportRunning ? 1 : 0);
       if (probing) {

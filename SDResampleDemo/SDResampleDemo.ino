@@ -19,8 +19,8 @@
   that makes speed changes and any resampling artifacts obvious by ear.
   Otherwise same as DACAudioTest (3.5mm jack on A0/A1/GND) plus two pots
   (RV112FF wipers on A2/A3 for speed, A4/A5 for tape scrub, both pots'
-  track ends on 3.3V/GND) and two CapTouch pads (D20 gates the speed
-  knob's fast/slow sweep and, chorded with D21, latches the transport;
+  track ends on 3.3V/GND) and two CapTouch pads (D20 toggles knob1 between
+  speed and pitch, and chorded with D21 latches the transport;
   D21 is the transport itself - hold it to run, release to stop; both
   share the TSCAP capacitor on D6 - see CapTouch.h). The onboard WS2812
   on D13 is used as the transport indicator - no extra wiring. The DA14531MOD Bluetooth
@@ -160,10 +160,23 @@
   still works while stopped - that is the point of expressing "stopped" as a
   speed of zero.
 
-  The onboard WS2812 on D13 shows transport state: dark when stopped,
-  blinking at half brightness while running from a held finger, steady at
-  full brightness when latched. "Full" is RGBLED_MAX_BRIGHTNESS, which is 20%
-  of what the LED can actually do - it is startlingly bright otherwise. This demo only plays
+  Pitch: pressing D20 on its own (not chorded with D21, which latches)
+  toggles knob1 between setting speed and setting pitch. Each mode keeps its
+  own virtual knob position, so switching back and forth leaves both settings
+  where they were, and pitch survives a file change since it is a setting the
+  player dialled in rather than a property of the file. Range is one octave
+  either way. Speed and pitch are genuinely independent: the nominal playback
+  position still advances at the speed ratio alone - which is what the SD
+  refill is built around - while a two-tap granular shifter reads around it
+  at speed * pitch. See the pitch shifting comment further down for how that
+  works and what it costs.
+
+  The onboard WS2812 on D13 shows both: dark when stopped, blinking at half
+  brightness while running from a held finger, steady at full brightness when
+  latched - green while knob1 sets speed, blue while it sets pitch. "Full" is
+  RGBLED_MAX_BRIGHTNESS, which is 20% of what the LED can actually do - it is
+  startlingly bright otherwise. Note the mode is not visible while stopped,
+  since the LED is dark then. This demo only plays
   mono 16-bit PCM; picking anything else from the pile of real-world
   samples (stereo, 8/24-bit, float, WAVE_FORMAT_EXTENSIBLE - all present
   on a real sample library) will cleanly error via BLE until WavReader
@@ -328,8 +341,26 @@ float angleForRatio(float ratio) {
   return (1.0f - t) * 180.0f;
 }
 
-const float TURNS_PER_SWEEP_FAST = 0.5f;
-const float TURNS_PER_SWEEP_SLOW = 2.0f;
+// Maps the same [0,360) knob angle onto a pitch ratio, one octave either
+// way, with the same direction sense and the same exponential feel as the
+// speed mapping - exponential in ratio means equal rotation buys equal
+// musical intervals, which is the only mapping that feels right for pitch.
+// The deadband exists so unity is findable by hand rather than being an
+// infinitely thin point on the dial.
+const float PITCH_DEADBAND_T = 0.02f;
+const float PITCH_NEUTRAL_ANGLE = 180.0f;  // where angleToPitchRatio() returns 1.0
+
+float angleToPitchRatio(float wrappedAngle) {
+  float t = 1.0f - (wrappedAngle / 180.0f);  // +1 .. -1, same sense as speed
+  float magT = fabsf(t);
+  if (magT < PITCH_DEADBAND_T) return 1.0f;
+  float scaledT = (magT - PITCH_DEADBAND_T) / (1.0f - PITCH_DEADBAND_T);
+  return powf(2.0f, copysignf(scaledT, t));  // 2^(+/-1) == one octave either way
+}
+
+// Retained from when touch1 gated a fast/slow sweep; touch1 is the mode
+// button now, so one rate serves both modes.
+const float TURNS_PER_SWEEP = 2.0f;
 
 float knobAngle(float accumulatedDegrees, float turnsPerSweep) {
   if (accumulatedDegrees == -1.0f) return -1;
@@ -360,16 +391,26 @@ float knobAngle(float accumulatedDegrees, float turnsPerSweep) {
 // control-rate block below establishes the virtual knob fresh, right at
 // the ratio-1.0 point, the moment it next finds no baseline to diff
 // against.
-float virtualKnobDegrees = 0.0f;
+// One virtual knob per mode, so switching between speed and pitch leaves
+// each setting exactly where it was. lastPhysicalKnobDegrees is shared and
+// updated every tick regardless of mode, which is what makes a mode switch
+// seamless: the first delta after switching is measured from the knob's
+// position now, not from wherever it was when this mode was last active, so
+// nothing jumps.
+float speedKnobDegrees = 0.0f;
+bool speedKnobAnchored = false;
+float pitchKnobDegrees = 0.0f;
+bool pitchKnobAnchored = false;
 float lastPhysicalKnobDegrees = 0.0f;
-bool virtualKnobAnchored = false;
 
 // Doesn't touch virtualKnobDegrees directly - just clears the baseline
 // so the control-rate block (which alone knows the current
 // touch-gated turnsPerSweep) re-anchors it at native speed on its very
 // next tick. Safe to call from anywhere, at any time.
 void resetVirtualKnobToNative() {
-  virtualKnobAnchored = false;
+  // Speed only. Pitch deliberately survives a file change: it is a setting
+  // the player has dialled in, not a property of the file.
+  speedKnobAnchored = false;
 }
 
 // -- SD card and WAV source -----------------------------------------------
@@ -408,6 +449,72 @@ volatile float currentStep = 1.0f;
 volatile int16_t lastGoodSample = 0;
 volatile uint32_t underrunTicks = 0;
 
+// -- Pitch shifting -------------------------------------------------------
+//
+// Speed and pitch are coupled by resampling alone: play a file faster and it
+// gets higher, exactly like a tape. Decoupling them needs one extra
+// primitive, time-stretching, and then:
+//
+//   pitch shift = resample by r  +  time-stretch by 1/r
+//   speed change = time-stretch alone
+//
+// The resampler already does the first half. What is added here is the
+// second: a two-tap crossfading granular shifter, the cheapest useful
+// time-stretcher there is. No FFT, no correlation search - the read position
+// is simply held at a slowly-ramping offset behind the nominal playback
+// position, and when that offset has ramped a whole grain it wraps, with a
+// second tap half a grain out of phase crossfading over the seam.
+//
+// Effective read rate = speed * pitchRatio, while the nominal position (and
+// so the duration, and so everything the SD refill is built around) still
+// advances at speed alone. Concretely, with offset o and nominal rate v:
+//
+//   d(read)/dt = v - d(o)/dt  ==>  d(o)/dt = (1 - pitchRatio) * |v|
+//
+// Both taps therefore read *behind* the nominal position in the direction of
+// travel, never ahead, whichever way the tape is running - which matters,
+// because it means the shifter needs history the ring buffer already keeps
+// (REVERSAL_MARGIN) and no lookahead the refill would have to be taught.
+//
+// The artifact is a periodic warble, worst on sustained tones, getting more
+// obvious the further pitchRatio is from 1. That is the price of skipping
+// the correlation search; WSOLA is the upgrade path if it grates.
+const float PITCH_MIN_RATIO = 0.5f;   // one octave down
+const float PITCH_MAX_RATIO = 2.0f;   // one octave up
+
+// Grain length, in source samples. ~46ms at 44.1kHz: long enough that the
+// grain rate stays below the audible range at moderate shifts, short enough
+// to avoid obvious flanging. MUST stay well under REVERSAL_MARGIN (4096 in
+// loop()), since that is what guarantees the samples a tap reaches back for
+// are still in the ring.
+const float GRAIN_LENGTH_SAMPLES = 2048.0f;
+
+// Below this distance from unity the shifter is bypassed entirely and the
+// single-tap path runs instead. Not just an optimisation: with the offset
+// ramp stopped, the two taps sit at fixed different delays and sum into a
+// comb filter, so unity pitch has to be a special case rather than a limit.
+const float PITCH_BYPASS_EPSILON = 0.001f;
+
+volatile float pitchRatio = 1.0f;   // written by loop(), read by the audio ISR
+volatile float grainOffset = 0.0f;  // ISR-owned; source samples behind nominal
+
+// Hann window, precomputed. At 50% overlap two Hann windows sum to exactly
+// 1.0, so the crossfade is unity-gain with no correction term - and each tap
+// is silent exactly where its own grain wraps, which is what hides the seam.
+const uint16_t HANN_LUT_SIZE = 512;  // power of two, so the index masks
+float hannLut[HANN_LUT_SIZE];
+
+inline float hannAt(float phase01) {
+  uint16_t i = (uint16_t)(phase01 * (float)HANN_LUT_SIZE) & (HANN_LUT_SIZE - 1);
+  return hannLut[i];
+}
+
+// True while knob1 is adjusting pitch instead of speed. Toggled by touch1
+// (pressed on its own - chorded with touch2 it latches the transport
+// instead). Each mode keeps its own virtual knob position, so switching back
+// and forth leaves both settings where they were.
+bool pitchMode = false;
+
 // Transport state, as of the last control tick. Only loop() touches it -
 // the audio ISR has no opinion about it, since stopping is expressed purely
 // as a step of zero. Reported over BLE as RUN: so the web page can show it.
@@ -432,8 +539,39 @@ float maxRatioSeen = -1e9f;
 
 FspTimer audioTimer;
 
-void audioCallback(timer_callback_args_t *args) {
+// Reads one interpolated sample at an arbitrary fractional source position.
+// Same Catmull-Rom kernel the single-tap path uses, just with the position
+// supplied rather than taken from the resampler.
+inline bool readInterpolated(float pos, float &out) {
+  int32_t idx = (int32_t)floorf(pos);
+  float frac = pos - (float)idx;
   int16_t y[4];
+  if (!ring.peek4(idx, y)) return false;
+  out = catmullRom(y[0], y[1], y[2], y[3], frac);
+  return true;
+}
+
+// Two-tap granular read - see the pitch shifting comment above for the
+// derivation. Both taps sit behind the nominal position in the direction of
+// travel; their Hann envelopes are driven by the same ramp that moves them,
+// so each tap is silent exactly where its own grain wraps.
+inline bool readGrains(float nominalPos, float step, float &out) {
+  float dir = (step < 0.0f) ? -1.0f : 1.0f;
+
+  float offsetA = grainOffset;
+  float offsetB = offsetA + GRAIN_LENGTH_SAMPLES * 0.5f;
+  if (offsetB >= GRAIN_LENGTH_SAMPLES) offsetB -= GRAIN_LENGTH_SAMPLES;
+
+  float a, b;
+  if (!readInterpolated(nominalPos - dir * offsetA, a)) return false;
+  if (!readInterpolated(nominalPos - dir * offsetB, b)) return false;
+
+  out = a * hannAt(offsetA / GRAIN_LENGTH_SAMPLES) +
+        b * hannAt(offsetB / GRAIN_LENGTH_SAMPLES);
+  return true;
+}
+
+void audioCallback(timer_callback_args_t *args) {
   int16_t outSample;
 
   if (!fileLoaded) {
@@ -444,17 +582,45 @@ void audioCallback(timer_callback_args_t *args) {
     // for as long as the board sat at the menu. Hold the output steady and
     // leave the resampler alone.
     outSample = lastGoodSample;
-  } else if (ring.peek4(resampler.index, y)) {
-    outSample = (int16_t)catmullRom(y[0], y[1], y[2], y[3], resampler.frac);
-    lastGoodSample = outSample;
-    // No ring.release() anymore: the consumer no longer publishes
-    // anything back through the ring buffer at all - the producer
-    // (loop()) decides reclaim policy itself, based on direction. See
-    // RingBuffer.h's header comment and loop()'s refill logic.
-    resampler.advance(currentStep);
   } else {
-    outSample = lastGoodSample;  // hold the last good sample - see header comment
-    underrunTicks++;
+    float step = currentStep;
+    float p = pitchRatio;
+    float nominalPos = (float)resampler.index + resampler.frac;
+
+    bool shifting = fabsf(p - 1.0f) >= PITCH_BYPASS_EPSILON;
+
+    float sample;
+    bool ok = shifting ? readGrains(nominalPos, step, sample)
+                        : readInterpolated(nominalPos, sample);
+    // A tap can reach past the start of the buffer in the moments right
+    // after a rewind, when there is no history behind position 0 yet.
+    // Falling back to the unpitched read costs a brief pitch glitch there
+    // and nothing else, which beats reporting an underrun that isn't one.
+    if (!ok && shifting) ok = readInterpolated(nominalPos, sample);
+
+    if (ok) {
+      if (sample > 32767.0f) sample = 32767.0f;
+      if (sample < -32768.0f) sample = -32768.0f;
+      outSample = (int16_t)sample;
+      lastGoodSample = outSample;
+
+      // Ramp the grain offset by (1 - pitchRatio) * |step| and wrap it into
+      // one grain - the wrap is the splice the crossfade exists to hide.
+      if (shifting) {
+        float o = grainOffset + (1.0f - p) * fabsf(step);
+        if (o >= GRAIN_LENGTH_SAMPLES) o -= GRAIN_LENGTH_SAMPLES;
+        else if (o < 0.0f) o += GRAIN_LENGTH_SAMPLES;
+        grainOffset = o;
+      }
+      // No ring.release() anymore: the consumer no longer publishes
+      // anything back through the ring buffer at all - the producer
+      // (loop()) decides reclaim policy itself, based on direction. See
+      // RingBuffer.h's header comment and loop()'s refill logic.
+      resampler.advance(step);
+    } else {
+      outSample = lastGoodSample;  // hold the last good sample - see header comment
+      underrunTicks++;
+    }
   }
 
   // 16-bit signed -> 12-bit unsigned, same shift-based rescale used
@@ -504,6 +670,7 @@ bool loadFile(const String &filename, String &errorOut) {
   resampler.index = 0;
   resampler.frac = 0.0f;
   lastGoodSample = 0;  // don't carry a stale sample into the new file
+  grainOffset = 0.0f;
   // Per-file, not cumulative: the interesting number is how badly *this*
   // file underruns at the ratio being asked for, which is not comparable
   // across files with different native sample rates anyway. Safe to write
@@ -564,6 +731,7 @@ void rewindToStart() {
   resampler.index = 0;
   resampler.frac = 0.0f;
   lastGoodSample = 0;   // don't carry a stale sample across the jump
+  grainOffset = 0.0f;   // start the next grain cycle from the seam, not mid-crossfade
   // Same per-playback logic as loadFile(): the interesting figure is how
   // this pass underruns, not one accumulated across every previous pass.
   underrunTicks = 0;
@@ -987,6 +1155,10 @@ void setup() {
   touch1.begin();
   touch2.begin();
 
+  for (uint16_t i = 0; i < HANN_LUT_SIZE; i++) {
+    hannLut[i] = 0.5f * (1.0f - cosf(2.0f * PI * (float)i / (float)HANN_LUT_SIZE));
+  }
+
   FastLED.addLeds<WS2812B, RGB_LED_PIN, GRB>(leds, NUM_LEDS);
   leds[0] = CRGB::Black;
   FastLED.show();
@@ -1141,29 +1313,39 @@ void loop() {
     previousControlMillis = currentMillis;
     CapTouch::scan();
 
-    float turnsPerSweep = touch1.isTouched() ? TURNS_PER_SWEEP_FAST : TURNS_PER_SWEEP_SLOW;
+
 
     float physicalNow = knob1.read();
     if (physicalNow != -1.0f) {
-      if (!virtualKnobAnchored) {
+      // Whichever mode is active drives its own accumulator; the other
+      // simply holds its value until selected again.
+      float *knobDegrees = pitchMode ? &pitchKnobDegrees : &speedKnobDegrees;
+      bool *knobAnchored = pitchMode ? &pitchKnobAnchored : &speedKnobAnchored;
+
+      if (!*knobAnchored) {
         // First calibration, or a reset just requested one (new file
         // loaded): anchor the virtual knob at native (1.0x) speed right
         // here, ignoring physicalNow's absolute position entirely - the
         // whole point of relative control is that wherever the real
         // knob happens to be sitting doesn't matter.
-        virtualKnobDegrees = angleForRatio(1.0f) * turnsPerSweep * 2.0f;
-        virtualKnobAnchored = true;
+        *knobDegrees = (pitchMode ? PITCH_NEUTRAL_ANGLE : angleForRatio(1.0f)) *
+                        TURNS_PER_SWEEP * 2.0f;
+        *knobAnchored = true;
       } else {
-        virtualKnobDegrees += physicalNow - lastPhysicalKnobDegrees;
+        *knobDegrees += physicalNow - lastPhysicalKnobDegrees;
       }
       lastPhysicalKnobDegrees = physicalNow;
 
-      float angle = knobAngle(virtualKnobDegrees, turnsPerSweep);
+      float angle = knobAngle(*knobDegrees, TURNS_PER_SWEEP);
       if (angle >= 0) {
-        float ratio = angleToSpeedRatio(angle);
-        lastKnownRatio = ratio;
-        if (ratio < minRatioSeen) minRatioSeen = ratio;
-        if (ratio > maxRatioSeen) maxRatioSeen = ratio;
+        if (pitchMode) {
+          pitchRatio = angleToPitchRatio(angle);
+        } else {
+          float ratio = angleToSpeedRatio(angle);
+          lastKnownRatio = ratio;
+          if (ratio < minRatioSeen) minRatioSeen = ratio;
+          if (ratio > maxRatioSeen) maxRatioSeen = ratio;
+        }
       }
     }
     // else: pot not yet calibrated - lastKnownRatio keeps whatever it
@@ -1258,7 +1440,19 @@ void loop() {
     bool touch1Now = touch1.isTouched();
     bool touch2Now = touch2.isTouched();
 
-    if (touch1Now && !touch1WasTouched && touch2Now) transportLatched = true;
+    // touch1 pressed on its own toggles pitch mode; chorded with touch2 it
+    // latches the transport instead. One button, two jobs, disambiguated by
+    // whether the other pad is down - which is exactly how the latch was
+    // already specified, so nothing had to move.
+    if (touch1Now && !touch1WasTouched) {
+      if (touch2Now) {
+        transportLatched = true;
+      } else {
+        pitchMode = !pitchMode;
+        Serial.print("Knob 1 now adjusts ");
+        Serial.println(pitchMode ? "PITCH" : "SPEED");
+      }
+    }
     if (touch2Now && !touch2WasTouched && transportLatched) transportLatched = false;
 
     touch1WasTouched = touch1Now;
@@ -1296,14 +1490,22 @@ void loop() {
     if (blinking && !wasBlinking) blinkPhaseStartMillis = currentMillis;
     wasBlinking = blinking;
 
-    CRGB wanted = CRGB::Black;
+    // Colour carries the knob's mode, brightness and blink carry the
+    // transport: green while knob1 sets speed, blue while it sets pitch.
+    // Without this the mode toggle is completely invisible - you would have
+    // to turn the knob and listen to find out which one you were in.
+    uint8_t level = 0;
     if (transportLatched) {
-      wanted = CRGB(0, rgbLevel(RGBLED_MAX_BRIGHTNESS), 0);
+      level = RGBLED_MAX_BRIGHTNESS;
     } else if (blinking) {
       unsigned long phase = currentMillis - blinkPhaseStartMillis;
-      bool blinkOn = ((phase / RGBLED_BLINK_INTERVAL) % 2) == 0;
-      if (blinkOn) wanted = CRGB(0, rgbLevel(RGBLED_DIM_BRIGHTNESS), 0);
+      if (((phase / RGBLED_BLINK_INTERVAL) % 2) == 0) level = RGBLED_DIM_BRIGHTNESS;
     }
+
+    CRGB wanted = level == 0
+                      ? CRGB::Black
+                      : (pitchMode ? CRGB(0, 0, rgbLevel(level))
+                                   : CRGB(0, rgbLevel(level), 0));
     if (wanted != leds[0]) {
       leds[0] = wanted;
       FastLED.show();

@@ -52,7 +52,35 @@ void CapTouch::finishReading(uint16_t raw, uint16_t reference) {
     return;
   }
 
-  bool touchedNow = ((float)raw - _baseline) >= (float)_threshold;
+  bool candidate = ((float)raw - _baseline) >= (float)_threshold;
+
+  // Debounce: only accept a change of state once the same answer has come
+  // back _debounceSamples scans running.
+  //
+  // The threshold comparison alone is a bare test of a single sample, so one
+  // noisy reading flips isTouched() for exactly one scan. That is invisible
+  // in a demo that merely displays or colours something from it - a
+  // one-scan blip among fifty a second - but it is not harmless to anything
+  // edge-triggered. Confirmed live: a sketch that latched its transport on
+  // a rising edge picked up spurious latches with nobody touching the pad,
+  // while the plotter demo on the same hardware looked perfectly clean. The
+  // glitches were always there; only the consumer changed.
+  //
+  // Requiring agreement across consecutive scans costs one scan interval of
+  // latency per state change (20-30ms at the rates these sketches run) and
+  // rejects any disturbance shorter than that outright.
+  if (candidate == _touched) {
+    _pendingScans = 0;
+  } else if (++_pendingScans < _debounceSamples) {
+    // Not yet convinced - hold the current state and let the rest of this
+    // function carry on with it, so baseline adaptation and the stuck
+    // timeout keep behaving as though nothing happened.
+    candidate = _touched;
+  } else {
+    _pendingScans = 0;
+  }
+
+  bool touchedNow = candidate;
 
   if (touchedNow) {
     if (_touchStartMillis == 0) {

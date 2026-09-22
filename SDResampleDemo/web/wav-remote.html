@@ -198,6 +198,26 @@
     text-transform: uppercase;
     color: var(--text-dim);
   }
+  /* Transport state, from the stats line's RUN: field - the board runs only
+     while its touch pad is held, so this flips constantly in normal use. */
+  .transport {
+    font-family: "Oswald", "Arial Narrow", sans-serif;
+    font-size: 0.66rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+  .transport.running {
+    color: var(--surface-2);
+    background: var(--good);
+    border-color: var(--good);
+  }
+
   .nowPlaying .filename {
     font-family: "IBM Plex Mono", ui-monospace, monospace;
     font-size: 0.85rem;
@@ -322,6 +342,7 @@
   <div class="nowPlaying">
     <span class="label">Now&nbsp;Playing</span>
     <span class="filename" id="nowPlaying">&mdash;</span>
+    <span class="transport" id="transport">&mdash;</span>
   </div>
 
   <div class="readouts">
@@ -394,6 +415,7 @@
   const speedEl = document.getElementById("speed");
   const bufferEl = document.getElementById("buffer");
   const underrunsEl = document.getElementById("underruns");
+  const transportEl = document.getElementById("transport");
   const fileListEl = document.getElementById("fileList");
   const logBody = document.getElementById("logBody");
   const copyLogBtn = document.getElementById("copyLogBtn");
@@ -417,6 +439,8 @@
     refreshBtn.disabled = !connected;
     if (!connected) {
       nowPlaying.textContent = "—";
+      transportEl.textContent = "—";
+      transportEl.classList.remove("running");
       speedEl.innerHTML = "&mdash;<span class=\"unit\">x</span>";
       bufferEl.innerHTML = "&mdash;<span class=\"unit\">%</span>";
       underrunsEl.textContent = "—";
@@ -494,8 +518,8 @@
     log(`! ${filename}: ${reason}`);
   }
 
-  // The board sends a stats line like "SPD:2.35,MIN:1.000,MAX:3.500,
-  // BUF:78,UND:0,FILE:AUDIO.WAV\n" (see SDResampleDemo.ino's header
+  // The board sends a stats line like "SPD:2.35,BUF:78,UND:0,RUN:1\n"
+  // (see SDResampleDemo.ino's header
   // comment) over the DSPS pipe once Binary mode is active.
   function handleTelemetry(line) {
     const parts = Object.fromEntries(
@@ -504,6 +528,11 @@
     if (parts.SPD !== undefined) speedEl.innerHTML = `${Number(parts.SPD).toFixed(2)}<span class="unit">x</span>`;
     if (parts.BUF !== undefined) {
       bufferEl.innerHTML = `${parts.BUF}<span class="unit">%</span>`;
+    }
+    if (parts.RUN !== undefined) {
+      const running = parts.RUN === "1";
+      transportEl.textContent = running ? "Running" : "Stopped";
+      transportEl.classList.toggle("running", running);
     }
     if (parts.UND !== undefined) {
       underrunsEl.textContent = parts.UND;

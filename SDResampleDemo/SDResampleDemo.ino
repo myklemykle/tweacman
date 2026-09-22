@@ -19,8 +19,9 @@
   that makes speed changes and any resampling artifacts obvious by ear.
   Otherwise same as DACAudioTest (3.5mm jack on A0/A1/GND) plus two pots
   (RV112FF wipers on A2/A3 for speed, A4/A5 for tape scrub, both pots'
-  track ends on 3.3V/GND) and one CapTouch pad (D20, with the shared
-  TSCAP capacitor on D6 - see CapTouch.h). The DA14531MOD Bluetooth
+  track ends on 3.3V/GND) and two CapTouch pads (D20 gates the speed
+  knob's fast/slow sweep, D21 is the transport - hold it to run, release
+  to stop; both share the TSCAP capacitor on D6 - see CapTouch.h). The DA14531MOD Bluetooth
   module used for BLE control is already onboard -
   no extra wiring for that part.
 
@@ -140,7 +141,10 @@
   `LIST` requests a `FILES:BEGIN`/one-name-per-line/`FILES:END` block;
   `PLAY:<name>` requests a switch, answered with `PLAYING:<name>` on
   success or `ERR:<name>:<reason>` on failure - a bad or unsupported
-  file is a normal, reported failure, not a hang. This demo only plays
+  file is a normal, reported failure, not a hang. The periodic stats line
+  carries `RUN:0|1` alongside `SPD:`/`BUF:`/`UND:`, so a client can show
+  whether the transport is running. `SPD:` is the effective ratio, so it
+  reads 0.00 while stopped and follows scrub while running. This demo only plays
   mono 16-bit PCM; picking anything else from the pile of real-world
   samples (stereo, 8/24-bit, float, WAVE_FORMAT_EXTENSIBLE - all present
   on a real sample library) will cleanly error via BLE until WavReader
@@ -383,6 +387,11 @@ Resampler resampler;
 volatile float currentStep = 1.0f;
 volatile int16_t lastGoodSample = 0;
 volatile uint32_t underrunTicks = 0;
+
+// Transport state, as of the last control tick. Only loop() touches it -
+// the audio ISR has no opinion about it, since stopping is expressed purely
+// as a step of zero. Reported over BLE as RUN: so the web page can show it.
+bool transportRunning = false;
 
 // The knob-requested ratio as of the last control-rate tick, kept
 // outside that block too: loadFile() runs on its own schedule (whenever
@@ -828,6 +837,9 @@ void handleBLELine(const String &line) {
 RV112FF pot1(A2, A3);
 MultiTurnKnob knob1(pot1);
 CapTouch touch1(20);
+// Transport control: held = running, released = stopped. See the control
+// block in loop().
+CapTouch touch2(21);
 
 // The second pot: a tape-scrub control, not a position control - no
 // MultiTurnKnob wrapper needed, since scrubbing only cares about how
@@ -883,6 +895,7 @@ void setup() {
   Serial.println("Or connect over BLE with web/wav-remote.html to pick a file and watch live stats.");
 
   touch1.begin();
+  touch2.begin();
 
   if (sdFs.mount(&sdBlockDevice) != 0) {
     Serial.println("SD card mount failed - check it's inserted and FAT32-formatted.");
@@ -1073,7 +1086,35 @@ void loop() {
     pot2.read();  // drives pot2's own rpm() computation - see RV112FF.h
     // Negated: confirmed live the un-reversed mapping scrubbed opposite
     // the intuitive direction, same as knob1 originally did.
-    float scrub = pot2.isCalibrated() ? -pot2.rpm() * SCRUB_SCALE : 0.0f;
+    // Deadband, in RPM, below which the pot is considered to be at rest.
+    //
+    // pot2 runs a 0.02s rpmSmoothTau (see its declaration) so that scrubbing
+    // feels immediate, and the cost of that short a derivative window is
+    // at-rest jitter - exactly what that comment predicted. Measured on the
+    // bench with both pots calibrated and untouched, pot2's rpm() wandered
+    // up to +/-0.36, which is a step of +/-0.024 and creeps the cursor at
+    // roughly 1-2% of real-time speed: audible as very slow scrubbing while
+    // supposedly stopped.
+    //
+    // NOTE: this figure is sized to the ADC jitter as it stands today. If
+    // that jitter is ever reduced at its source (better filtering, settling
+    // time between channels, hardware changes), come back and re-tune this
+    // down - a deadband wider than the noise it exists to reject is pure
+    // lost sensitivity.
+    //
+    // 0.5 costs almost nothing in responsiveness: a gentle scrub of a
+    // quarter-turn per second is 15 RPM, so this is about 3% of an ordinary
+    // gesture, and the smallest deliberate movement is far above it.
+    //
+    // Subtracted rather than gated, so crossing the threshold ramps up from
+    // zero instead of jumping straight to full deadband width - a hard gate
+    // would make the quietest real scrub start with an audible lurch.
+    const float SCRUB_DEADBAND_RPM = 0.5f;
+
+    float rawRpm = pot2.isCalibrated() ? pot2.rpm() : 0.0f;
+    float scrubRpm = fabsf(rawRpm) - SCRUB_DEADBAND_RPM;
+    if (scrubRpm < 0.0f) scrubRpm = 0.0f;
+    float scrub = -copysignf(scrubRpm, rawRpm) * SCRUB_SCALE;
 
     // Scale the scrub with playback speed, but never below 1x.
     //
@@ -1090,10 +1131,34 @@ void loop() {
     // deadband, where the ratio is 0 - a bare multiply would there
     // multiply the scrub by zero and disable the feature precisely where
     // it matters most. Below 1x the scrub keeps its absolute feel.
-    float speedMagnitude = fabsf(lastKnownRatio);
+    // Transport: touch pad 2 held means running, released means stopped.
+    //
+    // "Stopped" is implemented as a speed of zero rather than as a mode,
+    // because zero is already a fully supported state everywhere downstream:
+    // Resampler.h's advance() leaves index and frac frozen exactly when step
+    // is 0 (that is the entire implementation of pause - audioCallback()
+    // needs no special case), and the direction-aware refill above already
+    // has an explicit "step == 0: paused - deliberately untouched" branch.
+    // So stopping is just declining to add knob1's contribution to the sum.
+    //
+    // Scrub deliberately survives, because it is a separate term: a stopped
+    // tape still moves when you turn the reel by hand. This is the same
+    // "knob1 parked at its pause deadband" case the scrub was designed
+    // around, now reachable with a finger instead of by hunting for the
+    // deadband.
+    transportRunning = touch2.isTouched();
+    float transportRatio = transportRunning ? lastKnownRatio : 0.0f;
+
+    // Scrub gain follows the *effective* ratio, not the knob's. Stopped with
+    // the knob parked at 20x would otherwise give 20x scrub sensitivity
+    // while nothing is playing, which is both twitchy and wrong for the
+    // metaphor - a hand on a stationary reel should feel the same whatever
+    // speed the deck would run at. Floored at 1x, so stopping never makes
+    // scrubbing less effective than it already was.
+    float speedMagnitude = fabsf(transportRatio);
     float scrubGain = (speedMagnitude > 1.0f) ? speedMagnitude : 1.0f;
 
-    currentStep = lastKnownRatio * rateFactor + scrub * scrubGain;
+    currentStep = transportRatio * rateFactor + scrub * scrubGain;
   }
 
   // Deliberately short and infrequent: Serial here is native USB CDC
@@ -1136,8 +1201,19 @@ void loop() {
                     (millis() - probeSentMillis >= BINARY_PROBE_INTERVAL);
     if ((linkMode == LINK_BINARY || probing) && !fileListInProgress() &&
         millis() >= telemetrySuppressedUntilMillis) {
+      // RUN:, not PLAY: - "PLAY:" is already an inbound command meaning
+      // "load and play this file", and reusing it for transport state would
+      // be ambiguous to anyone reading a raw trace.
+      //
+      // Note SPD: is the *effective* ratio (currentStep / rateFactor, just
+      // above), not the knob's requested one, so it reads 0.00 while stopped
+      // and reflects scrub while running. That is the pre-existing meaning
+      // of this field and RUN: does not change it - but it does mean a
+      // client cannot show "1.5x (stopped)"; the requested ratio would need
+      // its own field.
       String stat = "SPD:" + String(ratio, 2) +
-                     ",BUF:" + String((int)fillPercent) + ",UND:" + String(underrunTicks);
+                     ",BUF:" + String((int)fillPercent) + ",UND:" + String(underrunTicks) +
+                     ",RUN:" + String(transportRunning ? 1 : 0);
       if (probing) {
         probeSentMillis = millis();
         awaitingProbeEcho = true;

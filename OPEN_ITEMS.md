@@ -36,13 +36,15 @@ than repeated: see `CodelessPipe_design.md`.
     own while both real pads sit quiet.
   Remaining avenues are all physical: TSCAP capacitor value, a grounded guard
   between the pads, and supply decoupling - i.e. the carrier board.
-  **Re-measure before building on this.** On 2026-09-23 a separate CapTouch
-  bug was found and fixed: under interrupt load, `scan()` could file one
-  pad's result under the other (holding D21 put ~4150-count single-scan
-  spikes on D20; 22 in 15s before the fix, 0 after, with NoiseMeter's
-  DAC/SD/LED loads on). That bug needs the pads to read differently to
-  show, so it probably isn't this no-touch, common-mode effect - but it
-  was load-dependent too, so check whether this one survives the fix.
+  **Probably fixed - re-test.** On 2026-09-23 a separate CapTouch bug was
+  found and fixed: under interrupt load, `scan()` could file one pad's result
+  under the other (holding D21 put ~4150-count single-scan spikes on D20; 22
+  in 15s before the fix, 0 after, with NoiseMeter's DAC/SD/LED loads on).
+  The spurious latching only ever happened while touch2 (D21) was held down,
+  which is exactly when that bug shows, so this is very likely the same
+  thing - the "common-mode" readings above would then have been one pad's
+  value filed under both. Confirm in SDResampleDemo before unparking the
+  physical avenues.
 - **Touch chatter now has consequences.** Latching play is implemented (D20
   chorded with D21). A momentary hold forgives a spurious touch edge as a
   brief dropout, but a latch does not: a stray rising edge on D21 silently
@@ -78,9 +80,11 @@ than repeated: see `CodelessPipe_design.md`.
 
 ## ADC noise on the pots
 
-The throwaway-conversion fix (RV112FF, commit `cc33586`) removed the
-*directional* bias one pot induced in the other. What remains is ordinary
-random jitter, amplified about a hundredfold by differentiating angle into
+Crosstalk between the pots is fixed (2026-09-23): `RA6M5AnalogTuning` sets a
+longer ADC sampling time and discharge-before-sample, measured as cutting it
+from 230-280 counts to about 1, the ADC's noise floor. The sketches call it and
+turn off RV112FF's throwaway read. What remains is ordinary random jitter,
+about 1 count RMS, amplified about a hundredfold by differentiating angle into
 RPM over a 10ms tick.
 
 - **Differentiate over a longer baseline.** Compute `Δangle` over ~50-100ms

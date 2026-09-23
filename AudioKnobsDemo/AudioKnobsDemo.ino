@@ -76,6 +76,7 @@
 
 #include <RV112FF.h>
 #include <MultiTurnKnob.h>
+#include <RA6M5AnalogTuning.h>
 #include <CapTouch.h>
 #include "faust_support.h"
 #include "synth.h"
@@ -218,6 +219,20 @@ void setup() {
 
   touch1.begin();
   touch2.begin();
+
+  // ---- RA6M5-specific ----
+  // Tune the ADC for the pots: a longer sampling time and a discharge
+  // before each conversion, which between them remove the crosstalk
+  // between the two pots (see RA6M5AnalogTuning.h). With that fixed in
+  // hardware, RV112FF's portable workaround - a throwaway conversion
+  // before each reading - is pure overhead, so switch it off. On any
+  // other chip begin() does nothing, and this sketch keeps working as
+  // it did before.
+  if (RA6M5AnalogTuning::begin(A2)) {
+    pot1.setSettlingReads(0);
+    pot2.setSettlingReads(0);
+  }
+  // ---- end RA6M5-specific ----
 
   synth.init(SAMPLE_RATE);
 

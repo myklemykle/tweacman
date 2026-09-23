@@ -18,6 +18,8 @@
     D21   -> touch pad 2
     D6    -> ~10nF capacitor to GND (TSCAP - required for touch sensing)
     A0/A1 -> the audio jack, if you have one (only used by experiment d)
+    A FAT32-formatted micro SD card with at least one file on it (only
+    used by experiment f)
 
   What each trace means (all in raw counts):
 
@@ -101,6 +103,23 @@
         converting. The Arduino core leaves this off. Only makes a
         difference while d is on.
 
+    f - SD card reading. Reads the first file on the card over and over,
+        2KB at a time, as fast as loop() runs - the same chunk size and
+        greedy pace SDResampleDemo streams audio at. Like d, this recreates
+        a noise source rather than fixing one: busy SD traffic is the
+        prime suspect for the spurious touch triggers seen in
+        SDResampleDemo. If the card won't mount or has no files, the STAT
+        LED stays lit for a full second instead of blinking, and f stays
+        off.
+
+    g - RGB LED on. Lights the onboard WS2812 purple at 10% brightness, as
+        the demo sketches light it. The LED dims by switching itself on and
+        off hundreds of times a second, so even a steady colour pulls a
+        pulsing current from the supply.
+
+  d, f and g start off, so the sketch starts in the quietest condition;
+  type "dfg" to switch on all three at once.
+
   Display:
     s - switch between summary and live mode
     t - show/hide the touch traces
@@ -112,7 +131,10 @@
 */
 
 #include <CapTouch.h>
+#include <FastLED.h>
 #include "FspTimer.h"  // for experiment d's audio-rate interrupt
+#include "SDCardBlockDevice.h"
+#include "FATFileSystem.h"
 
 // Each pot's two wiper pins, and a label for each pin in the plot legend.
 const uint8_t POT_PINS[2][2] = { { A2, A3 }, { A4, A5 } };
@@ -146,6 +168,8 @@ bool longSampling = false;   // b
 bool dischargeFirst = false; // c
 bool dacRunning = false;     // d
 bool dacSync = false;        // e
+bool sdReading = false;      // f
+bool ledLit = false;         // g
 
 // Experiment b: the ADC's sampling time, in ADC clock cycles (50MHz on
 // this board, so 20ns each). One register, ADSSTRL, sets it for every
@@ -167,6 +191,22 @@ const uint32_t DAC_SAMPLE_RATE = 40000;
 const uint32_t DAC_PHASE_STEP = (uint32_t)(440.0 / DAC_SAMPLE_RATE * 4294967296.0);
 FspTimer dacTimer;
 bool dacOpened = false;
+
+// Experiment f: the card, mounted the first time f is switched on, and
+// the file being read. Declared at file scope because the file system
+// keeps using the block device for as long as the file stays open.
+const size_t SD_CHUNK_BYTES = 2048;  // SDResampleDemo's 1024 16-bit samples
+SDCardBlockDevice sdBlockDevice(PIN_SDHI_CLK, PIN_SDHI_CMD, PIN_SDHI_D0, PIN_SDHI_D1,
+                                PIN_SDHI_D2, PIN_SDHI_D3, PIN_SDHI_CD, PIN_SDHI_WP);
+FATFileSystem sdFs("sd");
+FILE *sdFile = nullptr;
+uint8_t sdChunk[SD_CHUNK_BYTES];
+
+// Experiment g: the onboard WS2812 RGB LED.
+const uint8_t RGB_LED_PIN = 13;
+const CRGB LED_COLOR = CRGB(160, 0, 255);  // purple
+const uint8_t LED_BRIGHTNESS = 26;         // 10% of 255
+CRGB leds[1];
 
 // -- Measurement state ----------------------------------------------------
 
@@ -224,9 +264,13 @@ int summaryFrameCount = 0;
 
 unsigned long lastFrameMillis = 0;
 
-const unsigned long LED_BLINK_MS = 150;
-unsigned long ledOnMillis = 0;
-bool ledOn = false;
+// The STAT LED's acknowledgement blink: short for a command received,
+// long for one that failed (see experiment f).
+const unsigned long ACK_BLINK_MS = 150;
+const unsigned long FAIL_BLINK_MS = 1000;
+unsigned long statLedOnMillis = 0;
+unsigned long statLedDuration = 0;
+bool statLedOn = false;
 
 void setup() {
   Serial.begin(115200);
@@ -249,6 +293,10 @@ void setup() {
   dacTimer.setup_overflow_irq(1);
   dacTimer.open();
 
+  FastLED.addLeds<WS2812B, RGB_LED_PIN, GRB>(leds, 1);
+  leds[0] = CRGB::Black;
+  FastLED.show();
+
   clearSummary();
 }
 
@@ -261,6 +309,10 @@ void loop() {
     for (int wiper = 0; wiper < 2; wiper++) {
       potStats[pot][wiper].add(readPot(POT_PINS[pot][wiper]));
     }
+  }
+
+  if (sdReading) {
+    readSdChunk();
   }
 
   CapTouch::scan();
@@ -289,9 +341,9 @@ void loop() {
     }
   }
 
-  if (ledOn && currentMillis - ledOnMillis >= LED_BLINK_MS) {
+  if (statLedOn && currentMillis - statLedOnMillis >= statLedDuration) {
     digitalWrite(LED_BUILTIN, LOW);
-    ledOn = false;
+    statLedOn = false;
   }
 }
 
@@ -342,6 +394,53 @@ void applyExperiments() {
       R_DAC->DADR[1] = 2048;
     }
   }
+
+  if (sdReading && sdFile == nullptr && !openSdFile()) {
+    sdReading = false;
+    blinkStatLed(FAIL_BLINK_MS);
+  }
+
+  // FastLED.show() is only called here, when g changes, never from
+  // loop(): it blocks for tens of microseconds while it sends the colour,
+  // which would be a noise source of its own.
+  leds[0] = ledLit ? LED_COLOR : CRGB::Black;
+  FastLED.setBrightness(LED_BRIGHTNESS);
+  FastLED.show();
+}
+
+// Mounts the card (the first time only) and opens the first ordinary file
+// in its top folder. Returns false if either step fails.
+bool openSdFile() {
+  static bool mounted = false;
+  if (!mounted) {
+    if (sdFs.mount(&sdBlockDevice) != 0) {
+      return false;
+    }
+    mounted = true;
+  }
+
+  DIR *dir = opendir("/sd");
+  if (dir == nullptr) {
+    return false;
+  }
+  struct dirent *entry;
+  while ((entry = readdir(dir)) != nullptr) {
+    if (entry->d_type == DT_REG) {
+      String path = String("/sd/") + entry->d_name;
+      sdFile = fopen(path.c_str(), "rb");
+      break;
+    }
+  }
+  closedir(dir);
+  return sdFile != nullptr;
+}
+
+// Reads the next chunk of the file, starting over at the end. The data
+// itself is thrown away - only the SD traffic matters here.
+void readSdChunk() {
+  if (fread(sdChunk, 1, SD_CHUNK_BYTES, sdFile) < SD_CHUNK_BYTES) {
+    rewind(sdFile);
+  }
 }
 
 // Switches on both DAC channels through the normal Arduino path, once;
@@ -379,8 +478,8 @@ void measureFrame(unsigned long currentMillis, Measurements &frame) {
   if (havePreviousFrame) {
     float motion[2];
     for (int pot = 0; pot < 2; pot++) {
-      motion[pot] = max(fabsf(potStats[pot][0].mean - previousMean[pot][0]),
-                        fabsf(potStats[pot][1].mean - previousMean[pot][1]));
+      motion[pot] = fmaxf(fabsf(potStats[pot][0].mean - previousMean[pot][0]),
+                         fabsf(potStats[pot][1].mean - previousMean[pot][1]));
     }
     int fastest = (motion[1] > motion[0]) ? 1 : 0;
     if (motion[fastest] > MOTION_THRESHOLD) {
@@ -526,6 +625,8 @@ void handleCommands() {
       case 'c': dischargeFirst = !dischargeFirst; break;
       case 'd': dacRunning = !dacRunning; break;
       case 'e': dacSync = !dacSync; break;
+      case 'f': sdReading = !sdReading; break;
+      case 'g': ledLit = !ledLit; break;
       case 's': summaryMode = !summaryMode; break;
       case 't': showTouch = !showTouch; break;
       case 'n': showNoise = !showNoise; break;
@@ -535,11 +636,17 @@ void handleCommands() {
 
     // A recognized command: blink to acknowledge it, start a fresh summary
     // so the next point reflects only the new settings, and push any
-    // experiment changes into the hardware.
-    digitalWrite(LED_BUILTIN, HIGH);
-    ledOn = true;
-    ledOnMillis = millis();
+    // experiment changes into the hardware (which may lengthen the blink,
+    // if one fails).
+    blinkStatLed(ACK_BLINK_MS);
     clearSummary();
     applyExperiments();
   }
+}
+
+void blinkStatLed(unsigned long durationMs) {
+  digitalWrite(LED_BUILTIN, HIGH);
+  statLedOn = true;
+  statLedOnMillis = millis();
+  statLedDuration = durationMs;
 }

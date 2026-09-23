@@ -1212,7 +1212,12 @@ RV112FF pot2(A4, A5, 0.02f, 0.15f, 0.02f);
 // DEADBAND_T - raise it for coarser scrubbing, lower it for finer. Note it
 // scales the wow/flutter warble mode by the same factor, since that is the
 // same sum with knob1 left running.
-const float SCRUB_SCALE = 1.0f / 15.0f;
+//
+// Since halved to 1/30 - two seconds per turn - once the knob's ADC noise
+// was fixed (see NOISE_DEBUGGING.md) and scrubbing became precise enough to
+// want finer control. The trade-off: the cancellation point against 1x
+// forward playback rises back to roughly half a turn per second.
+const float SCRUB_SCALE = 1.0f / 30.0f;
 
 const unsigned long CONTROL_INTERVAL = 10;  // ms (~100Hz)
 unsigned long previousControlMillis = 0;

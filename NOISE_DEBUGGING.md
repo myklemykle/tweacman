@@ -251,7 +251,7 @@ random. (One caveat: the knob was parked at a different angle for the two runs,
 and the angle maths is more sensitive at some positions than others.)
 
 Listening across a full turn in 15-degree steps still turned up a very few
-crumbs. Then the **filter capacitors went onto the ADC pins**, and NoiseMeter's
+crumbs. Then **100nF filter capacitors went onto the ADC pins** (each wiper pin to GND), and NoiseMeter's
 noise traces dropped from around 6 to around 1.5. No crumbs in five minutes of
 listening since. The scrub still feels very sensitive, so the deadband stays at
 0.5.
@@ -269,7 +269,7 @@ The oversampling became a permanent, portable RV112FF feature,
 | DAC, SD card, RGB LED as noise sources | No effect on ADC noise; SD mildly raised touch idle noise. |
 | Matching touch results by scan order | Cross-pad spikes 22 to 0 in 15s; spurious latching gone. |
 | 4x oversampling on the scrub knob | Scrub crossings at rest 91/min to 0. |
-| Capacitors from the ADC pins to ground | Noise ~6 to ~1.5 in NoiseMeter; the remaining crumbs gone. |
+| 100nF capacitors from the ADC pins to ground | Noise ~6 to ~1.5 in NoiseMeter; the remaining crumbs gone. |
 | Longer differentiation window for rpm() | Rejected: too much lag. |
 | Median filtering | Not needed - the noise had no outliers. |
 | Filtering the pot supply alone | Not done: would break ratiometric cancellation. |

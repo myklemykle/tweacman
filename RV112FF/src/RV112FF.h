@@ -148,11 +148,31 @@ class RV112FF {
     // wear if you're saving what this returns.
     bool setCalibration(const RV112FFCalibration &cal);
 
+    // How many extra conversions to make, and throw away, before each
+    // wiper reading that counts. Default 1.
+    //
+    // Why: most microcontrollers' ADCs measure a pin by charging one small
+    // internal capacitor shared by every analog pin, and a pot's wiper is a
+    // high-impedance source that charges it slowly - so a reading can come
+    // out pulled toward whichever pin was measured just before it. With
+    // two pots on neighbouring pins, turning one then makes the other seem
+    // to move. A throwaway conversion first is the standard portable
+    // remedy, and costs a few microseconds per wiper.
+    //
+    // Set it to 0 if your board fixes this properly in hardware - e.g.
+    // this project's RA6M5AnalogTuning library, which lengthens the ADC's
+    // sampling time instead and measured as removing it outright, making
+    // the extra conversion pure overhead. Raise it if you measure crosstalk
+    // left over on a board without such an option.
+    void setSettlingReads(uint8_t reads) { _settlingReads = reads; }
+    uint8_t getSettlingReads() const { return _settlingReads; }
+
   private:
     uint8_t _pinA, _pinB;
     float _smoothTau;
     float _minCalibrationRange;
     float _rpmSmoothTau;
+    uint8_t _settlingReads = 1;
 
     float _smooth[2];
     float _minVal[2];

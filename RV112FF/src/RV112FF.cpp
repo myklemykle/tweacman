@@ -25,27 +25,35 @@ void RV112FF::resetCalibration() {
 }
 
 float RV112FF::readWiper(uint8_t pin, uint8_t channel, float dtSeconds) {
-  // Two conversions, first one discarded, to let the ADC settle on this
-  // channel before the reading that counts.
+  // Two conversions, first one discarded - a measured fix for crosstalk
+  // between two of these pots, though not for the reason originally
+  // assumed.
   //
   // The RA6M5's SAR converter multiplexes one sample-and-hold capacitor
-  // across every analog pin. Switching the mux and converting immediately
-  // leaves that cap still partly charged to the *previous* channel's
-  // voltage, and a pot wiper is a high-impedance source, which makes it
-  // settle slowly. The reading is then pulled toward whatever was measured
-  // just before it.
+  // across every analog pin. A pot wiper is a high-impedance source, which
+  // charges that capacitor slowly, so a reading gets pulled toward
+  // whatever channel the converter measured just before it. Measured on
+  // the bench with two RV112FFs: turning one pot biased the *other* pot's
+  // reported speed in the opposite direction - mean -0.304 RPM while
+  // turning one way and +0.407 the other, with excursions to +/-2.5 RPM -
+  // which is audible when the second pot's rpm() drives anything in real
+  // time. The pots' wiring was confirmed physically separate, so this is
+  // inside the converter, not crosstalk between wires. Discarding the
+  // first conversion measurably reduced it.
   //
-  // That matters here because a sketch with two of these pots reads four
-  // channels back to back every control tick. Measured on the bench with
-  // two RV112FFs: turning one pot biased the *other* pot's reported speed
-  // in the opposite direction - mean -0.304 RPM while turning one way and
-  // +0.407 the other, with excursions to +/-2.5 RPM - which is audible when
-  // the second pot's rpm() drives anything in real time. The pots' wiring
-  // was confirmed physically separate, so this is inside the converter, not
-  // crosstalk between wires.
-  //
-  // A discarded conversion costs a few microseconds per channel and gives
-  // the cap a full extra acquisition window to reach the new voltage.
+  // It was assumed to work by giving this pin a whole extra conversion to
+  // settle on, but that isn't what happens on the Arduino core used here
+  // (SparkFun's RA6M5 port of arduino:renesas_portenta). Its analogRead()
+  // adds each pin to the converter's scan list and never removes it, so
+  // every call converts *every* analog pin read so far on the same
+  // converter unit, lowest channel number first, and returns just the one
+  // asked for. With two pots on A2-A5 that's A5, A4, A3, A2 on every call:
+  // each pin always follows the same neighbour, and the first read just
+  // repeats the whole scan. Why it helps anyway is not yet understood. The
+  // likelier root cause is the converter's sampling time, which the core
+  // leaves at its 11-cycle reset default (220ns) - probably too short for
+  // a 10k pot's wiper to charge the capacitor fully. See the NoiseMeter
+  // sketch for experiments that measure both.
   analogRead(pin);
   int raw = analogRead(pin);
   float normalized = raw / ADC_MAX_VALUE;

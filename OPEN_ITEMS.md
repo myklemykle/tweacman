@@ -86,9 +86,12 @@ RPM over a 10ms tick.
 - **Oversample / median.** Averaging N reads per channel cuts random noise by
   sqrt(N); a median-of-3 or -5 kills impulsive outliers without averaging's
   lag. Worth doing after the baseline change, if anything is left.
-- **Reverse-order double pass.** Read A2,A3,A4,A5 then A5,A4,A3,A2 and average,
-  cancelling any residual linear ordering bias. More complex; only if the
-  throwaway read turns out to be insufficient.
+- **~~Reverse-order double pass.~~ Not possible through `analogRead()`.**
+  Found 2026-09-23: the core's `analogRead()` converts every pin ever read on
+  that ADC unit, in fixed channel order (A5, A4, A3, A2), whatever order the
+  sketch asks in - so the sketch can't reverse it. Longer ADC sampling time
+  (`ADSSTRL`) and the discharge-before-sample assist (`ADDISCR`) are the
+  software levers instead; `NoiseMeter` has toggles to measure both.
 - **Re-tune `SCRUB_DEADBAND_RPM` downward.** Currently 0.5, sized to the ADC
   jitter as it stood before any of the above. A deadband wider than the noise
   it rejects is pure lost sensitivity. The constant carries this note in the

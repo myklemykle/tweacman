@@ -80,37 +80,26 @@ than repeated: see `CodelessPipe_design.md`.
 
 ## ADC noise on the pots
 
-Crosstalk between the pots is fixed (2026-09-23): `RA6M5AnalogTuning` sets a
-longer ADC sampling time and discharge-before-sample, measured as cutting it
-from 230-280 counts to about 1, the ADC's noise floor. The sketches call it and
-turn off RV112FF's throwaway read. What remains is ordinary random jitter,
-about 1 count RMS, amplified about a hundredfold by differentiating angle into
-RPM over a 10ms tick.
+Resolved 2026-09-23 - see `NOISE_DEBUGGING.md` for the whole investigation.
+Crosstalk between the pots is gone (`RA6M5AnalogTuning`: longer ADC sampling
+time plus discharge-before-sample, 230-280 counts down to about 1), and the
+scrub "crumbs" at rest are gone (4x oversampling on the scrub knob, plus
+capacitors from the wiper pins to ground). What's left, for the record:
 
-- **Differentiate over a longer baseline.** Compute `Δangle` over ~50-100ms
-  while still updating position every tick. This attacks the 1/dt
-  amplification directly, and is meaningfully different from raising
-  `rpmSmoothTau` - post-filtering an already-noisy derivative adds the
-  "momentum" feel that was deliberately tuned out, whereas a longer
-  differentiation window reduces the noise before it exists. **Judged the
-  highest-value remaining change for scrub feel.**
-- **Oversample / median.** Averaging N reads per channel cuts random noise by
-  sqrt(N); a median-of-3 or -5 kills impulsive outliers without averaging's
-  lag. Worth doing after the baseline change, if anything is left.
+- **~~Differentiate over a longer baseline.~~ Rejected.** It would cut rpm()
+  noise, but adds tens of milliseconds of lag to a scrub; the rule for this
+  project's controls is no UI artifact longer than 10ms. Oversampling did the
+  job with no lag instead.
 - **~~Reverse-order double pass.~~ Not possible through `analogRead()`.**
-  Found 2026-09-23: the core's `analogRead()` converts every pin ever read on
-  that ADC unit, in fixed channel order (A5, A4, A3, A2), whatever order the
-  sketch asks in - so the sketch can't reverse it. Longer ADC sampling time
-  (`ADSSTRL`) and the discharge-before-sample assist (`ADDISCR`) are the
-  software levers instead; `NoiseMeter` has toggles to measure both.
-- **Re-tune `SCRUB_DEADBAND_RPM` downward.** Currently 0.5, sized to the ADC
-  jitter as it stood before any of the above. A deadband wider than the noise
-  it rejects is pure lost sensitivity. The constant carries this note in the
-  source too.
-- **Buffer the wipers (hardware).** An op-amp follower per wiper lowers source
-  impedance and is the real fix for settling. Relevant to the `feature/pcb`
-  branch while the schematic is still editable - four buffered wipers would
-  make all of the software mitigations above easier or unnecessary.
+  The core's `analogRead()` converts every pin ever read on that ADC unit, in
+  fixed channel order (A5, A4, A3, A2), whatever order the sketch asks in.
+- **`SCRUB_DEADBAND_RPM` stays at 0.5.** Its source comment invites re-tuning
+  it down once the noise is lower; tried by feel after the fixes and judged
+  right as it is - scrub is already very sensitive.
+- **Buffer the wipers (hardware)** - op-amp followers, for the `feature/pcb`
+  schematic. Probably unnecessary now; the capacitors on the wiper pins and
+  the ADC settings cover what they would have. Keep in mind if the PCB's
+  pots misbehave.
 
 ## BLE / CodeLess
 

@@ -1246,6 +1246,16 @@ void setup() {
   }
   // ---- end RA6M5-specific ----
 
+  // Average four readings per wiper on the scrub knob. Its rpm() drives
+  // the audio directly, and at rest its ADC noise was crossing the scrub
+  // deadband about 1.5 times a second - each crossing a tiny back-and-forth
+  // nudge of the cursor, heard as a "crumb" of garbled audio while stopped.
+  // Averaging cut the at-rest noise 2.6x, to well inside the deadband, and
+  // adds no lag (unlike a longer smoothTau or a longer differentiation
+  // window, which were rejected for adding tens of milliseconds to the
+  // feel of a scrub).
+  pot2.setOversampling(4);
+
   for (uint16_t i = 0; i < HANN_LUT_SIZE; i++) {
     hannLut[i] = 0.5f * (1.0f - cosf(2.0f * PI * (float)i / (float)HANN_LUT_SIZE));
   }

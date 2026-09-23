@@ -38,8 +38,12 @@ float RV112FF::readWiper(uint8_t pin, uint8_t channel, float dtSeconds) {
   for (uint8_t i = 0; i < _settlingReads; i++) {
     analogRead(pin);
   }
-  int raw = analogRead(pin);
-  float normalized = raw / ADC_MAX_VALUE;
+  // Average setOversampling()'s worth of readings into one.
+  long sum = 0;
+  for (uint8_t i = 0; i < _oversampling; i++) {
+    sum += analogRead(pin);
+  }
+  float normalized = (float)sum / _oversampling / ADC_MAX_VALUE;
 
   // One-pole lowpass with a real time constant, not a fixed per-call
   // coefficient - this is polled from loop() at whatever rate the

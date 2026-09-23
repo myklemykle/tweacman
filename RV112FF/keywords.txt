@@ -21,3 +21,5 @@ getCalibration	KEYWORD2
 setCalibration	KEYWORD2
 setSettlingReads	KEYWORD2
 getSettlingReads	KEYWORD2
+setOversampling	KEYWORD2
+getOversampling	KEYWORD2

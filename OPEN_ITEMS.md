@@ -36,6 +36,15 @@ than repeated: see `CodelessPipe_design.md`.
     own while both real pads sit quiet.
   Remaining avenues are all physical: TSCAP capacitor value, a grounded guard
   between the pads, and supply decoupling - i.e. the carrier board.
+  **Probably fixed - re-test.** On 2026-09-23 a separate CapTouch bug was
+  found and fixed: under interrupt load, `scan()` could file one pad's result
+  under the other (holding D21 put ~4150-count single-scan spikes on D20; 22
+  in 15s before the fix, 0 after, with NoiseMeter's DAC/SD/LED loads on).
+  The spurious latching only ever happened while touch2 (D21) was held down,
+  which is exactly when that bug shows, so this is very likely the same
+  thing - the "common-mode" readings above would then have been one pad's
+  value filed under both. Confirm in SDResampleDemo before unparking the
+  physical avenues.
 - **Touch chatter now has consequences.** Latching play is implemented (D20
   chorded with D21). A momentary hold forgives a spurious touch edge as a
   brief dropout, but a latch does not: a stray rising edge on D21 silently
@@ -71,32 +80,26 @@ than repeated: see `CodelessPipe_design.md`.
 
 ## ADC noise on the pots
 
-The throwaway-conversion fix (RV112FF, commit `cc33586`) removed the
-*directional* bias one pot induced in the other. What remains is ordinary
-random jitter, amplified about a hundredfold by differentiating angle into
-RPM over a 10ms tick.
+Resolved 2026-09-23 - see `NOISE_DEBUGGING.md` for the whole investigation.
+Crosstalk between the pots is gone (`RA6M5AnalogTuning`: longer ADC sampling
+time plus discharge-before-sample, 230-280 counts down to about 1), and the
+scrub "crumbs" at rest are gone (4x oversampling on the scrub knob, plus
+capacitors from the wiper pins to ground). What's left, for the record:
 
-- **Differentiate over a longer baseline.** Compute `Δangle` over ~50-100ms
-  while still updating position every tick. This attacks the 1/dt
-  amplification directly, and is meaningfully different from raising
-  `rpmSmoothTau` - post-filtering an already-noisy derivative adds the
-  "momentum" feel that was deliberately tuned out, whereas a longer
-  differentiation window reduces the noise before it exists. **Judged the
-  highest-value remaining change for scrub feel.**
-- **Oversample / median.** Averaging N reads per channel cuts random noise by
-  sqrt(N); a median-of-3 or -5 kills impulsive outliers without averaging's
-  lag. Worth doing after the baseline change, if anything is left.
-- **Reverse-order double pass.** Read A2,A3,A4,A5 then A5,A4,A3,A2 and average,
-  cancelling any residual linear ordering bias. More complex; only if the
-  throwaway read turns out to be insufficient.
-- **Re-tune `SCRUB_DEADBAND_RPM` downward.** Currently 0.5, sized to the ADC
-  jitter as it stood before any of the above. A deadband wider than the noise
-  it rejects is pure lost sensitivity. The constant carries this note in the
-  source too.
-- **Buffer the wipers (hardware).** An op-amp follower per wiper lowers source
-  impedance and is the real fix for settling. Relevant to the `feature/pcb`
-  branch while the schematic is still editable - four buffered wipers would
-  make all of the software mitigations above easier or unnecessary.
+- **~~Differentiate over a longer baseline.~~ Rejected.** It would cut rpm()
+  noise, but adds tens of milliseconds of lag to a scrub; the rule for this
+  project's controls is no UI artifact longer than 10ms. Oversampling did the
+  job with no lag instead.
+- **~~Reverse-order double pass.~~ Not possible through `analogRead()`.**
+  The core's `analogRead()` converts every pin ever read on that ADC unit, in
+  fixed channel order (A5, A4, A3, A2), whatever order the sketch asks in.
+- **`SCRUB_DEADBAND_RPM` stays at 0.5.** Its source comment invites re-tuning
+  it down once the noise is lower; tried by feel after the fixes and judged
+  right as it is - scrub is already very sensitive.
+- **Buffer the wipers (hardware)** - op-amp followers, for the `feature/pcb`
+  schematic. Probably unnecessary now; the capacitors on the wiper pins and
+  the ADC settings cover what they would have. Keep in mind if the PCB's
+  pots misbehave.
 
 ## BLE / CodeLess
 

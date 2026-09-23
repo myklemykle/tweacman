@@ -148,11 +148,44 @@ class RV112FF {
     // wear if you're saving what this returns.
     bool setCalibration(const RV112FFCalibration &cal);
 
+    // How many extra conversions to make, and throw away, before each
+    // wiper reading that counts. Default 1.
+    //
+    // Why: most microcontrollers' ADCs measure a pin by charging one small
+    // internal capacitor shared by every analog pin, and a pot's wiper is a
+    // high-impedance source that charges it slowly - so a reading can come
+    // out pulled toward whichever pin was measured just before it. With
+    // two pots on neighbouring pins, turning one then makes the other seem
+    // to move. A throwaway conversion first is the standard portable
+    // remedy, and costs a few microseconds per wiper.
+    //
+    // Set it to 0 if your board fixes this properly in hardware - e.g.
+    // this project's RA6M5AnalogTuning library, which lengthens the ADC's
+    // sampling time instead and measured as removing it outright, making
+    // the extra conversion pure overhead. Raise it if you measure crosstalk
+    // left over on a board without such an option.
+    void setSettlingReads(uint8_t reads) { _settlingReads = reads; }
+    uint8_t getSettlingReads() const { return _settlingReads; }
+
+    // How many readings of each wiper to average into one, taken back to
+    // back. Default 1 (no averaging). Averaging N readings cuts fast,
+    // random ADC noise by about the square root of N - 4 halves it - at
+    // the cost of N conversions instead of one, a few microseconds each on
+    // most boards. It adds no lag, since all N are taken at once: unlike
+    // raising smoothTau, it doesn't make the knob respond more slowly.
+    // It can't reduce slow noise such as mains hum, which looks the same
+    // in all N readings. Worth raising when rpm() drives something that
+    // needs to sit perfectly still at rest.
+    void setOversampling(uint8_t readings) { _oversampling = (readings < 1) ? 1 : readings; }
+    uint8_t getOversampling() const { return _oversampling; }
+
   private:
     uint8_t _pinA, _pinB;
     float _smoothTau;
     float _minCalibrationRange;
     float _rpmSmoothTau;
+    uint8_t _settlingReads = 1;
+    uint8_t _oversampling = 1;
 
     float _smooth[2];
     float _minVal[2];

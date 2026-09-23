@@ -232,13 +232,30 @@ bool CapTouch::begin() {
                   (uint32_t)(IOPORT_CFG_PERIPHERAL_PIN | IOPORT_PERIPHERAL_CTSU));
 
   _tsChannel = tsChannel;
-  s_instances[s_instanceCount] = this;
+
+  // Keep s_instances sorted by channel number, lowest first: the hardware
+  // measures channels in that order, and scan() matches each result to
+  // its pin purely by position in this list - see scan() for why.
+  uint8_t slot = s_instanceCount;
+  while (slot > 0 && s_instances[slot - 1]->_tsChannel > tsChannel) {
+    s_instances[slot] = s_instances[slot - 1];
+    slot--;
+  }
+  s_instances[slot] = this;
   s_instanceCount++;
   return true;
 }
 
 void CapTouch::scan() {
   if (s_instanceCount == 0) return;
+
+  // A result left unread by an earlier scan (see the end of this function)
+  // would otherwise be taken for this scan's first result. Reading CTSURC
+  // is what clears it.
+  if (R_CTSU->CTSUST_b.CTSUDTSR) {
+    (void)R_CTSU->CTSUSC;
+    (void)R_CTSU->CTSURC;
+  }
 
   // CTSUCHAC0 covers TS00-TS07, CTSUCHAC1 covers TS08-TS15 - clear both
   // (this board's three known channels never reach TS16+, so CTSUCHAC2
@@ -258,9 +275,27 @@ void CapTouch::scan() {
                                           // take well under this even
                                           // with all channels registered
   uint8_t lastStatus = 0xFF;
-  uint8_t currentChannel = 0;  // updated at Status 2 - see below
 
-  while (millis() - start < TIMEOUT_MS) {
+  // How many results this scan has read so far, which is also which pin
+  // the next one belongs to. The hardware measures the enabled channels in
+  // ascending order, and begin() keeps s_instances in that same order, so
+  // the Nth result is s_instances[N]'s.
+  //
+  // Matching by position replaced an earlier approach that noted the
+  // channel number (CTSUMCH0) at Status 2 and credited the next result to
+  // it. That raced: the hardware doesn't wait for the previous channel's
+  // result to be read before moving on to the next channel's Status 2, so
+  // if loop() was held up at just the wrong moment - an interrupt, which
+  // an audio timer, SD traffic or the RGB LED make far more likely - the
+  // next channel's number was noted first and the previous channel's
+  // result got credited to it. The symptom on the bench: holding D21 put
+  // occasional single-scan D21-sized spikes on D20, more often the more
+  // interrupt load was running, and invisible while nothing was touched,
+  // since the two pads then read about the same anyway.
+  uint8_t resultsRead = 0;
+  unsigned long doneMicros = 0;  // when the hardware reported the scan done
+
+  while (millis() - start < TIMEOUT_MS && resultsRead < s_instanceCount) {
     uint8_t status = R_CTSU->CTSUST_b.CTSUSTC;
 
     // Status 2 ("wait for sensor drive pulse setting"): write this
@@ -280,18 +315,6 @@ void CapTouch::scan() {
     // did, leaving the divisor at its reset value of /2 instead) with
     // CTSURICOA=0 and CTSUICOG=00b (ICO gain 100%, both defaults).
     if (status == 2 && status != lastStatus) {
-      // CTSUMCH0 identifies which channel is about to be measured, per
-      // the manual's own description of CTSUSO0 ("Set the TS pin that
-      // is to be measured next after a CTSU_CTSUWR interrupt occurs").
-      // Capture it *here* rather than re-reading it later once
-      // CTSUDTSR fires: for the last channel in a scan, CTSUMCH0
-      // apparently gets reset back to an idle/invalid value (0x1F) as
-      // part of the hardware wrapping the scan up, racing against a
-      // read of it after the fact - found by tracing every channel/raw
-      // pair live and seeing the last channel's reads misattributed to
-      // channel 31, which isn't a real channel at all.
-      currentChannel = R_CTSU->CTSUMCH0_b.CTSUMCH0;
-
       R_CTSU->CTSUSSC = 0x0200;
       R_CTSU->CTSUSO0 = 0x0000;
       R_CTSU->CTSUSO1 = 0x0F00;  // must be written last - see CapTouch.h
@@ -310,17 +333,22 @@ void CapTouch::scan() {
     if (R_CTSU->CTSUST_b.CTSUDTSR) {
       uint16_t raw = R_CTSU->CTSUSC;         // read order matters: SC then RC
       uint16_t reference = R_CTSU->CTSURC;
-
-      for (uint8_t i = 0; i < s_instanceCount; i++) {
-        if (s_instances[i]->_tsChannel == currentChannel) {
-          s_instances[i]->finishReading(raw, reference);
-          break;
-        }
-      }
+      s_instances[resultsRead]->finishReading(raw, reference);
+      resultsRead++;
     }
 
+    // The hardware clears CTSUSTRT once every channel has been measured -
+    // but the last result can still be waiting to be read at that point
+    // (it finishes between the result check above and this one), and
+    // stopping here would leave it for the next scan to mistake for its
+    // own. So keep polling for any results still owed, but only briefly:
+    // a result that hasn't shown up within a millisecond isn't coming.
     if (R_CTSU->CTSUCR0_b.CTSUSTRT == 0) {
-      break;  // hardware auto-clears this when every registered channel is done
+      if (doneMicros == 0) {
+        doneMicros = micros() | 1;  // | 1 so it can't be mistaken for "not yet"
+      } else if (micros() - doneMicros > 1000) {
+        break;
+      }
     }
   }
 }

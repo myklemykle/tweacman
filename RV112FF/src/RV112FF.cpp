@@ -25,30 +25,25 @@ void RV112FF::resetCalibration() {
 }
 
 float RV112FF::readWiper(uint8_t pin, uint8_t channel, float dtSeconds) {
-  // Two conversions, first one discarded, to let the ADC settle on this
-  // channel before the reading that counts.
+  // Throwaway conversions first, to let the ADC settle on this pin - see
+  // setSettlingReads() in RV112FF.h for why, and when to change how many.
   //
-  // The RA6M5's SAR converter multiplexes one sample-and-hold capacitor
-  // across every analog pin. Switching the mux and converting immediately
-  // leaves that cap still partly charged to the *previous* channel's
-  // voltage, and a pot wiper is a high-impedance source, which makes it
-  // settle slowly. The reading is then pulled toward whatever was measured
-  // just before it.
-  //
-  // That matters here because a sketch with two of these pots reads four
-  // channels back to back every control tick. Measured on the bench with
-  // two RV112FFs: turning one pot biased the *other* pot's reported speed
-  // in the opposite direction - mean -0.304 RPM while turning one way and
-  // +0.407 the other, with excursions to +/-2.5 RPM - which is audible when
-  // the second pot's rpm() drives anything in real time. The pots' wiring
-  // was confirmed physically separate, so this is inside the converter, not
-  // crosstalk between wires.
-  //
-  // A discarded conversion costs a few microseconds per channel and gives
-  // the cap a full extra acquisition window to reach the new voltage.
-  analogRead(pin);
-  int raw = analogRead(pin);
-  float normalized = raw / ADC_MAX_VALUE;
+  // Measured on the bench with two RV112FFs on one board: without them,
+  // turning one pot biased the *other* pot's reported speed in the opposite
+  // direction - mean -0.304 RPM while turning one way and +0.407 the other,
+  // with excursions to +/-2.5 RPM - which is audible when the second pot's
+  // rpm() drives anything in real time. The pots' wiring was confirmed
+  // physically separate, so this is inside the converter, not crosstalk
+  // between wires.
+  for (uint8_t i = 0; i < _settlingReads; i++) {
+    analogRead(pin);
+  }
+  // Average setOversampling()'s worth of readings into one.
+  long sum = 0;
+  for (uint8_t i = 0; i < _oversampling; i++) {
+    sum += analogRead(pin);
+  }
+  float normalized = (float)sum / _oversampling / ADC_MAX_VALUE;
 
   // One-pole lowpass with a real time constant, not a fixed per-call
   // coefficient - this is polled from loop() at whatever rate the

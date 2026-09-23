@@ -641,7 +641,22 @@ void handleCommands() {
     blinkStatLed(ACK_BLINK_MS);
     clearSummary();
     applyExperiments();
+
+    // Changing an experiment shifts every pin's readings a little. Forget
+    // this frame's readings, where each pin sat and which knob was turning,
+    // so that shift isn't mistaken for a knob turning or for crosstalk.
+    restartCrosstalkMeasurement();
   }
+}
+
+void restartCrosstalkMeasurement() {
+  for (int pot = 0; pot < 2; pot++) {
+    for (int wiper = 0; wiper < 2; wiper++) {
+      potStats[pot][wiper] = RunningStats();
+    }
+  }
+  havePreviousFrame = false;
+  turningPot = -1;
 }
 
 void blinkStatLed(unsigned long durationMs) {

@@ -380,7 +380,7 @@ for k, (y, net, ri) in enumerate(((203.2, "D20", 4), (213.36, "D21", 5)), 1):
     label(net, (289.56, y), 180)
     rr = symbol("Device:R", f"R{ri}", "560", R_FP, (304.8, y), 90)
     wire((289.56, y), rr["1"])
-    tc = symbol("Connector_Generic:Conn_01x01", f"TCH{k}", f"Touch{k}", "cassette:TouchPad_40x20", (330.2, y), 0,
+    tc = symbol("Connector_Generic:Conn_01x01", f"TCH{k}", f"Touch{k}", "cassette:TouchPad_33.6x16.8", (330.2, y), 0,
                 ref_at=(330.2 - 2.54, y - 3.81), val_at=(330.2 - 2.54, y + 3.81))
     wire(rr["2"], tc["1"])
 label("D6", (289.56, 231.14), 180)

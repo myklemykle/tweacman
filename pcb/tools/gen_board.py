@@ -151,13 +151,20 @@ def arc_pts(cx, cy, r, a0, a1, n=24):
              cy + r * math.sin(math.radians(a0 + (a1 - a0) * i / n))) for i in range(n + 1)]
 
 
-def touch_pad_polygon():
+def pad_dims(k=1.0):
+    """Touch pad width, height, corner radius and antenna-hole inset, scaled by k (k < 1 for a smaller board).
+    PAD_SETBACK and the M3 hole size are fab/hardware limits, so they never scale."""
+    return round(PAD_W * k, 3), round(PAD_H * k, 3), round(PAD_R * k, 3), ANT_M * k
+
+
+def touch_pad_polygon(k=1.0):
     """Copper outline of one touch pad in footprint coords (origin = middle of the top edge, on the board edge; y down).
     The copper's top edge is PAD_SETBACK below the origin; bottom corners are rounded."""
-    hw = PAD_W / 2
-    pts = [(-hw, PAD_SETBACK), (hw, PAD_SETBACK), (hw, PAD_H - PAD_R)]
-    pts += arc_pts(hw - PAD_R, PAD_H - PAD_R, PAD_R, 0, 90)          # bottom right
-    pts += arc_pts(-hw + PAD_R, PAD_H - PAD_R, PAD_R, 90, 180)       # bottom left
+    w, h, r, _ = pad_dims(k)
+    hw = w / 2
+    pts = [(-hw, PAD_SETBACK), (hw, PAD_SETBACK), (hw, h - r)]
+    pts += arc_pts(hw - r, h - r, r, 0, 90)                         # bottom right
+    pts += arc_pts(-hw + r, h - r, r, 90, 180)                      # bottom left
     return pts
 
 
@@ -167,32 +174,35 @@ def touch_pad_polygon():
 TAP_D, TAP_INSET = 1.0, 0.9
 
 
-def tap_pads():
+def tap_pads(k=1.0):
+    w, h, r, _ = pad_dims(k)
     o = ""
     for sx in (-1, 1):
-        d = (PAD_R - TAP_INSET) * math.sqrt(0.5)                    # 45 degrees into the corner arc, TAP_INSET from the copper edge
-        x, y = sx * (PAD_W / 2 - PAD_R + d), PAD_H - PAD_R + d
+        d = (r - TAP_INSET) * math.sqrt(0.5)                        # 45 degrees into the corner arc, TAP_INSET from the copper edge
+        x, y = sx * (w / 2 - r + d), h - r + d
         o += (f'  (pad "1" smd circle (at {f(x)} {f(y)}) (size {TAP_D} {TAP_D}) (layers "B.Cu") (tstamp {uid()}))\n')
     return o
 
 
-def touch_pad_footprint(at=None, ref="TCH"):
-    hx = PAD_W / 2 - ANT_M                                          # antenna holes' x offset from the pad centre
-    anchor = (-hx, ANT_M)
-    pts = [(x - anchor[0], y - anchor[1]) for x, y in touch_pad_polygon()]   # primitives are relative to the pad
+def touch_pad_footprint(at=None, ref="TCH", k=1.0):
+    """k scales the pad and its hole/tap positions (0.84 = the 120 mm board); the holes stay M3."""
+    w, h, _, ant = pad_dims(k)
+    hx = w / 2 - ant                                                # antenna holes' x offset from the pad centre
+    anchor = (-hx, ant)
+    pts = [(x - anchor[0], y - anchor[1]) for x, y in touch_pad_polygon(k)]   # primitives are relative to the pad
     xy_list = "\n".join(f"            (xy {f(x)} {f(y)})" for x, y in pts)
-    name = "TouchPad_40x20"
+    name = f"TouchPad_{w:g}x{h:g}"
     head = (f'(footprint "{"cassette:" if at else ""}{name}" ' +
             (f'(layer "F.Cu") (tstamp {uid()}) (at {f(at[0])} {f(at[1])})\n' if at else
              '(version 20221018) (generator pcbnew)\n  (layer "F.Cu")\n'))
     return (
         head +
-        f'  (descr "Exposed-copper capacitive touch pad, {PAD_W:g} x {PAD_H:g} mm (copper stops {PAD_SETBACK:g} mm inside the board edge at the top), with two '
+        f'  (descr "Exposed-copper capacitive touch pad, {w:g} x {h:g} mm (copper stops {PAD_SETBACK:g} mm inside the board edge at the top), with two '
         f'plated M3 holes in the top corners for bolt-on antennas and two B.Cu wire-tap pads in the bottom corners. Origin = middle of the top edge of the board outline.")\n'
         f'  (attr through_hole)\n'
         f'  (fp_text reference "{ref}" (at 0 -3) (layer "F.Fab")\n'
         f'    (effects (font (size 1 1) (thickness 0.15))) (tstamp {uid()}))\n'
-        f'  (fp_text value "{name}" (at 0 {PAD_H + 3}) (layer "F.Fab")\n'
+        f'  (fp_text value "{name}" (at 0 {h + 3}) (layer "F.Fab")\n'
         f'    (effects (font (size 1 1) (thickness 0.15))) (tstamp {uid()}))\n'
         f'  (pad "1" thru_hole custom (at {f(anchor[0])} {f(anchor[1])}) (size 6 6) (drill {M3_D}) (layers "F.Cu" "B.Cu" "*.Mask")\n'
         f'    (options (clearance outline) (anchor circle))\n'
@@ -201,8 +211,8 @@ def touch_pad_footprint(at=None, ref="TCH"):
         f'        (pts\n{xy_list}\n        )\n'
         f'        (width 0) (fill yes))\n'
         f'    ) (tstamp {uid()}))\n'
-        f'  (pad "1" thru_hole circle (at {f(hx)} {f(ANT_M)}) (size 6 6) (drill {M3_D}) (layers "F.Cu" "B.Cu" "*.Mask") (tstamp {uid()}))\n'
-        + tap_pads() +
+        f'  (pad "1" thru_hole circle (at {f(hx)} {f(ant)}) (size 6 6) (drill {M3_D}) (layers "F.Cu" "B.Cu" "*.Mask") (tstamp {uid()}))\n'
+        + tap_pads(k) +
         f')\n')
 
 
@@ -631,7 +641,7 @@ def write_library():
     global _uid_n, _uid_ns
     lib = OUT / "cassette.pretty"
     lib.mkdir(exist_ok=True)
-    for name, make in (("TouchPad_40x20", touch_pad_footprint), ("MountingHole_M3_NPTH", mounting_hole), ("RV112FF-40", pot_footprint),
+    for name, make in (("TouchPad_40x20", touch_pad_footprint), ("TouchPad_33.6x16.8", lambda: touch_pad_footprint(k=0.84)), ("MountingHole_M3_NPTH", mounting_hole), ("RV112FF-40", pot_footprint),
                        ("C_DCBlock_Dual", dcblock_footprint), ("Kycon_STX-3120-3B", jack_footprint), ("ThingPlus", thing_plus_footprint),
                        (OLED_NAME, oled_footprint), (MIC_NAME, mic_footprint), (JR_NAME, cutjumper_footprint)):
         _uid_ns, _uid_n = f"lib/{name}", 0

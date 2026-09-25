@@ -456,14 +456,6 @@
       {
         "netclass": "Touch",
         "pattern": "Net-(TCH*-Pin_1)"
-      },
-      {
-        "netclass": "Touch",
-        "pattern": "/D20"
-      },
-      {
-        "netclass": "Touch",
-        "pattern": "/D21"
       }
     ]
   },

@@ -37,7 +37,9 @@ PARTS = {
     "STX-3120-3B|cassette:Kycon_STX-3120-3B": ("3.5 mm stereo jack, right angle, all plastic", "Kycon", "STX-3120-3B",
                                                "Colour variants exist; check the suffix at the vendor"),
     "EG1224|Button_Switch_THT:SW_E-Switch_EG1224_SPDT_Angled": ("Slide switch, SPDT, right angle, 0.1 in pin pitch", "E-Switch", "EG1224",
-                                                                "Power switch (holds EN low to turn the Thing Plus off)"),
+                                                                "Power switch in the battery line (J2 to the Thing Plus's VBAT pin)"),
+    "LiPo JST-PH|Connector_JST:JST_PH_S2B-PH-K_1x02_P2.00mm_Horizontal": ("JST PH 2-pin header, 2.0 mm, right angle (side entry), through hole", "JST",
+                                                                          "S2B-PH-K-S(LF)(SN)", "LiPo battery socket; rated 2 A"),
     "1x12 socket|None": ("1x12 female header, 2.54 mm, 3 mm insulation height (low profile), round-hole turned pin", "HCTL", "PM254-1-12-Z-3.0-C",
                          "LCSC C5156451; carries the Thing Plus left column"),
     "1x16 socket|None": ("1x16 female header, 2.54 mm, 3 mm insulation height (low profile), round-hole turned pin", "HCTL", "PM254-1-16-Z-3.0-C",
@@ -57,6 +59,7 @@ LCSC = {
     "22|cassette:R_Axial_DIN0204_P7.62mm_CutJumper": ("C2848542", "VO MF1/8W-22R-1%-OT52", 0.0066, 2805, "1% metal film, 1/8 W, 2.3 x 3.7 mm"),
     f"560|{R_AXIAL}": ("", "", None, None, "No 1/8 W metal film in stock. 1/4 W bodies are ~6.3 mm long (tight on 7.62 pitch): C2848609 VO $0.0065, C1369978 YAGEO $0.0183"),
     "EG1224|Button_Switch_THT:SW_E-Switch_EG1224_SPDT_Angled": ("C273395", "E-Switch EG1224", 1.7269, 157, ""),
+    "LiPo JST-PH|Connector_JST:JST_PH_S2B-PH-K_1x02_P2.00mm_Horizontal": ("C173752", "JST S2B-PH-K-S(LF)(SN)", 0.0395, 193766, "Looked up 2026-09-25"),
     "1x12 socket|None": ("C5156451", "HCTL PM254-1-12-Z-3.0-C", 0.4265, 496, "$0.3337 at 10+"),
     "1x16 socket|None": ("C5159943", "HCTL PM254-1-16-Z-3.0-C", 0.4704, 223, "$0.3728 at 10+"),
 }

@@ -130,9 +130,11 @@ LIB = {
     "Jumper:SolderJumper_2_Bridged": stock_symbol("Jumper", "SolderJumper_2_Bridged"),
     "power:GND": stock_symbol("power", "GND"),
     "power:+3V3": stock_symbol("power", "+3V3"),
+    "power:PWR_FLAG": stock_symbol("power", "PWR_FLAG"),
     "Switch:SW_SPDT": stock_symbol("Switch", "SW_SPDT"),
     "Mechanical:MountingHole": stock_symbol("Mechanical", "MountingHole"),
     "Connector_Generic:Conn_01x01": stock_symbol("Connector_Generic", "Conn_01x01"),
+    "Connector_Generic:Conn_01x02": stock_symbol("Connector_Generic", "Conn_01x02"),
 }
 for k, v in CUSTOM.items():                                  # embed with the library prefix
     lib, nm = k.split(":")
@@ -277,7 +279,7 @@ u = symbol("cassette:ThingPlus", "U1", "Thing Plus RA6M5", "cassette:ThingPlus",
            ref_at=(U1[0], U1[1] - 26.0), val_at=(U1[0], U1[1] + 26.0))
 USED_RIGHT = {"TX": "D20", "RX": "D21", "A5": "POT2_B", "A4": "POT2_A", "A3": "POT1_B", "A2": "POT1_A",
               "A1": "DAC_R", "A0": "DAC_L", "VREF": "VREF"}
-USED_LEFT = {"D6": "D6", "EN": "EN"}
+USED_LEFT = {"D6": "D6", "VBAT": "VBAT"}
 names = {str(i + 1): n for i, n in enumerate(TP_LEFT)}
 names.update({str(13 + i): n for i, n in enumerate(TP_RIGHT)})
 for num, nm in names.items():
@@ -380,7 +382,7 @@ for k, (y, net, ri) in enumerate(((203.2, "D20", 4), (213.36, "D21", 5)), 1):
     label(net, (289.56, y), 180)
     rr = symbol("Device:R", f"R{ri}", "560", R_FP, (304.8, y), 90)
     wire((289.56, y), rr["1"])
-    tc = symbol("Connector_Generic:Conn_01x01", f"TCH{k}", f"Touch{k}", "cassette:TouchPad_40x20", (330.2, y), 0,
+    tc = symbol("Connector_Generic:Conn_01x01", f"TCH{k}", f"Touch{k}", "cassette:TouchPad_33.6x16.8", (330.2, y), 0,
                 ref_at=(330.2 - 2.54, y - 3.81), val_at=(330.2 - 2.54, y + 3.81))
     wire(rr["2"], tc["1"])
 label("D6", (289.56, 231.14), 180)
@@ -391,15 +393,28 @@ gnd(c10["2"])
 text("TSCAP", (309.0, 229.0))
 
 # ------------------------------------------------------------------ Power switch
-box(20.32, 14.0, 110.0, 48.0, "Power switch: EN to GND")
-SW = (66.04, 29.21)
+box(20.32, 14.0, 110.0, 60.0, "Power switch: in the LiPo battery line")
+SW = (50.8, 29.21)
 sw = symbol("Switch:SW_SPDT", "SW1", "EG1224", "Button_Switch_THT:SW_E-Switch_EG1224_SPDT_Angled", SW, 0,
             ref_at=(SW[0] - 3.0, SW[1] - 7.0), val_at=(SW[0] - 3.0, SW[1] + 7.0))
-stub_label("Switch:SW_SPDT", 0, sw, "2", "EN")
-gnd_from_pin(sw["1"], pin_dir("Switch:SW_SPDT", 0, "1"), (0, 1), None)
+stub_label("Switch:SW_SPDT", 0, sw, "2", "VBAT")
+stub_label("Switch:SW_SPDT", 0, sw, "1", "BATT_IN")
 no_connect(sw["3"])
-text("Closed to GND, the switch holds the Thing Plus's EN pin low, which turns its", (22.0, 39.0), 1.0)
-text("3.3 V regulator off. Use it as the power switch when running on battery.", (22.0, 42.0), 1.0)
+J2 = (91.44, 29.21)
+jb = symbol("Connector_Generic:Conn_01x02", "J2", "LiPo JST-PH", "Connector_JST:JST_PH_S2B-PH-K_1x02_P2.00mm_Horizontal", J2, 0,
+            ref_at=(J2[0] + 2.54, J2[1] - 5.08), val_at=(J2[0] + 2.54, J2[1] + 6.35))
+stub_label("Connector_Generic:Conn_01x02", 0, jb, "1", "BATT_IN")
+gnd_from_pin(jb["2"], pin_dir("Connector_Generic:Conn_01x02", 0, "2"), (0, 1), 2.54)
+# GND comes from off this sheet (the Thing Plus and the cell), so tell ERC the net is driven.
+FLG = (25.4, 30.48)
+symbol("power:PWR_FLAG", "#FLG01", "PWR_FLAG", "", FLG, 0, ref_at=(FLG[0], FLG[1] - 6.35), val_at=(FLG[0], FLG[1] - 3.81), hide_ref=True)
+gnd(FLG)
+text("J2: plug the LiPo in here, NOT into the Thing Plus's own battery socket (that would bypass SW1).", (22.0, 42.0), 1.0)
+text("Pin 1 = +, pin 2 = GND in JST's numbering: SparkFun's convention, checked against a SparkFun cell on", (22.0, 45.0), 1.0)
+text("the Thing Plus. Adafruit documents the opposite; check the red wire lines up with + before plugging in.", (22.0, 48.0), 1.0)
+text("SW1 connects the cell to the Thing Plus's VBAT pin. Off + no USB = everything off, zero drain.", (22.0, 52.0), 1.0)
+text("On USB the board runs regardless; the cell only charges while SW1 is on. EN is not used: grounding", (22.0, 55.0), 1.0)
+text("it can latch the Thing Plus half-on (its VREF regulator back-feeds the 3.3 V rail).", (22.0, 58.0), 1.0)
 
 # ------------------------------------------------------------------ Sockets (BOM only)
 box(20.32, 256.5, 110.0, 283.5, "Sockets: BOM lines only (pads are in the footprints)")

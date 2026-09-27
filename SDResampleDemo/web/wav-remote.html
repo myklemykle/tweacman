@@ -1253,17 +1253,24 @@
   const CAN_RECORD = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && AudioCtx) &&
     matchMedia("(pointer: coarse)").matches;
 
-  let audioCtx = null;
-  let mic = null;         // { ctx, stream } once the mic has been granted
-  let recording = null;   // the take in progress: { chunks, samples, started }
+  let mic = null;         // { ctx, stream, processor } while the mic is open
+  let recording = null;   // the take in progress: { chunks, samples, rate, started }
   let holding = false;    // finger is down on the record button
+  let micOpening = false; // a press is waiting for the mic to open
   let take = null;        // the finished take: { wav, seconds }
-  let takeSource = null;  // the take playing back, if it is
+  let takeAudio = null;   // the <audio> element playing the take back, if it is
 
-  // Opens the mic once and keeps it open, so only the very first press
-  // waits on the permission prompt. The ScriptProcessorNode is deprecated in
-  // favour of AudioWorklet, but it works in every browser this page runs in
-  // and needs no separate module file; it only copies samples out.
+  // The mic is open only while the button is held. Leaving it open between
+  // takes would be quicker, but while any page has the mic, iOS keeps audio
+  // in its record-and-play mode, and in Bluefy that sends all playback to
+  // the earpiece instead of the speaker - confirmed on an iPhone, where
+  // takes played back inaudibly quietly. So each press opens the mic and
+  // each release closes it, audio context and all. The price is a fraction
+  // of a second at the start of each take while the mic opens.
+  //
+  // The ScriptProcessorNode is deprecated in favour of AudioWorklet, but it
+  // works in every browser this page runs in and needs no separate module
+  // file; it only copies samples out.
   async function openMic(ctx) {
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
@@ -1285,8 +1292,15 @@
     // nothing to its output buffer, so nothing is heard.
     source.connect(processor);
     processor.connect(ctx.destination);
-    mic = { ctx, stream };
-    log(`Mic open at ${ctx.sampleRate}Hz.`);
+    mic = { ctx, stream, processor };
+  }
+
+  function closeMic() {
+    if (!mic) return;
+    mic.processor.onaudioprocess = null;
+    for (const track of mic.stream.getTracks()) track.stop();
+    mic.ctx.close();
+    mic = null;
   }
 
   async function onRecordDown(e) {
@@ -1302,26 +1316,31 @@
 
     // Created and resumed here, synchronously, before any await: iOS only
     // lets audio start from inside the tap itself, and a context created
-    // after the permission prompt would stay suspended and record silence.
-    if (!audioCtx) audioCtx = new AudioCtx();
-    const resumed = audioCtx.resume();
+    // after the mic opens would stay suspended and record silence.
+    if (micOpening || mic) return;  // a previous press is still using it
+    micOpening = true;
+    const ctx = new AudioCtx();
+    const resumed = ctx.resume();
 
-    if (!mic) {
-      try {
-        await openMic(audioCtx);
-      } catch (err) {
-        holding = false;
-        notice(`No microphone: ${err.message}`, true);
-        return;
-      }
-      // The permission prompt took this press; the next one records.
-      if (!holding) {
-        notice("Microphone ready - hold the button to record.");
-        return;
-      }
+    try {
+      await openMic(ctx);
+      await resumed;
+    } catch (err) {
+      holding = false;
+      if (mic) closeMic(); else ctx.close();
+      notice(`No microphone: ${err.message}`, true);
+      return;
+    } finally {
+      micOpening = false;
     }
-    await resumed;
-    if (holding) startRecording();
+    // Let go before the mic was ready - a tap, or a permission prompt that
+    // took the press.
+    if (!holding) {
+      closeMic();
+      notice("Hold the button down while you record.");
+      return;
+    }
+    startRecording();
   }
 
   function onRecordUp() {
@@ -1332,7 +1351,7 @@
   let recTimer = null;
 
   function startRecording() {
-    recording = { chunks: [], samples: 0, started: performance.now() };
+    recording = { chunks: [], samples: 0, rate: mic.ctx.sampleRate, started: performance.now() };
     recordBtn.classList.add("recording");
     recordBtn.textContent = "Recording…";
     recordPanel.hidden = false;
@@ -1353,6 +1372,7 @@
     clearInterval(recTimer);
     const done = recording;
     recording = null;
+    closeMic();
     recordBtn.classList.remove("recording");
     recordBtn.textContent = "Hold to record";
     recordPanel.classList.remove("live");
@@ -1360,7 +1380,7 @@
     levelTrack.hidden = true;
     updateControls();
 
-    if (done.samples < mic.ctx.sampleRate * 0.1) {
+    if (done.samples < done.rate * 0.1) {
       // Under a tenth of a second is a tap, not a take.
       recordPanel.hidden = !take;
       if (take) showTake();
@@ -1368,7 +1388,7 @@
       return;
     }
 
-    const samples = await resample(done.chunks, done.samples, mic.ctx.sampleRate);
+    const samples = await resample(done.chunks, done.samples, done.rate);
     take = { wav: encodeWav(samples, RECORD_SAMPLE_RATE), seconds: samples.length / RECORD_SAMPLE_RATE };
     log(`Recorded ${take.seconds.toFixed(1)} s (${formatKB(take.wav.size)} KB).`);
     showTake();
@@ -1434,8 +1454,8 @@
       `${take.seconds.toFixed(1)} s take, ${formatKB(take.wav.size)} KB - about ` +
       `${uploadSeconds < 90 ? uploadSeconds + " s" : Math.round(uploadSeconds / 60) + " min"} to save. ` +
       "Hold the button again to re-record.";
-    const playBtn = makeButton("smallBtn", takeSource ? "Stop" : "Play", () => {
-      if (takeSource) stopTakePlayback(); else playTake();
+    const playBtn = makeButton("smallBtn", takeAudio ? "Stop" : "Play", () => {
+      if (takeAudio) stopTakePlayback(); else playTake();
     });
     recordButtons.textContent = "";
     recordButtons.append(
@@ -1445,26 +1465,27 @@
     );
   }
 
-  // Plays the take as it will be saved - after resampling, so what you hear
-  // is what the board will play.
-  async function playTake() {
-    const ctx = mic.ctx;
-    await ctx.resume();
-    const audio = await ctx.decodeAudioData(await take.wav.arrayBuffer());
-    takeSource = ctx.createBufferSource();
-    takeSource.buffer = audio;
-    takeSource.connect(ctx.destination);
-    takeSource.onended = () => { takeSource = null; if (take) showTake(); };
-    takeSource.start();
+  // Plays the take as it will be saved - the resampled WAV itself, so what
+  // you hear is what the board will play. Through an <audio> element rather
+  // than Web Audio: on iPhone, Web Audio is also muted by the ring/silent
+  // switch, and an <audio> element isn't.
+  function playTake() {
+    takeAudio = new Audio(URL.createObjectURL(take.wav));
+    takeAudio.onended = stopTakePlayback;
+    takeAudio.play().catch((err) => {
+      notice(`Couldn't play the take: ${err.message}`, true);
+      stopTakePlayback();
+    });
     showTake();
   }
 
   function stopTakePlayback() {
-    if (!takeSource) return;
-    const source = takeSource;
-    takeSource = null;
-    source.onended = null;
-    source.stop();
+    if (!takeAudio) return;
+    const audio = takeAudio;
+    takeAudio = null;
+    audio.onended = null;
+    audio.pause();
+    URL.revokeObjectURL(audio.src);
     if (take) showTake();
   }
 

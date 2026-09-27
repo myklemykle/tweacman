@@ -12,7 +12,7 @@
   out mid-breath doesn't look like two unrelated rhythms colliding.
 
   Wiring: D6 to a ~10nF capacitor to GND (TSCAP, shared by both pads -
-  see CapTouch.h), D20 (touch1) and D21 (touch2) each to their own wire
+  see RA6M5CapTouch.h), D20 (touch1) and D21 (touch2) each to their own wire
   or touch pad - same as CapTouch's own SerialPlotterDemo. The RGB LED
   itself needs no wiring; it's onboard.
 
@@ -20,7 +20,7 @@
 */
 
 #include <FastLED.h>
-#include <CapTouch.h>
+#include <RA6M5CapTouch.h>
 
 // -- LED ----------------------------------------------------------------
 
@@ -75,7 +75,7 @@ void loop() {
   if (currentMillis - previousMillis >= CONTROL_INTERVAL) {
     previousMillis = currentMillis;
 
-    CapTouch::scan();  // one scan() covers both pads - see CapTouch.h
+    CapTouch::scan();  // one scan() covers both pads - see RA6M5CapTouch.h
 
     uint8_t brightness = pulseBrightness();
     leds[0] = CRGB(touch1.isTouched() ? brightness : 0,  // red

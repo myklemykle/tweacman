@@ -22,7 +22,7 @@
   track ends on 3.3V/GND) and two CapTouch pads (D20 toggles knob1 between
   speed and pitch, and chorded with D21 latches the transport;
   D21 is the transport itself - hold it to run, release to stop; both
-  share the TSCAP capacitor on D6 - see CapTouch.h). The onboard WS2812
+  share the TSCAP capacitor on D6 - see RA6M5CapTouch.h). The onboard WS2812
   on D13 is used as the transport indicator - no extra wiring. The DA14531MOD Bluetooth
   module used for BLE control is already onboard -
   no extra wiring for that part.
@@ -283,7 +283,7 @@
 #include <RV112FF.h>
 #include <MultiTurnKnob.h>
 #include <RA6M5AnalogTuning.h>
-#include <CapTouch.h>
+#include <RA6M5CapTouch.h>
 #include <FastLED.h>
 #include <codelessBLEPeripheral.h>
 #include "SDCardBlockDevice.h"

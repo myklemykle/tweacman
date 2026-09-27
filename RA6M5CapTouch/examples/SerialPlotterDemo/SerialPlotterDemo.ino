@@ -1,5 +1,5 @@
 /*
-  SerialPlotterDemo - CapTouch library
+  SerialPlotterDemo - RA6M5CapTouch library
 
   Reads two touch-capable pins and streams their raw graduated reading,
   tracked baseline, and boolean touched state to the Arduino Serial
@@ -24,7 +24,7 @@
   different object entirely - a piece of produce reads very
   differently than a finger), then holds still during an actual touch
   so the touch itself doesn't get absorbed into it. See the class
-  comment in CapTouch.h for the full explanation, including what
+  comment in RA6M5CapTouch.h for the full explanation, including what
   happens if something ends up resting against the sensor indefinitely
   instead of a real touch-and-hold.
 
@@ -35,7 +35,7 @@
   This example code is in the public domain.
 */
 
-#include <CapTouch.h>
+#include <RA6M5CapTouch.h>
 
 CapTouch wire1(20);
 CapTouch wire2(21);

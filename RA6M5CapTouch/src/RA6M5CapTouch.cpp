@@ -1,21 +1,48 @@
-#include "CapTouch.h"
-#include "bsp_api.h"  // for R_CTSU, R_MSTP, R_IOPORT_PinCfg()
+#include "RA6M5CapTouch.h"
 
-// See the class comment in CapTouch.h for how these three were confirmed
-// against the RA6M5 Hardware User's Manual (Table 1.17).
-const CapTouch::KnownChannel CapTouch::KNOWN_CHANNELS[3] = {
-  { 21, 4 },   // D21 -> TS04
-  { 20, 5 },   // D20 -> TS05
-  { 31, 11 },  // D31 -> TS11 (also the onboard USR button)
+// This library drives the RA6M5's touch peripheral register by register,
+// so refuse to build anywhere else rather than misbehave. The first test
+// keeps non-Renesas boards from even reaching the Renesas-only header;
+// BSP_MCU_GROUP_RA6M5 comes from that header and rules out other RA
+// chips (the UNO R4's RA4M1, say), whose touch hardware differs.
+#if !defined(ARDUINO_ARCH_RENESAS)
+#error "RA6M5CapTouch only works on Renesas RA6M5 boards."
+#endif
+#include "bsp_api.h"  // for R_CTSU, R_MSTP, R_IOPORT_PinCfg()
+#if !defined(BSP_MCU_GROUP_RA6M5)
+#error "RA6M5CapTouch only works on Renesas RA6M5 boards."
+#endif
+
+// Every RA6M5 port pin that has a touch channel, and which channel it is -
+// the TSnn column of the RA6M5 Hardware User's Manual, Table 1.17 (Pin
+// list). These are fixed in the silicon, so they hold on any RA6M5 board;
+// which of them a given board actually brings out to a header is up to
+// that board. Listed in channel order.
+struct TouchPort {
+  bsp_io_port_pin_t port;
+  uint8_t tsChannel;
 };
+static const TouchPort TOUCH_PORTS[] = {
+  { BSP_IO_PORT_02_PIN_04, 0 },  { BSP_IO_PORT_02_PIN_05, 1 },
+  { BSP_IO_PORT_02_PIN_06, 2 },  { BSP_IO_PORT_04_PIN_07, 3 },
+  { BSP_IO_PORT_04_PIN_08, 4 },  { BSP_IO_PORT_04_PIN_09, 5 },
+  { BSP_IO_PORT_04_PIN_10, 6 },  { BSP_IO_PORT_04_PIN_11, 7 },
+  { BSP_IO_PORT_04_PIN_12, 8 },  { BSP_IO_PORT_04_PIN_13, 9 },
+  { BSP_IO_PORT_04_PIN_14, 10 }, { BSP_IO_PORT_04_PIN_15, 11 },
+  { BSP_IO_PORT_07_PIN_08, 12 }, { BSP_IO_PORT_07_PIN_09, 13 },
+  { BSP_IO_PORT_07_PIN_10, 14 }, { BSP_IO_PORT_07_PIN_11, 15 },
+  { BSP_IO_PORT_07_PIN_12, 16 }, { BSP_IO_PORT_07_PIN_13, 17 },
+  { BSP_IO_PORT_02_PIN_03, 18 }, { BSP_IO_PORT_02_PIN_02, 19 },
+};
+static const uint8_t TOUCH_PORT_COUNT = sizeof(TOUCH_PORTS) / sizeof(TOUCH_PORTS[0]);
 
 // TSCAP - the shared analog reference pin every measurement depends on,
-// not a sensing channel. Fixed to D6/P207 on this board (see the class
-// comment); unlike the touch pins themselves, it isn't something a
-// sketch chooses, so it isn't part of the public API.
-static const uint8_t TSCAP_PIN = 6;
+// not a sensing channel. The RA6M5 has exactly one, on port P207 (Table
+// 1.17 again), so it's set up by port rather than by any board's Arduino
+// pin number, and isn't part of the public API.
+static const bsp_io_port_pin_t TSCAP_PORT = BSP_IO_PORT_02_PIN_07;
 
-CapTouch *CapTouch::s_instances[CapTouch::MAX_INSTANCES] = { nullptr, nullptr, nullptr };
+CapTouch *CapTouch::s_instances[CapTouch::MAX_INSTANCES] = {};
 uint8_t CapTouch::s_instanceCount = 0;
 bool CapTouch::s_hardwareReady = false;
 
@@ -117,9 +144,11 @@ void CapTouch::finishReading(uint16_t raw, uint16_t reference) {
 }
 
 bool CapTouch::lookupTsChannel(uint8_t pin, uint8_t &tsChannel) {
-  for (uint8_t i = 0; i < 3; i++) {
-    if (KNOWN_CHANNELS[i].pin == pin) {
-      tsChannel = KNOWN_CHANNELS[i].tsChannel;
+  if (pin >= PINS_COUNT) return false;
+  bsp_io_port_pin_t port = digitalPinToBspPin(pin);  // the board's core knows its own wiring
+  for (uint8_t i = 0; i < TOUCH_PORT_COUNT; i++) {
+    if (TOUCH_PORTS[i].port == port) {
+      tsChannel = TOUCH_PORTS[i].tsChannel;
       return true;
     }
   }
@@ -133,8 +162,8 @@ void CapTouch::initHardwareOnce() {
   // Manual, Figure 46.9): discharge whatever charge is already on the
   // external LPF capacitor wired to TSCAP, using the pin as a plain
   // GPIO output driven low, before the CTSU peripheral touches it.
-  pinMode(TSCAP_PIN, OUTPUT);
-  digitalWrite(TSCAP_PIN, LOW);
+  R_IOPORT_PinCfg(NULL, TSCAP_PORT,
+                  (uint32_t)(IOPORT_CFG_PORT_DIRECTION_OUTPUT | IOPORT_CFG_PORT_OUTPUT_LOW));
   delay(1);
   // TSCAP isn't one of the 20 general-purpose TS channels, but it still
   // needs to be explicitly routed to the CTSU peripheral function
@@ -143,7 +172,7 @@ void CapTouch::initHardwareOnce() {
   // digital input here instead, which is wrong: without this, the
   // CTSU's internal switch (CTSUCR1.CTSUCSW below) has nowhere to
   // actually connect.
-  R_IOPORT_PinCfg(NULL, g_pin_cfg[TSCAP_PIN].pin,
+  R_IOPORT_PinCfg(NULL, TSCAP_PORT,
                   (uint32_t)(IOPORT_CFG_PERIPHERAL_PIN | IOPORT_PERIPHERAL_CTSU));
 
   // Step 3: enable the CTSU module's clock. RA-family peripherals are
@@ -209,7 +238,7 @@ void CapTouch::initHardwareOnce() {
 bool CapTouch::begin() {
   uint8_t tsChannel;
   if (!lookupTsChannel(_pin, tsChannel)) {
-    return false;  // not one of this board's three touch-capable pins
+    return false;  // this pin's port has no touch channel
   }
 
   for (uint8_t i = 0; i < s_instanceCount; i++) {
@@ -219,7 +248,7 @@ bool CapTouch::begin() {
   }
 
   if (s_instanceCount >= MAX_INSTANCES) {
-    return false;  // shouldn't happen - there are only 3 known channels
+    return false;  // can't happen: one instance per channel, and MAX_INSTANCES covers them all
   }
 
   initHardwareOnce();
@@ -228,7 +257,7 @@ bool CapTouch::begin() {
   // CTSU (matches PmnPFS.PSEL[4:0] = 01100b in the manual) with the pin
   // mode register set to route it to that peripheral rather than plain
   // GPIO.
-  R_IOPORT_PinCfg(NULL, g_pin_cfg[_pin].pin,
+  R_IOPORT_PinCfg(NULL, digitalPinToBspPin(_pin),
                   (uint32_t)(IOPORT_CFG_PERIPHERAL_PIN | IOPORT_PERIPHERAL_CTSU));
 
   _tsChannel = tsChannel;
@@ -257,12 +286,12 @@ void CapTouch::scan() {
     (void)R_CTSU->CTSURC;
   }
 
-  // CTSUCHAC0 covers TS00-TS07, CTSUCHAC1 covers TS08-TS15 - clear both
-  // (this board's three known channels never reach TS16+, so CTSUCHAC2
-  // is never used) and set exactly the bits for currently-registered
-  // instances.
+  // CTSUCHAC0 covers TS00-TS07, CTSUCHAC1 TS08-TS15 and CTSUCHAC2
+  // TS16-TS19 - clear all three and set exactly the bits for
+  // currently-registered instances.
   R_CTSU->CTSUCHAC[0] = 0;
   R_CTSU->CTSUCHAC[1] = 0;
+  R_CTSU->CTSUCHAC[2] = 0;
   for (uint8_t i = 0; i < s_instanceCount; i++) {
     uint8_t ch = s_instances[i]->_tsChannel;
     R_CTSU->CTSUCHAC[ch / 8] |= (1 << (ch % 8));
@@ -317,7 +346,7 @@ void CapTouch::scan() {
     if (status == 2 && status != lastStatus) {
       R_CTSU->CTSUSSC = 0x0200;
       R_CTSU->CTSUSO0 = 0x0000;
-      R_CTSU->CTSUSO1 = 0x0F00;  // must be written last - see CapTouch.h
+      R_CTSU->CTSUSO1 = 0x0F00;  // must be written last - see the comment above
     }
     lastStatus = status;
 

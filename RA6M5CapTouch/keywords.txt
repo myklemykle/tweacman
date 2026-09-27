@@ -1,5 +1,5 @@
 #######################################
-# Syntax Coloring Map for CapTouch
+# Syntax Coloring Map for RA6M5CapTouch
 #######################################
 
 #######################################

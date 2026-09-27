@@ -127,7 +127,7 @@
 #include <RV112FF.h>
 #include <MultiTurnKnob.h>
 #include <RA6M5AnalogTuning.h>
-#include <CapTouch.h>
+#include <RA6M5CapTouch.h>
 #include <codelessBLEPeripheral.h>
 #include "faust_support.h"
 #include "synth.h"

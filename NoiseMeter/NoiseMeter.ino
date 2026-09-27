@@ -130,7 +130,7 @@
   This example code is in the public domain.
 */
 
-#include <CapTouch.h>
+#include <RA6M5CapTouch.h>
 #include <FastLED.h>
 #include "FspTimer.h"  // for experiment d's audio-rate interrupt
 #include "SDCardBlockDevice.h"

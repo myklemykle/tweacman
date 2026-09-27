@@ -1,5 +1,5 @@
 /*
-  CapTouch.h - capacitive touch sensing on the RA6M5's built-in CTSU
+  RA6M5CapTouch.h - capacitive touch sensing on the RA6M5's built-in CTSU
 
   The RA6M5 has a real hardware peripheral for this (the Capacitive Touch
   Sensing Unit, or CTSU) - not a software RC-timing trick like classic
@@ -8,16 +8,26 @@
   isTouched() below is a threshold comparison built on top of that, not the
   only thing the hardware can tell you.
 
-  Only three physical pins on this board are wired to real CTSU channels
-  (confirmed against the RA6M5 Hardware User's Manual, Table 1.17 - not
-  guessed): D20 (TS05), D21 (TS04), and D31 (TS11, which is also the
-  board's onboard USR button - touch-sensing that pin picks up whatever's
-  mechanically wired there too, so it's included for completeness but not
-  a great choice for a breadboard wire). A fourth pin, D6, is TSCAP - a
-  shared analog reference the whole peripheral depends on, not a sensing
-  channel of its own. It needs an external capacitor to ground (10nF is a
+  Which pins can sense touch is fixed by the chip, not the board: each of
+  the RA6M5's 20 touch channels (TS00-TS19) belongs to one specific port
+  pin (RA6M5 Hardware User's Manual, Table 1.17 - P204 is TS00, P415 is
+  TS11, and so on). So the library takes an ordinary Arduino pin number,
+  asks the board's core which port pin that is, and looks the port pin up
+  in that table. Any RA6M5 board works, whatever numbers it gives its
+  pins; a pin whose port has no touch channel is simply refused by
+  begin(). On the SparkFun Thing Plus RA6M5 that leaves three usable pins:
+  D20 (P409, TS05), D21 (P408, TS04), and D31 (P415, TS11, which is also
+  the board's onboard USR button - touch-sensing that pin picks up
+  whatever's mechanically wired there too, so it works but isn't a great
+  choice for a breadboard wire). Other RA6M5 boards, such as the Portenta
+  C33, haven't been tested.
+
+  The peripheral also has one shared analog reference pin, TSCAP, which
+  every measurement depends on. It's fixed to port P207 on every RA6M5
+  (D6 on the Thing Plus), so the library sets it up by port and a sketch
+  never names it. It needs an external capacitor to ground (10nF is a
   reasonable starting point; up to 100nF is fine, the exact value isn't
-  critical) wired directly to D6, or nothing here will work.
+  critical) wired directly to that pin, or nothing here will work.
 
   This is a clean-room implementation written directly against Renesas'
   RA6M5 Hardware User's Manual (chapter 46, "Capacitive Touch Sensing
@@ -68,24 +78,25 @@
   This example code is in the public domain.
 */
 
-#ifndef CapTouch_h
-#define CapTouch_h
+#ifndef RA6M5CapTouch_h
+#define RA6M5CapTouch_h
 
 #include <Arduino.h>
 
 class CapTouch {
   public:
-    // pin: a touch-capable pin - see the class comment above for which
-    // three this board actually has, and D6/TSCAP's capacitor
-    // requirement, which the whole peripheral depends on regardless of
-    // which sensing pin(s) you use.
+    // pin: an Arduino pin whose port has a touch channel - see the class
+    // comment above for how that's decided (and which pins that means on
+    // the Thing Plus), and for TSCAP's capacitor requirement, which the
+    // whole peripheral depends on regardless of which sensing pin(s) you
+    // use.
     CapTouch(uint8_t pin);
 
     // One-time setup for this pin: brings up the shared CTSU hardware on
     // the first call from any CapTouch instance, then registers this
     // pin as one of the channels future scan() calls will measure.
-    // Returns false if the pin isn't one of the three touch-capable
-    // pins, or another CapTouch instance already claimed it.
+    // Returns false if the pin's port has no touch channel, or another
+    // CapTouch instance already claimed it.
     bool begin();
 
     // Raw graduated reading from the most recently completed scan()  -
@@ -196,17 +207,9 @@ class CapTouch {
     static const uint8_t DEFAULT_DEBOUNCE_SAMPLES = 2;
     static const unsigned long DEFAULT_STUCK_TIMEOUT_MS = 60000;
 
-    // The three known touch-capable pins on this board and their CTSU
-    // channel numbers (TS00-TS19) - see the class comment for how these
-    // were confirmed. Not exhaustive of the chip's 20 possible channels,
-    // just of what this specific board actually wires up.
-    struct KnownChannel {
-      uint8_t pin;
-      uint8_t tsChannel;
-    };
-    static const KnownChannel KNOWN_CHANNELS[3];
-
-    static const uint8_t MAX_INSTANCES = 3;
+    // One instance per touch channel at most (begin() refuses a second
+    // claim on the same channel), and the RA6M5 has 20.
+    static const uint8_t MAX_INSTANCES = 20;
     static CapTouch *s_instances[MAX_INSTANCES];
     static uint8_t s_instanceCount;
     static bool s_hardwareReady;

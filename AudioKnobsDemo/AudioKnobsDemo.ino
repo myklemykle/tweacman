@@ -14,7 +14,7 @@
   header comment for the DC-offset and output-impedance notes that
   still apply here; nothing about those changes with Faust in the mix -
   plus, for the two touch pads: D6 to a ~10nF capacitor to GND (TSCAP,
-  shared by both pads - see CapTouch.h), and D20 (touch1, gates knob1)
+  shared by both pads - see RA6M5CapTouch.h), and D20 (touch1, gates knob1)
   and D21 (touch2, gates knob2) each to their own wire or touch pad.
 
   Pitch mapping: each pot is wrapped in a MultiTurnKnob (see that
@@ -77,7 +77,7 @@
 #include <RV112FF.h>
 #include <MultiTurnKnob.h>
 #include <RA6M5AnalogTuning.h>
-#include <CapTouch.h>
+#include <RA6M5CapTouch.h>
 #include "faust_support.h"
 #include "synth.h"
 #include "bsp_api.h"   // for R_DAC - the audio ISR writes it directly, same as DACAudioTest
@@ -277,7 +277,7 @@ void loop() {
     previousControlMillis = currentMillis;
 
     // One CapTouch::scan() covers both touch pads at once - see
-    // CapTouch.h - so it only needs calling once here, not per-knob.
+    // RA6M5CapTouch.h - so it only needs calling once here, not per-knob.
     CapTouch::scan();
 
     float turnsPerSweep1 = touch1.isTouched() ? TURNS_PER_SWEEP_FAST : TURNS_PER_SWEEP_SLOW;

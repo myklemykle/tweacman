@@ -639,10 +639,29 @@
   const copyLogBtn = $("copyLogBtn");
   const footer = $("footer");
 
+  // The log is also kept in sessionStorage, which survives a reload of the
+  // same tab. On iOS a browser that crashes the page reloads it with no
+  // error shown, which would otherwise wipe the only record of what went
+  // wrong. Storage can be unavailable (private browsing), hence the try.
+  const LOG_KEY = "wav-remote-log";
+  const LOG_KEEP_CHARS = 20000;
+
   function log(line) {
     const stamp = new Date().toLocaleTimeString();
     logBody.textContent += `\n[${stamp}] ${line}`;
     logBody.scrollTop = logBody.scrollHeight;
+    try {
+      sessionStorage.setItem(LOG_KEY, logBody.textContent.slice(-LOG_KEEP_CHARS));
+    } catch (err) {
+      // not kept - fine
+    }
+  }
+
+  try {
+    const previous = sessionStorage.getItem(LOG_KEY);
+    if (previous) logBody.textContent = previous + "\n--- page reloaded ---";
+  } catch (err) {
+    // nothing to restore
   }
 
   // Results of card operations, and errors, shown where they can be seen -
@@ -963,6 +982,7 @@
     const file = fileInput.files[0];
     fileInput.value = "";  // so picking the same file again still fires
     if (!file) return;
+    log(`Picked ${file.name} (${file.size} bytes).`);
     const name = cleanWavName(file.name);
     if (!name) {
       notice("That file has no usable name.", true);
@@ -1001,9 +1021,38 @@
     });
   }
 
+  // Reads the file a few KB at a time as the upload reaches each part,
+  // rather than all of it up front. An iOS browser that runs out of memory
+  // doesn't report an error - it just reloads the page - and a sample can
+  // easily be tens of MB.
+  const READ_CHUNK_BYTES = 4096;
+
+  function fileReader(file) {
+    let chunk = null;
+    let chunkStart = 0;
+    return async (offset, n) => {
+      if (!chunk || offset < chunkStart || offset + n > chunkStart + chunk.length) {
+        chunkStart = offset;
+        chunk = new Uint8Array(await file.slice(offset, offset + READ_CHUNK_BYTES).arrayBuffer());
+      }
+      return chunk.subarray(offset - chunkStart, offset - chunkStart + n);
+    };
+  }
+
+  // A write that never settles would otherwise hang the upload forever with
+  // nothing on screen to say why.
+  function withTimeout(promise, ms, what) {
+    let timer;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${what} never completed`)), ms);
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+  }
+
   async function runUpload(file, name) {
-    const data = new Uint8Array(await file.arrayBuffer());
-    if (data.length === 0) {
+    const size = file.size;
+    const readBytes = fileReader(file);
+    if (size === 0) {
       hideUploadPanel();
       notice("That file is empty.", true);
       return;
@@ -1013,7 +1062,7 @@
     rowMode = null;
     upload = {
       name,
-      size: data.length,
+      size,
       sent: 0,
       acked: 0,
       ready: false,
@@ -1029,14 +1078,15 @@
     });
     renderFileList();
     updateUploadProgress();
-    log(`Uploading ${name} (${data.length} bytes)...`);
+    log(`Uploading ${name} (${size} bytes)...`);
 
     const u = upload;
     let result;
     try {
-      await sendCommand(`PUT:${data.length}:${name}`, true);
+      await withTimeout(sendCommand(`PUT:${size}:${name}`, true), 5000, "sending PUT");
       await waitUntil(() => u.ready || u.error, 3000);
       if (u.error) throw new Error(u.error);
+      log("Board is ready - sending data.");
       u.started = performance.now();  // time the data, not the handshake
 
       // Keep the window full: send while there's room, otherwise wait for
@@ -1050,7 +1100,8 @@
           continue;
         }
         const n = Math.min(UPLOAD_PACKET_BYTES, room, u.size - u.sent);
-        await writeToBoard(data.subarray(u.sent, u.sent + n));
+        const bytes = await readBytes(u.sent, n);
+        await withTimeout(writeToBoard(bytes), 5000, `the Bluetooth write at byte ${u.sent}`);
         u.sent += n;
       }
 
@@ -1189,21 +1240,31 @@
 
   // -- outgoing data -----------------------------------------------------
 
-  // writeValueWithoutResponse(), not plain writeValue(): confirmed
-  // live on desktop Chrome that writeValue() resolves successfully
-  // (no thrown error) without the write actually reaching the
-  // board's Serial2 at all - DSPS RX is declared write-without-
-  // response-only, and Chrome's automatic type-selection fallback
-  // for plain writeValue() doesn't seem to relay correctly for this
-  // characteristic. NOTE: AudioKnobsWebBLEDemo's page uses plain
-  // writeValue() instead, specifically because Bluefy on iOS
-  // silently drops writeValueWithoutResponse() - if this page also
-  // needs to run in a phone WebBLE app rather than a desktop
-  // browser, that trade-off needs revisiting (possibly detecting
-  // the environment, or accepting one platform doesn't work).
+  // The two platforms this page runs on need opposite write calls, and
+  // both fail silently - the promise resolves, no error, and the bytes
+  // never reach the board:
+  //
+  //   - Desktop Chrome needs writeValueWithoutResponse(). Its plain
+  //     writeValue() is meant to pick the write type the characteristic
+  //     declares (DSPS RX is write-without-response only), but for this
+  //     characteristic it doesn't deliver - confirmed live.
+  //   - Bluefy on iOS needs plain writeValue(). Its
+  //     writeValueWithoutResponse() drops writes - confirmed live in
+  //     AudioKnobsWebBLEDemo, whose page uses writeValue() for that reason.
+  //
+  // Every iOS browser with Web Bluetooth is a third-party app built on
+  // WebKit, so "running on iOS" picks Bluefy's side. iPads report
+  // themselves as Macs, hence the touch-point test.
+  const IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent) ||
+    (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+
   async function writeToBoard(bytes) {
     if (!dspsRxChar) throw new Error("not connected");
-    await dspsRxChar.writeValueWithoutResponse(bytes);
+    if (IS_IOS) {
+      await dspsRxChar.writeValue(bytes);
+    } else {
+      await dspsRxChar.writeValueWithoutResponse(bytes);
+    }
   }
 
   // duringUpload is only for runUpload()'s own PUT: - once the board has
@@ -1344,7 +1405,7 @@
               optionalServices: [AT_SERVICE_UUID, DSPS_SERVICE_UUID],
             }
       );
-      log(`Picked ${device.name || device.id}.`);
+      log(`Picked ${device.name || device.id}. Writing with ${IS_IOS ? "writeValue() (iOS)" : "writeValueWithoutResponse()"}.`);
       device.addEventListener("gattserverdisconnected", () => {
         log("Disconnected.");
         dspsRxChar = null;

@@ -146,6 +146,34 @@ capacitors from the wiper pins to ground). What's left, for the record:
     readiness check (or a short retry on first read) would be more honest
     than the current existence check plus a fixed sleep.
 
+## Arduino libraries - publishing to the Library Manager
+
+- **Publish all four libraries so the Arduino IDE can find and install them.**
+  Plan approved 2026-09-26, postponed until after a code review of the
+  libraries. The Library Manager needs each library in its own repository with
+  `library.properties` at the top, so the plan keeps developing everything in
+  this repo and publishes each library folder from it with `git subtree split`:
+  1. Prep, on `feature/ra6m5-captouch` (which already renamed `CapTouch` to
+     `RA6M5CapTouch` and made it work on any RA6M5 board): set
+     `architectures=*` for `RV112FF` and `MultiTurnKnob`, which aren't
+     chip-specific; run `arduino-lint --library-manager submit` on all four;
+     merge to main.
+  2. Create public GitHub repos `RV112FF`, `RA6M5CapTouch`, `MultiTurnKnob`
+     and `RA6M5AnalogTuning`, then fill in each library's empty `url=`.
+  3. For each library: `git subtree split --prefix=<Library> main`, push the
+     result to its repo's `main`, and tag it `1.0.0` to match
+     `library.properties`. Splitting only reads history, so it's safe to run
+     from any checkout.
+  4. Open a pull request against `arduino/library-registry` adding the four
+     repo URLs. Publish `RV112FF` first: `MultiTurnKnob` has
+     `depends=RV112FF`, which the Library Manager resolves automatically once
+     both are listed.
+  - All four names were free in the registry when checked on 2026-09-25, but
+    names are first-come, first-served.
+  - After publishing, a new release is just the same split-push-tag, with the
+    version bumped in `library.properties`; the registry picks up new tags by
+    itself.
+
 ## Web pages
 
 - **Redeploy the hosted copies.** `mykle.com/webble/oscillator-remote.html` is

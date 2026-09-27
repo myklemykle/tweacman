@@ -432,6 +432,79 @@
   }
   .uploadPanel .rowButtons { display: flex; gap: 8px; justify-content: flex-end; }
 
+  /* -- recording (phones and tablets) --------------------------------- */
+
+  /* Press and hold: nothing the browser does on a long press - text
+     selection, the iOS callout menu, scrolling - may start mid-hold, or it
+     steals the touch and the recording stops early. */
+  .recordBtn {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+    touch-action: none;
+  }
+  .recordBtn[hidden] { display: none; }
+  .recordBtn.recording {
+    background: var(--bad);
+    border-color: var(--bad);
+    color: var(--surface-2);
+  }
+
+  .recordPanel {
+    background: var(--surface);
+    border: 1px solid var(--accent);
+    border-radius: 10px;
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 8px;
+  }
+  .recordPanel.live { border-color: var(--bad); }
+  .recordPanel[hidden] { display: none; }
+  .recordPanel .prompt { font-size: 0.85rem; overflow-wrap: anywhere; }
+  .recordPanel code { font-family: "IBM Plex Mono", ui-monospace, monospace; }
+  .recordPanel .rowButtons { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+  .recLive {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: "Oswald", "Arial Narrow", sans-serif;
+    font-size: 0.85rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--bad);
+  }
+  .recLive[hidden] { display: none; }
+  .recDot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--bad);
+    animation: recPulse 1s ease-in-out infinite;
+  }
+  @keyframes recPulse { 50% { opacity: 0.25; } }
+  @media (prefers-reduced-motion: reduce) { .recDot { animation: none; } }
+  .recTime {
+    margin-left: auto;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0;
+    color: var(--text);
+  }
+  .levelTrack {
+    height: 8px;
+    border-radius: 4px;
+    background: var(--border);
+    overflow: hidden;
+  }
+  .levelTrack[hidden] { display: none; }
+  .levelFill {
+    height: 100%;
+    width: 0%;
+    background: var(--good);
+  }
+
   /* -- debug log -------------------------------------------------------- */
 
   details.log {
@@ -533,6 +606,7 @@
       <div class="eyebrow">Files on card</div>
       <div class="filesButtons">
         <button class="smallBtn" id="uploadBtn" disabled>Upload</button>
+        <button class="smallBtn recordBtn" id="recordBtn" hidden disabled>Hold to record</button>
         <button class="smallBtn" id="refreshBtn" disabled>Refresh</button>
       </div>
     </div>
@@ -544,6 +618,16 @@
       <div class="progressTrack" id="progressTrack"><div class="progressFill" id="progressFill"></div></div>
       <div class="uploadStats" id="uploadStats"></div>
       <div class="rowButtons" id="uploadButtons"></div>
+    </div>
+
+    <div class="recordPanel" id="recordPanel" hidden>
+      <div class="recLive" id="recLive" hidden>
+        <span class="recDot"></span>Recording
+        <span class="recTime" id="recTime">0.0 s</span>
+      </div>
+      <div class="levelTrack" id="levelTrack" hidden><div class="levelFill" id="levelFill"></div></div>
+      <div class="prompt" id="recordPrompt"></div>
+      <div class="rowButtons" id="recordButtons"></div>
     </div>
 
     <ul class="fileList" id="fileList"></ul>
@@ -617,6 +701,14 @@
   const connectBtn = $("connectBtn");
   const refreshBtn = $("refreshBtn");
   const uploadBtn = $("uploadBtn");
+  const recordBtn = $("recordBtn");
+  const recordPanel = $("recordPanel");
+  const recLive = $("recLive");
+  const recTime = $("recTime");
+  const levelTrack = $("levelTrack");
+  const levelFill = $("levelFill");
+  const recordPrompt = $("recordPrompt");
+  const recordButtons = $("recordButtons");
   const fileInput = $("fileInput");
   const transportBtn = $("transportBtn");
   const resetSpeedBtn = $("resetSpeedBtn");
@@ -699,6 +791,9 @@
     const ready = connected && !upload;
     refreshBtn.disabled = !ready;
     uploadBtn.disabled = !ready;
+    // Not while a take is being recorded - a disabled button stops getting
+    // the pointer events that end the recording.
+    if (!recording) recordBtn.disabled = !ready;
     resetSpeedBtn.disabled = !ready;
     resetPitchBtn.disabled = !ready;
     transportBtn.disabled = !ready || (!latched && !currentFile);
@@ -1049,13 +1144,15 @@
     return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
   }
 
+  // file can be any Blob - a picked File, or a recording (see saveTake()).
+  // Returns whether the board saved it.
   async function runUpload(file, name) {
     const size = file.size;
     const readBytes = fileReader(file);
     if (size === 0) {
       hideUploadPanel();
       notice("That file is empty.", true);
-      return;
+      return false;
     }
 
     clearTimeout(listRetryTimer);
@@ -1126,6 +1223,268 @@
     hideUploadPanel();
     notice(result.text, result.bad);
     if (connected) requestFileList(); else updateControls();
+    return u.saved;
+  }
+
+  // -- recording (phones and tablets) ---------------------------------------
+  //
+  // On a phone, the files worth uploading are mostly sounds you haven't
+  // recorded yet, so the Upload button becomes Hold to record. Press to
+  // start, release to stop, then listen back and save or discard.
+  //
+  // Recordings are 16kHz mono. Every byte crosses the ~1.8KB/s Bluetooth
+  // upload (see UPLOAD_PACKET_BYTES), so the sample rate is a direct trade
+  // against waiting: at the phone's own 48kHz one second of audio would take
+  // about 53 seconds to send, at 16kHz about 18. Still fine for voice and
+  // drum hits, and the sketch's resampler plays any rate. For the same
+  // reason takes are capped at RECORD_MAX_SECONDS.
+  //
+  // Phone browsers only record compressed audio (AAC or Opus) through
+  // MediaRecorder, and the sketch plays only 16-bit PCM WAV. So this takes
+  // the raw samples through Web Audio instead and writes the WAV itself.
+
+  const RECORD_SAMPLE_RATE = 16000;
+  const RECORD_MAX_SECONDS = 10;
+  const UPLOAD_BYTES_PER_SECOND = 1800;  // measured - only used for the time estimate
+
+  // "A phone or tablet whose browser lets the page use the mic": a
+  // touchscreen as the main pointer, rather than guessing from browser names.
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  const CAN_RECORD = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && AudioCtx) &&
+    matchMedia("(pointer: coarse)").matches;
+
+  let audioCtx = null;
+  let mic = null;         // { ctx, stream } once the mic has been granted
+  let recording = null;   // the take in progress: { chunks, samples, started }
+  let holding = false;    // finger is down on the record button
+  let take = null;        // the finished take: { wav, seconds }
+  let takeSource = null;  // the take playing back, if it is
+
+  // Opens the mic once and keeps it open, so only the very first press
+  // waits on the permission prompt. The ScriptProcessorNode is deprecated in
+  // favour of AudioWorklet, but it works in every browser this page runs in
+  // and needs no separate module file; it only copies samples out.
+  async function openMic(ctx) {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+    });
+    const source = ctx.createMediaStreamSource(stream);
+    const processor = ctx.createScriptProcessor(4096, 1, 1);
+    processor.onaudioprocess = (e) => {
+      if (!recording) return;
+      const input = e.inputBuffer.getChannelData(0);
+      recording.chunks.push(new Float32Array(input));
+      recording.samples += input.length;
+
+      let sum = 0;
+      for (let i = 0; i < input.length; i++) sum += input[i] * input[i];
+      const rms = Math.sqrt(sum / input.length);
+      levelFill.style.width = `${Math.min(100, rms * 400)}%`;  // x400: speech sits mid-scale
+    };
+    // A processor only runs while connected to the output. It writes
+    // nothing to its output buffer, so nothing is heard.
+    source.connect(processor);
+    processor.connect(ctx.destination);
+    mic = { ctx, stream };
+    log(`Mic open at ${ctx.sampleRate}Hz.`);
+  }
+
+  async function onRecordDown(e) {
+    e.preventDefault();
+    if (recordBtn.disabled) return;
+    try {
+      recordBtn.setPointerCapture(e.pointerId);  // keep recording if the finger slides off
+    } catch (err) {
+      // no capture - the take still ends on release over the button
+    }
+    holding = true;
+    stopTakePlayback();
+
+    // Created and resumed here, synchronously, before any await: iOS only
+    // lets audio start from inside the tap itself, and a context created
+    // after the permission prompt would stay suspended and record silence.
+    if (!audioCtx) audioCtx = new AudioCtx();
+    const resumed = audioCtx.resume();
+
+    if (!mic) {
+      try {
+        await openMic(audioCtx);
+      } catch (err) {
+        holding = false;
+        notice(`No microphone: ${err.message}`, true);
+        return;
+      }
+      // The permission prompt took this press; the next one records.
+      if (!holding) {
+        notice("Microphone ready - hold the button to record.");
+        return;
+      }
+    }
+    await resumed;
+    if (holding) startRecording();
+  }
+
+  function onRecordUp() {
+    holding = false;
+    if (recording) stopRecording();
+  }
+
+  let recTimer = null;
+
+  function startRecording() {
+    recording = { chunks: [], samples: 0, started: performance.now() };
+    recordBtn.classList.add("recording");
+    recordBtn.textContent = "Recording…";
+    recordPanel.hidden = false;
+    recordPanel.classList.add("live");
+    recLive.hidden = false;
+    levelTrack.hidden = false;
+    levelFill.style.width = "0%";
+    recordPrompt.textContent = `Release to stop - up to ${RECORD_MAX_SECONDS} seconds.`;
+    recordButtons.textContent = "";
+    recTimer = setInterval(() => {
+      const seconds = (performance.now() - recording.started) / 1000;
+      recTime.textContent = `${seconds.toFixed(1)} s`;
+      if (seconds >= RECORD_MAX_SECONDS) stopRecording();
+    }, 100);
+  }
+
+  async function stopRecording() {
+    clearInterval(recTimer);
+    const done = recording;
+    recording = null;
+    recordBtn.classList.remove("recording");
+    recordBtn.textContent = "Hold to record";
+    recordPanel.classList.remove("live");
+    recLive.hidden = true;
+    levelTrack.hidden = true;
+    updateControls();
+
+    if (done.samples < mic.ctx.sampleRate * 0.1) {
+      // Under a tenth of a second is a tap, not a take.
+      recordPanel.hidden = !take;
+      if (take) showTake();
+      notice("Hold the button down while you record.", true);
+      return;
+    }
+
+    const samples = await resample(done.chunks, done.samples, mic.ctx.sampleRate);
+    take = { wav: encodeWav(samples, RECORD_SAMPLE_RATE), seconds: samples.length / RECORD_SAMPLE_RATE };
+    log(`Recorded ${take.seconds.toFixed(1)} s (${formatKB(take.wav.size)} KB).`);
+    showTake();
+  }
+
+  // Resamples to RECORD_SAMPLE_RATE through an OfflineAudioContext, which
+  // uses the browser's own properly filtered resampler - naively dropping
+  // samples would fold everything above 8kHz back down as aliasing.
+  async function resample(chunks, length, fromRate) {
+    const OfflineCtx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    const outLength = Math.ceil(length * RECORD_SAMPLE_RATE / fromRate);
+    const offline = new OfflineCtx(1, outLength, RECORD_SAMPLE_RATE);
+    const buffer = offline.createBuffer(1, length, fromRate);
+    const data = buffer.getChannelData(0);
+    let at = 0;
+    for (const chunk of chunks) { data.set(chunk, at); at += chunk.length; }
+    const source = offline.createBufferSource();
+    source.buffer = buffer;
+    source.connect(offline.destination);
+    source.start();
+    const rendered = await offline.startRendering();
+    return rendered.getChannelData(0);
+  }
+
+  // Mono 16-bit PCM WAV: the canonical 44-byte header, then the samples,
+  // little-endian - exactly what WavReader in the sketch accepts.
+  function encodeWav(samples, rate) {
+    const view = new DataView(new ArrayBuffer(44 + samples.length * 2));
+    const text = (at, str) => { for (let i = 0; i < str.length; i++) view.setUint8(at + i, str.charCodeAt(i)); };
+    text(0, "RIFF");
+    view.setUint32(4, 36 + samples.length * 2, true);
+    text(8, "WAVE");
+    text(12, "fmt ");
+    view.setUint32(16, 16, true);        // fmt chunk size
+    view.setUint16(20, 1, true);         // PCM
+    view.setUint16(22, 1, true);         // mono
+    view.setUint32(24, rate, true);
+    view.setUint32(28, rate * 2, true);  // bytes per second
+    view.setUint16(32, 2, true);         // bytes per sample frame
+    view.setUint16(34, 16, true);        // bits per sample
+    text(36, "data");
+    view.setUint32(40, samples.length * 2, true);
+    for (let i = 0; i < samples.length; i++) {
+      const v = Math.max(-1, Math.min(1, samples[i]));
+      view.setInt16(44 + i * 2, v < 0 ? v * 0x8000 : v * 0x7fff, true);
+    }
+    return new Blob([view.buffer], { type: "audio/wav" });
+  }
+
+  // The first userNNN.wav not already on the card.
+  function nextUserName() {
+    for (let n = 1; ; n++) {
+      const name = `user${String(n).padStart(3, "0")}.wav`;
+      if (!fileNames.some((f) => sameName(f, name))) return name;
+    }
+  }
+
+  function showTake() {
+    const name = nextUserName();
+    const uploadSeconds = Math.ceil(take.wav.size / UPLOAD_BYTES_PER_SECOND);
+    recordPanel.hidden = false;
+    recordPrompt.textContent =
+      `${take.seconds.toFixed(1)} s take, ${formatKB(take.wav.size)} KB - about ` +
+      `${uploadSeconds < 90 ? uploadSeconds + " s" : Math.round(uploadSeconds / 60) + " min"} to save. ` +
+      "Hold the button again to re-record.";
+    const playBtn = makeButton("smallBtn", takeSource ? "Stop" : "Play", () => {
+      if (takeSource) stopTakePlayback(); else playTake();
+    });
+    recordButtons.textContent = "";
+    recordButtons.append(
+      makeButton("smallBtn", "Discard", discardTake),
+      playBtn,
+      makeButton("smallBtn primary", `Save as ${name}`, () => saveTake(name))
+    );
+  }
+
+  // Plays the take as it will be saved - after resampling, so what you hear
+  // is what the board will play.
+  async function playTake() {
+    const ctx = mic.ctx;
+    await ctx.resume();
+    const audio = await ctx.decodeAudioData(await take.wav.arrayBuffer());
+    takeSource = ctx.createBufferSource();
+    takeSource.buffer = audio;
+    takeSource.connect(ctx.destination);
+    takeSource.onended = () => { takeSource = null; if (take) showTake(); };
+    takeSource.start();
+    showTake();
+  }
+
+  function stopTakePlayback() {
+    if (!takeSource) return;
+    const source = takeSource;
+    takeSource = null;
+    source.onended = null;
+    source.stop();
+    if (take) showTake();
+  }
+
+  function discardTake() {
+    stopTakePlayback();
+    take = null;
+    recordPanel.hidden = true;
+  }
+
+  // Hands the take to the ordinary upload path. It is kept until the board
+  // confirms the save, so a failed upload can simply be retried.
+  async function saveTake(name) {
+    stopTakePlayback();
+    recordPanel.hidden = true;
+    const saving = take;
+    if (await runUpload(saving.wav, name)) {
+      if (take === saving) take = null;
+    } else if (take === saving) {
+      showTake();
+    }
   }
 
   // -- incoming data --------------------------------------------------------
@@ -1437,6 +1796,14 @@
   connectBtn.addEventListener("click", connect);
   refreshBtn.addEventListener("click", requestFileList);
   uploadBtn.addEventListener("click", () => fileInput.click());
+  if (CAN_RECORD) {
+    uploadBtn.hidden = true;
+    recordBtn.hidden = false;
+    recordBtn.addEventListener("pointerdown", onRecordDown);
+    recordBtn.addEventListener("pointerup", onRecordUp);
+    recordBtn.addEventListener("pointercancel", onRecordUp);
+    recordBtn.addEventListener("contextmenu", (e) => e.preventDefault());
+  }
   fileInput.addEventListener("change", onFilePicked);
   resetSpeedBtn.addEventListener("click", () => sendCommand("RESET:SPEED"));
   resetPitchBtn.addEventListener("click", () => sendCommand("RESET:PITCH"));

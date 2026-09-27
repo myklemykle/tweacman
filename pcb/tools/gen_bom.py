@@ -93,8 +93,8 @@ MOUSER = {
     "STX-3120-3B|cassette:Kycon_STX-3120-3B": ("806-STX-3120-3B", ""),
     "EG1224|Button_Switch_THT:SW_E-Switch_EG1224_SPDT_Angled": ("612-EG1224", ""),
     "LiPo JST-PH|Connector_JST:JST_PH_S2B-PH-K_1x02_P2.00mm_Horizontal": ("306-S2BPHKSLFSNPP", ""),
-    "1x12 socket|None": ("200-SL112TT12", "Samtec SL-112-TT-12: 2.41 mm insulation height (HCTL's is 3.0)"),
-    "1x16 socket|None": ("200-SL116TT12", "Samtec SL-116-TT-12: 2.41 mm insulation height (HCTL's is 3.0)"),
+    "1x12 socket|None": ("200-SL112TT12", "Samtec SL-112-TT-12: body 1.27 mm + contact rim 0.38-0.71 mm = ~2 mm tall; 4.83 mm pin (drawing SX-1XX-XX-XX-X-X)"),
+    "1x16 socket|None": ("200-SL116TT12", "Samtec SL-116-TT-12: body 1.27 mm + contact rim 0.38-0.71 mm = ~2 mm tall; 4.83 mm pin (drawing SX-1XX-XX-XX-X-X)"),
 }
 # Case stack, top to bottom: lid PCB / 15 mm spacer / carrier / 15 mm spacer / base PCB, clamped by one M3 bolt per corner.
 # Top 15 mm: the tallest parts (the Thing Plus's own JST and Qwiic sockets) reach ~11.5 mm, and the lid top at 16.6 mm leaves
@@ -103,8 +103,10 @@ MOUSER = {
 # stock only 10 mm steps above 20 mm), leaving ~1.2 mm of thread past the nut.
 # (description, requirements, purpose, qty per board, manufacturer, MPN, references, note, Mouser #)
 EXTRA = [
-    ("Knob, 24.1 mm dia x 10.3 mm, black, white indicator", "D-bore to fit the RV112FF shaft", "Knobs for RV1/RV2", 2,
-     "Same Sky", "SPK-013A", "RV1, RV2", "", "179-SPK-013A"),
+    ("Knob, 24.1 mm dia x 10.3 mm, black, white indicator", "D-bore to fit the RV112FF shaft", "Knob (small)", 1,
+     "Same Sky", "SPK-013A", "RV1 or RV2", "One of each size to try; either fits either pot", "179-SPK-013A"),
+    ("Knob, 32.5 mm dia x 10.3 mm, black, white indicator", "D-bore to fit the RV112FF shaft", "Knob (large)", 1,
+     "Same Sky", "SPK-014A", "RV1 or RV2", "Same height and 7.2 mm bore depth as the SPK-013A", "179-SPK-014A"),
     ("1x12 male header, 2.54 mm, round pins", "Screw-machine (round) pins", "Solders to the Thing Plus's left column", 1,
      "Samtec", "TS-112-T-A", "U1", "", "200-TS112TA"),
     ("1x16 male header, 2.54 mm, round pins", "Screw-machine (round) pins", "Solders to the Thing Plus's right column", 1,
@@ -122,7 +124,7 @@ EXTRA = [
      "NOT CHOSEN YET: the nut + bolt tail stand ~5.2 mm below the base", ""),
     ("M2.5 x 12 mm pan Phillips screw", "", "Optional Thing Plus hold-down (the sockets hold it already)", 4,
      "Essentra", "50M025045P012", "U1 mounting", "Thing Plus holes are 3.05 mm", "144-50M025045P012"),
-    ("Round spacer, 5 mm, M2.5 clearance, aluminium", "Height = socket (2.41) + header body: 5 mm assumes a ~2.5 mm body, check",
+    ("Round spacer, 5 mm, M2.5 clearance, aluminium", "Height = Thing Plus underside above the carrier: ~5.1 mm (0.200 in) with the SL/TS pair",
      "Between the Thing Plus and the carrier", 4, "RAF Electronic Hardware", "M0504-25-AL", "U1 mounting", "", "761-M0504-25-AL"),
     ("M2.5 hex nut", "", "Under the carrier, for the hold-down screws", 4, "Essentra", "04M025045HN", "U1 mounting", "", "144-04M025045HN"),
     ("Lid and base PCBs", "Two more copies of this carrier PCB", "Case top and bottom", 0, "", "", "",

@@ -133,7 +133,7 @@ EXTRA = [
 
 COLUMNS = ["References", "Qty", "Value", "Description", "Requirements", "Purpose", "Manufacturer", "MPN", "Footprint", "Notes",
            "Mouser #", "Mouser notes", "LCSC #", "LCSC part", "LCSC price (qty 1, USD)", "LCSC stock", "LCSC notes"]
-REF, QTY, DESC, MOUSER_PN = (COLUMNS.index(c) for c in ("References", "Qty", "Description", "Mouser #"))
+REF, QTY, DESC, PURPOSE, MOUSER_PN = (COLUMNS.index(c) for c in ("References", "Qty", "Description", "Purpose", "Mouser #"))
 
 
 def main():
@@ -192,18 +192,19 @@ def write_order(rows, boards):
     global mouser_search
     sys.path.insert(0, str(HERE / "tools"))
     import mouser_search
-    wanted = {}                                               # Mouser # -> (qty per board, references)
+    wanted = {}                                               # Mouser # -> (qty per board, references, source BOM row)
     for r in rows:
         if r[MOUSER_PN] and r[QTY]:
-            q, refs = wanted.get(r[MOUSER_PN], (0, []))
-            wanted[r[MOUSER_PN]] = (q + r[QTY], refs + [r[REF]])
+            q, refs, _ = wanted.get(r[MOUSER_PN], (0, [], r))
+            wanted[r[MOUSER_PN]] = (q + r[QTY], refs + [r[REF]], r)
     found = {p["MouserPartNumber"]: p for p in mouser_search.part_search(list(wanted))}
     out = HERE / f"cassette-carrier-mouser-order-{boards}x.csv"
     total, problems = 0.0, []
     with open(out, "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["Mouser Part Number", "Quantity", "Customer Part Number", "Unit price (USD)", "Line total (USD)", "Stock"])
-        for pn, (per_board, refs) in wanted.items():
+        w.writerow(["Mouser Part Number", "Quantity", "Customer Part Number", "Unit price (USD)", "Line total (USD)", "Stock",
+                    "Description", "Purpose"])
+        for pn, (per_board, refs, row) in wanted.items():
             p, need = found.get(pn), per_board * boards
             if not p:
                 problems.append(f"{pn}: not found at Mouser"); continue
@@ -212,7 +213,8 @@ def write_order(rows, boards):
             if mouser_search.stock(p) < q:
                 problems.append(f"{pn}: need {q}, Mouser has {mouser_search.stock(p)}")
             total += q * (unit or 0)
-            w.writerow([pn, q, "; ".join(refs)[:30], unit, round(q * (unit or 0), 2), mouser_search.stock(p)])
+            w.writerow([pn, q, "; ".join(refs)[:30], unit, round(q * (unit or 0), 2), mouser_search.stock(p),
+                        row[DESC], row[PURPOSE]])
     print(f"wrote {out.name}: {len(wanted)} lines, about ${total:.2f} before shipping and tax")
     for msg in problems:
         print("  CHECK", msg)

@@ -203,18 +203,21 @@ def write_order(rows, boards):
     with open(out, "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["Mouser Part Number", "Quantity", "Customer Part Number", "Unit price (USD)", "Line total (USD)", "Stock",
-                    "Description", "Purpose"])
+                    "Lifecycle", "Description", "Purpose"])
         for pn, (per_board, refs, row) in wanted.items():
             p, need = found.get(pn), per_board * boards
             if not p:
                 problems.append(f"{pn}: not found at Mouser"); continue
             q = order_qty(p, need)
             unit = mouser_search.unit_price(p, q)
+            lifecycle = p.get("LifecycleStatus") or ""
+            if any(word in lifecycle.lower() for word in ("end of life", "obsolete", "not recommended", "discontinued")):
+                problems.append(f"{pn}: {lifecycle} - find a replacement Mouser will keep stocking")
             if mouser_search.stock(p) < q:
                 problems.append(f"{pn}: need {q}, Mouser has {mouser_search.stock(p)}")
             total += q * (unit or 0)
             w.writerow([pn, q, "; ".join(refs)[:30], unit, round(q * (unit or 0), 2), mouser_search.stock(p),
-                        row[DESC], row[PURPOSE]])
+                        lifecycle, row[DESC], row[PURPOSE]])
     print(f"wrote {out.name}: {len(wanted)} lines, about ${total:.2f} before shipping and tax")
     for msg in problems:
         print("  CHECK", msg)

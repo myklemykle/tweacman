@@ -1102,6 +1102,7 @@
         const n = Math.min(UPLOAD_PACKET_BYTES, room, u.size - u.sent);
         const bytes = await readBytes(u.sent, n);
         await withTimeout(writeToBoard(bytes), 5000, `the Bluetooth write at byte ${u.sent}`);
+        if (u.sent === 0) log(`First data packet sent (${n} bytes).`);
         u.sent += n;
       }
 
@@ -1258,8 +1259,18 @@
   const IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent) ||
     (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
 
-  async function writeToBoard(bytes) {
+  async function writeToBoard(view) {
     if (!dspsRxChar) throw new Error("not connected");
+    // Upload packets are views into a larger read buffer (subarray()). A
+    // browser should send only the bytes the view covers, but a WebBLE app
+    // bridging to native code may send the whole underlying buffer instead -
+    // too big for one Bluetooth write, so it would be dropped. Commands,
+    // which are fresh arrays, got through on Bluefy while upload data did
+    // not, which fits exactly that. A copy of exactly the right size is
+    // cheap and rules it out.
+    const bytes = view.byteOffset === 0 && view.byteLength === view.buffer.byteLength
+      ? view
+      : view.slice();
     if (IS_IOS) {
       await dspsRxChar.writeValue(bytes);
     } else {

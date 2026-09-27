@@ -84,7 +84,7 @@ MOUSER = {
     "2.2u film|cassette:C_DCBlock_Dual": ("871-B32522C225J", "TDK B32522C0225J000: PET film 5% 63 V, 15 mm pitch, 18 x 5 x 10.5 mm (lowest 2.2 uF film found)"),
     "2.2u electrolytic|cassette:C_DCBlock_Dual": ("594-2222-021-28228", "Vishay MAL202128228E3: 63 V 20%, 4.5 x 10 mm; datasheet's minimum lead pitch is 15 mm"),
     f"100n|{C_DISC}": ("810-FG28X7R1H104KNT0", "TDK FG28X7R1H104KNT00: X7R 10% 50 V, 5 mm pitch"),
-    "10u|Capacitor_THT:CP_Radial_D5.0mm_P2.00mm": ("140-SS100M1V0505P", "Lelon SS100M1VBK-0505P: 35 V, 5 x 5 mm. Check the 2.0 mm lead pitch"),
+    "10u|Capacitor_THT:CP_Radial_D5.0mm_P2.00mm": ("667-ECA-1VM100", "Panasonic ECA-1VM100: 35 V 20%, 5 x 11 mm, 2.0 mm pitch; long-running M series (Lelon SS 5 x 5 went EOL)"),
     f"10n|{C_DISC}": ("810-FG28C0G1H103JNT6", "TDK FG28C0G1H103JNT06: C0G 5% 50 V, 5 mm pitch"),
     f"1k|{R_AXIAL}": ("603-MFR-12FTF52-1K", "YAGEO MFR-12FTF52-1K: 1% metal film, 1/6 W, 0204 body"),
     "22|cassette:R_Axial_DIN0204_P7.62mm_CutJumper": ("603-MFR-12FTF52-22R", "YAGEO MFR-12FTF52-22R: 1% metal film, 1/6 W, 0204 body"),

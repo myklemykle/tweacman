@@ -96,11 +96,12 @@ MOUSER = {
     "1x12 socket|None": ("200-SL112TT12", "Samtec SL-112-TT-12: body 1.27 mm + contact rim 0.38-0.71 mm = ~2 mm tall; 4.83 mm pin (drawing SX-1XX-XX-XX-X-X)"),
     "1x16 socket|None": ("200-SL116TT12", "Samtec SL-116-TT-12: body 1.27 mm + contact rim 0.38-0.71 mm = ~2 mm tall; 4.83 mm pin (drawing SX-1XX-XX-XX-X-X)"),
 }
-# Case stack, top to bottom: lid PCB / 15 mm spacer / carrier / 15 mm spacer / base PCB, clamped by one M3 bolt per corner.
+# Case stack, top to bottom, at each corner: M3 x 6 screw / lid PCB / 15 mm female-female standoff / carrier / 15 mm
+# male-female standoff (male end up through the carrier into the one above) / base PCB / M3 x 6 screw. The standoffs clamp
+# the carrier on their own, so the case opens without it falling loose, and every part is at Mouser.
 # Top 15 mm: the tallest parts (the Thing Plus's own JST and Qwiic sockets) reach ~11.5 mm, and the lid top at 16.6 mm leaves
 # ~1.2 mm under the knobs (25 mm shaft) - so extra height can't go here. Bottom 15 mm: a LiPo up to ~9 mm thick with foam tape,
-# plus ~2 mm of trimmed leads. Bolt: 3 x 1.6 mm PCB + 15 + 15 = 34.8 mm grip + 4 mm nylock = M3 x 40 (hardware stores often
-# stock only 10 mm steps above 20 mm), leaving ~1.2 mm of thread past the nut.
+# plus ~2 mm of trimmed leads. M3 x 6 through a 1.6 mm board leaves ~4.4 mm of thread in each standoff.
 # (description, requirements, purpose, qty per board, manufacturer, MPN, references, note, Mouser #)
 EXTRA = [
     ("Knob, 24.1 mm dia x 10.3 mm, black, white indicator", "D-bore to fit the RV112FF shaft", "Knob (small)", 1,
@@ -114,14 +115,15 @@ EXTRA = [
     ("LiPo battery, 3.7 V 1200 mAh, 34 x 62 x 5 mm", "JST PH 2-pin, + on pin 1, protection circuit, <= 9 mm thick",
      "Battery; rides under the carrier, foam-taped to the base", 1, "Adafruit", "258", "BT (plugs into J2)",
      "Check polarity before plugging in. Mouser ships lithium cells by ground only", "485-258"),
-    ("Round spacer, 15 mm, M3 clearance, aluminium", "Unthreaded, 3.2 mm bore, <= 6 mm OD", "Lid-carrier and carrier-base spacing", 8,
-     "RAF Electronic Hardware", "M0514-3-AL", "MH1-MH4", "4.5 mm OD", "761-M0514-3-AL"),
-    ("M3 x 40 hex socket cap screw", "ISO 4762 / DIN 912, stainless A2", "Clamps the case stack", 4, "", "", "MH1-MH4",
-     "Not at Mouser (no M3 x 40 of any head style): any hardware store", ""),
-    ("M3 nylon-insert lock nut (nylock)", "DIN 985, stainless A2", "Holds the case bolts", 4, "", "", "MH1-MH4",
-     "Not at Mouser (its 'locking' M3 nuts are press-in types): any hardware store", ""),
-    ("Adhesive rubber foot", "Taller than 6 mm, placed clear of the nuts", "Feet", 4, "", "", "base",
-     "NOT CHOSEN YET: the nut + bolt tail stand ~5.2 mm below the base", ""),
+    ("Hex standoff, M3 x 15 mm, female-female", "5.5 mm across flats (fits the corner holes, 4.2 mm from the edges)",
+     "Lid to carrier", 4, "Wurth Elektronik", "970150321", "MH1-MH4", "", "710-970150321"),
+    ("Hex standoff, M3 x 15 mm, male-female", "5.5 mm across flats; male thread passes the 1.6 mm carrier",
+     "Carrier to base; its male end screws into the standoff above, clamping the carrier", 4,
+     "Wurth Elektronik", "971150321", "MH1-MH4", "", "710-971150321"),
+    ("M3 x 6 mm pan Phillips screw", "", "Lid and base into the standoffs", 8, "Essentra", "50M030050P006", "MH1-MH4",
+     "", "144-50M030050P006"),
+    ("Adhesive rubber foot", "Taller than the base screw heads (~2 mm), or placed clear of them", "Feet", 4, "", "", "base",
+     "NOT CHOSEN YET: e.g. 3M Bumpon SJ5023 (Mouser 517-SJ-5023BK, pad of 36)", ""),
     ("M2.5 x 12 mm pan Phillips screw", "", "Optional Thing Plus hold-down (the sockets hold it already)", 4,
      "Essentra", "50M025045P012", "U1 mounting", "Thing Plus holes are 3.05 mm", "144-50M025045P012"),
     ("Round spacer, 5 mm, M2.5 clearance, aluminium", "Height = Thing Plus underside above the carrier: ~5.1 mm (0.200 in) with the SL/TS pair",

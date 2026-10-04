@@ -1,4 +1,9 @@
+<!doctype html>
+<html lang="en">
 <meta charset="UTF-8">
+<!-- Without this a phone lays the page out at desktop width and shrinks it,
+     leaving every button too small to hit with a finger. -->
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>WAV Remote</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600&family=Public+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap">
 <style>
@@ -50,6 +55,7 @@
     font-family: "Public Sans", -apple-system, "Helvetica Neue", Arial, sans-serif;
     padding-inline: 16px;
     padding-block: 28px;
+    margin: 0;
     display: flex;
     justify-content: center;
   }
@@ -114,6 +120,9 @@
     color: var(--text-dim);
   }
 
+  /* Every button is at least 44px tall - Apple's and Google's minimum for
+     a finger - and touch-action: manipulation turns off double-tap-to-zoom,
+     which otherwise delays every tap while the browser waits for a second. */
   button {
     font-family: "Oswald", "Arial Narrow", sans-serif;
     letter-spacing: 0.05em;
@@ -121,9 +130,12 @@
     border: 1px solid var(--border);
     border-radius: 6px;
     cursor: pointer;
+    min-height: 44px;
+    touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
   }
   button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button:disabled { opacity: 0.45; cursor: default; }
 
   .connectBtn {
     background: var(--accent);
@@ -137,11 +149,100 @@
   .connectBtn:active { background: var(--accent-strong); }
   .connectBtn[hidden] { display: none; }
 
+  /* Secondary buttons: Refresh, Upload, Reset, Cancel... */
+  .smallBtn {
+    background: var(--surface-2);
+    color: var(--text-dim);
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 6px 12px;
+  }
+  .smallBtn:active:not(:disabled) { background: var(--surface); }
+  .smallBtn.primary {
+    background: var(--accent);
+    border-color: var(--accent-strong);
+    color: var(--surface-2);
+  }
+  .smallBtn.primary:active:not(:disabled) { background: var(--accent-strong); }
+  .smallBtn.danger {
+    background: var(--bad);
+    border-color: var(--bad);
+    color: var(--surface-2);
+  }
+
+  /* -- notice (results and errors of card operations) ----------------- */
+
+  .notice {
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--good);
+    border-radius: 8px;
+    background: var(--surface);
+    padding: 10px 12px;
+    font-size: 0.85rem;
+  }
+  .notice.bad { border-left-color: var(--bad); }
+  .notice[hidden] { display: none; }
+
+  /* -- now playing + transport ---------------------------------------- */
+
+  .nowPlaying {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .nowPlayingTop, .nowPlayingBottom {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+  }
+  .nowPlaying .label {
+    font-family: "Oswald", "Arial Narrow", sans-serif;
+    font-size: 0.72rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+  /* Transport state, from the stats line's RUN:/LAT: fields - the board runs
+     only while its touch pad is held unless latched, so this flips
+     constantly in normal use. */
+  .transport {
+    font-family: "Oswald", "Arial Narrow", sans-serif;
+    font-size: 0.66rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+  .transport.running {
+    color: var(--surface-2);
+    background: var(--good);
+    border-color: var(--good);
+  }
+
+  .nowPlaying .filename {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 0.85rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  .transportBtn { min-width: 84px; flex-shrink: 0; }
+
   /* -- stat readout tiles ------------------------------------------- */
 
   .readouts {
     display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
+    grid-template-columns: 1fr 1fr;
     gap: 10px;
   }
 
@@ -173,6 +274,7 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    max-width: 100%;
   }
   .stat .value.bad { color: var(--bad); }
   .stat .value .unit {
@@ -180,57 +282,12 @@
     color: var(--text-dim);
     margin-left: 3px;
   }
-
-  .nowPlaying {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 12px 14px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 10px;
-  }
-  .nowPlaying .label {
-    font-family: "Oswald", "Arial Narrow", sans-serif;
-    font-size: 0.72rem;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: var(--text-dim);
-  }
-  /* Transport state, from the stats line's RUN: field - the board runs only
-     while its touch pad is held, so this flips constantly in normal use. */
-  .transport {
-    font-family: "Oswald", "Arial Narrow", sans-serif;
-    font-size: 0.66rem;
-    letter-spacing: 0.09em;
-    text-transform: uppercase;
-    padding: 2px 8px;
-    border-radius: 999px;
-    border: 1px solid var(--border);
-    color: var(--text-dim);
-    flex-shrink: 0;
-    white-space: nowrap;
-  }
   /* The speed tile showing what the transport *would* run at, rather than
-     what it is doing - see handleStats(). */
+     what it is doing - see handleTelemetry(). Also pitch at unity. */
   .value.potential {
     color: var(--text-dim);
   }
-
-  .transport.running {
-    color: var(--surface-2);
-    background: var(--good);
-    border-color: var(--good);
-  }
-
-  .nowPlaying .filename {
-    font-family: "IBM Plex Mono", ui-monospace, monospace;
-    font-size: 0.85rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
+  .stat .smallBtn { width: 100%; margin-top: 2px; }
 
   /* -- file list ------------------------------------------------------ */
 
@@ -238,16 +295,15 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 8px;
   }
   .filesHeader .eyebrow { margin: 0; }
-  .refreshBtn {
-    background: var(--surface-2);
+  .filesButtons { display: flex; gap: 8px; }
+  .hint {
+    font-size: 0.75rem;
     color: var(--text-dim);
-    font-size: 0.68rem;
-    font-weight: 600;
-    padding: 6px 10px;
+    margin: 6px 0 0;
   }
-  .refreshBtn:active { background: var(--surface); }
 
   .fileList {
     list-style: none;
@@ -256,32 +312,197 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
-    max-height: 260px;
+    max-height: 360px;
     overflow-y: auto;
+    overscroll-behavior: contain;
   }
   .fileItem {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 10px;
-    padding: 12px 14px;
-    font-family: "IBM Plex Mono", ui-monospace, monospace;
-    font-size: 0.85rem;
-    cursor: pointer;
-    user-select: none;
-    -webkit-tap-highlight-color: transparent;
+    padding: 4px 4px 4px 0;
+    display: flex;
+    align-items: center;
+    gap: 4px;
     transition: background-color 0.08s ease, border-color 0.08s ease;
   }
-  .fileItem:hover { border-color: var(--accent); }
   .fileItem.playing {
     background: var(--accent);
     border-color: var(--accent-strong);
-    color: var(--surface-2);
   }
+  .fileItem.playing .fileName,
+  .fileItem.playing .iconBtn { color: var(--surface-2); }
+
+  /* The name itself is the "cue" button: the whole width is a target. */
+  .fileName {
+    flex: 1;
+    min-width: 0;
+    background: none;
+    border: none;
+    color: var(--text);
+    text-align: left;
+    text-transform: none;
+    letter-spacing: 0;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 0.85rem;
+    padding: 8px 6px 8px 14px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .iconBtn {
+    width: 44px;
+    height: 44px;
+    flex-shrink: 0;
+    display: grid;
+    place-items: center;
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    padding: 0;
+  }
+  .iconBtn:active:not(:disabled) { background: var(--border); }
+  .iconBtn svg { width: 20px; height: 20px; }
+  .iconBtn.play { color: var(--good); }
+
+  /* Rename and delete-confirm states replace a row's contents in place. */
+  .fileItem.editing, .fileItem.confirming {
+    padding: 6px;
+    flex-wrap: wrap;
+  }
+  .fileItem.confirming { border-color: var(--bad); }
+  .fileItem .prompt {
+    flex: 1 1 100%;
+    font-size: 0.85rem;
+    padding: 4px 8px;
+    overflow-wrap: anywhere;
+  }
+  .fileItem .prompt code { font-family: "IBM Plex Mono", ui-monospace, monospace; }
+  .fileItem .rowButtons { display: flex; gap: 6px; margin-left: auto; }
+  .renameInput {
+    flex: 1 1 100%;
+    min-height: 44px;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 16px;  /* 16px or more stops iOS zooming the page on focus */
+    color: var(--text);
+    background: var(--surface-2);
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    padding: 8px 10px;
+  }
+
   .fileList:empty::after {
     content: "No files yet - connect, then Refresh.";
     font-family: "Public Sans", sans-serif;
     font-size: 0.8rem;
     color: var(--text-dim);
+  }
+
+  /* -- upload panel --------------------------------------------------- */
+
+  .uploadPanel {
+    background: var(--surface);
+    border: 1px solid var(--accent);
+    border-radius: 10px;
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 8px;
+  }
+  .uploadPanel[hidden] { display: none; }
+  .uploadPanel .prompt { font-size: 0.85rem; overflow-wrap: anywhere; }
+  .uploadPanel code { font-family: "IBM Plex Mono", ui-monospace, monospace; }
+  .progressTrack {
+    height: 8px;
+    border-radius: 4px;
+    background: var(--border);
+    overflow: hidden;
+  }
+  .progressFill {
+    height: 100%;
+    width: 0%;
+    background: var(--accent);
+    transition: width 0.15s linear;
+  }
+  .uploadStats {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 0.75rem;
+    color: var(--text-dim);
+  }
+  .uploadPanel .rowButtons { display: flex; gap: 8px; justify-content: flex-end; }
+
+  /* -- recording (phones and tablets) --------------------------------- */
+
+  /* Press and hold: nothing the browser does on a long press - text
+     selection, the iOS callout menu, scrolling - may start mid-hold, or it
+     steals the touch and the recording stops early. */
+  .recordBtn {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+    touch-action: none;
+  }
+  .recordBtn[hidden] { display: none; }
+  .recordBtn.recording {
+    background: var(--bad);
+    border-color: var(--bad);
+    color: var(--surface-2);
+  }
+
+  .recordPanel {
+    background: var(--surface);
+    border: 1px solid var(--accent);
+    border-radius: 10px;
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 8px;
+  }
+  .recordPanel.live { border-color: var(--bad); }
+  .recordPanel[hidden] { display: none; }
+  .recordPanel .prompt { font-size: 0.85rem; overflow-wrap: anywhere; }
+  .recordPanel code { font-family: "IBM Plex Mono", ui-monospace, monospace; }
+  .recordPanel .rowButtons { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+  .recLive {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: "Oswald", "Arial Narrow", sans-serif;
+    font-size: 0.85rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--bad);
+  }
+  .recLive[hidden] { display: none; }
+  .recDot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--bad);
+    animation: recPulse 1s ease-in-out infinite;
+  }
+  @keyframes recPulse { 50% { opacity: 0.25; } }
+  @media (prefers-reduced-motion: reduce) { .recDot { animation: none; } }
+  .recTime {
+    margin-left: auto;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0;
+    color: var(--text);
+  }
+  .levelTrack {
+    height: 8px;
+    border-radius: 4px;
+    background: var(--border);
+    overflow: hidden;
+  }
+  .levelTrack[hidden] { display: none; }
+  .levelFill {
+    height: 100%;
+    width: 0%;
+    background: var(--good);
   }
 
   /* -- debug log -------------------------------------------------------- */
@@ -298,20 +519,12 @@
     letter-spacing: 0.1em;
     text-transform: uppercase;
     color: var(--text-dim);
-    padding: 10px 14px;
+    padding: 14px;
     cursor: pointer;
   }
   .logToolbar {
     padding: 0 14px 8px;
   }
-  .copyLogBtn {
-    background: var(--surface-2);
-    color: var(--text-dim);
-    font-size: 0.66rem;
-    font-weight: 600;
-    padding: 5px 9px;
-  }
-  .copyLogBtn:active { background: var(--surface); }
   .copyLogBtn.copied { color: var(--good); border-color: var(--good); }
   .logBody {
     font-family: "IBM Plex Mono", ui-monospace, monospace;
@@ -330,6 +543,15 @@
     color: var(--text-dim);
     text-align: center;
   }
+
+  .visuallyHidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
 </style>
 
 <div class="panel">
@@ -345,16 +567,29 @@
     <button class="connectBtn" id="connectBtn">Connect</button>
   </div>
 
+  <div class="notice" id="notice" role="status" hidden></div>
+
   <div class="nowPlaying">
-    <span class="label">Now&nbsp;Playing</span>
-    <span class="filename" id="nowPlaying">&mdash;</span>
-    <span class="transport" id="transport">&mdash;</span>
+    <div class="nowPlayingTop">
+      <span class="label">Now&nbsp;Playing</span>
+      <span class="transport" id="transport">&mdash;</span>
+    </div>
+    <div class="nowPlayingBottom">
+      <span class="filename" id="nowPlaying">&mdash;</span>
+      <button class="smallBtn primary transportBtn" id="transportBtn" disabled>Play</button>
+    </div>
   </div>
 
   <div class="readouts">
     <div class="stat">
       <div class="label">Speed</div>
       <div class="value" id="speed">&mdash;<span class="unit">x</span></div>
+      <button class="smallBtn" id="resetSpeedBtn" disabled>Reset 1x</button>
+    </div>
+    <div class="stat">
+      <div class="label">Pitch</div>
+      <div class="value" id="pitch">&mdash;<span class="unit">x</span></div>
+      <button class="smallBtn" id="resetPitchBtn" disabled>Reset 1x</button>
     </div>
     <div class="stat">
       <div class="label">Buffer</div>
@@ -364,24 +599,44 @@
       <div class="label">Underruns</div>
       <div class="value" id="underruns">&mdash;</div>
     </div>
-    <div class="stat">
-      <div class="label">Pitch</div>
-      <div class="value" id="pitch">&mdash;<span class="unit">x</span></div>
-    </div>
   </div>
 
   <div>
     <div class="filesHeader">
       <div class="eyebrow">Files on card</div>
-      <button class="refreshBtn" id="refreshBtn" disabled>Refresh</button>
+      <div class="filesButtons">
+        <button class="smallBtn" id="uploadBtn" disabled>Upload</button>
+        <button class="smallBtn recordBtn" id="recordBtn" hidden disabled>Hold to record</button>
+        <button class="smallBtn" id="refreshBtn" disabled>Refresh</button>
+      </div>
     </div>
+    <p class="hint">Tap a name to cue it for the touch pads; &#9654; plays it and latches.</p>
+    <input type="file" id="fileInput" class="visuallyHidden" accept=".wav,audio/wav,audio/x-wav" tabindex="-1">
+
+    <div class="uploadPanel" id="uploadPanel" hidden>
+      <div class="prompt" id="uploadPrompt"></div>
+      <div class="progressTrack" id="progressTrack"><div class="progressFill" id="progressFill"></div></div>
+      <div class="uploadStats" id="uploadStats"></div>
+      <div class="rowButtons" id="uploadButtons"></div>
+    </div>
+
+    <div class="recordPanel" id="recordPanel" hidden>
+      <div class="recLive" id="recLive" hidden>
+        <span class="recDot"></span>Recording
+        <span class="recTime" id="recTime">0.0 s</span>
+      </div>
+      <div class="levelTrack" id="levelTrack" hidden><div class="levelFill" id="levelFill"></div></div>
+      <div class="prompt" id="recordPrompt"></div>
+      <div class="rowButtons" id="recordButtons"></div>
+    </div>
+
     <ul class="fileList" id="fileList"></ul>
   </div>
 
   <details class="log">
     <summary>Link log</summary>
     <div class="logToolbar">
-      <button class="copyLogBtn" id="copyLogBtn">Copy log</button>
+      <button class="smallBtn copyLogBtn" id="copyLogBtn">Copy log</button>
     </div>
     <div class="logBody" id="logBody">Not connected yet.</div>
   </details>
@@ -417,41 +672,145 @@
   const DSPS_FLOWCTRL_UUID = "0783b03e-8535-b5a0-7140-a304d2495cb9";  // notify + write: part of the handshake
   const DSPS_RX_UUID       = "0783b03e-8535-b5a0-7140-a304d2495cba";  // write-without-response: phone -> board
 
-  const dot = document.getElementById("dot");
-  const statusText = document.getElementById("statusText");
-  const connectBtn = document.getElementById("connectBtn");
-  const refreshBtn = document.getElementById("refreshBtn");
-  const nowPlaying = document.getElementById("nowPlaying");
-  const speedEl = document.getElementById("speed");
-  const bufferEl = document.getElementById("buffer");
-  const underrunsEl = document.getElementById("underruns");
-  const transportEl = document.getElementById("transport");
-  const pitchEl = document.getElementById("pitch");
-  const fileListEl = document.getElementById("fileList");
-  const logBody = document.getElementById("logBody");
-  const copyLogBtn = document.getElementById("copyLogBtn");
-  const footer = document.getElementById("footer");
+  // Uploads. The board acknowledges every 128 bytes it writes to the card,
+  // and this page never lets more than UPLOAD_WINDOW_BYTES go
+  // unacknowledged: the UART between the Bluetooth module and the RA6M5 has
+  // no hardware flow control and the sketch's receive buffer is 512 bytes,
+  // so anything beyond that would simply be lost. See startUpload() in
+  // SDResampleDemo.ino.
+  //
+  // UPLOAD_PACKET_BYTES is the size of each Bluetooth write, which must fit
+  // in one packet: anything bigger is dropped without an error, and the
+  // upload fails with "timed out waiting for data". This board's module
+  // negotiates an MTU of 65 (measured from a Mac), leaving 62 bytes per
+  // write. If some browser doesn't negotiate at all it gets the BLE minimum
+  // of 23, and uploads need this set to 20 - which works everywhere, just
+  // slower.
+  //
+  // Measured speed is about 1.8KB/s, so a 100KB sample takes about a
+  // minute. That's the rate the Bluetooth stack will send writes at: a
+  // bigger window or bigger packets barely change it (20-byte packets gave
+  // 1.25KB/s, a 1KB window made no difference at all).
+  const UPLOAD_WINDOW_BYTES = 384;
+  const UPLOAD_PACKET_BYTES = 60;
+  const UPLOAD_ACK_TIMEOUT_MS = 8000;
+
+  const $ = (id) => document.getElementById(id);
+  const dot = $("dot");
+  const statusText = $("statusText");
+  const connectBtn = $("connectBtn");
+  const refreshBtn = $("refreshBtn");
+  const uploadBtn = $("uploadBtn");
+  const recordBtn = $("recordBtn");
+  const recordPanel = $("recordPanel");
+  const recLive = $("recLive");
+  const recTime = $("recTime");
+  const levelTrack = $("levelTrack");
+  const levelFill = $("levelFill");
+  const recordPrompt = $("recordPrompt");
+  const recordButtons = $("recordButtons");
+  const fileInput = $("fileInput");
+  const transportBtn = $("transportBtn");
+  const resetSpeedBtn = $("resetSpeedBtn");
+  const resetPitchBtn = $("resetPitchBtn");
+  const nowPlaying = $("nowPlaying");
+  const speedEl = $("speed");
+  const bufferEl = $("buffer");
+  const underrunsEl = $("underruns");
+  const transportEl = $("transport");
+  const pitchEl = $("pitch");
+  const fileListEl = $("fileList");
+  const noticeEl = $("notice");
+  const uploadPanel = $("uploadPanel");
+  const uploadPrompt = $("uploadPrompt");
+  const progressTrack = $("progressTrack");
+  const progressFill = $("progressFill");
+  const uploadStats = $("uploadStats");
+  const uploadButtons = $("uploadButtons");
+  const logBody = $("logBody");
+  const copyLogBtn = $("copyLogBtn");
+  const footer = $("footer");
+
+  // The log is also kept in sessionStorage, which survives a reload of the
+  // same tab. On iOS a browser that crashes the page reloads it with no
+  // error shown, which would otherwise wipe the only record of what went
+  // wrong. Storage can be unavailable (private browsing), hence the try.
+  const LOG_KEY = "wav-remote-log";
+  const LOG_KEEP_CHARS = 20000;
 
   function log(line) {
     const stamp = new Date().toLocaleTimeString();
     logBody.textContent += `\n[${stamp}] ${line}`;
     logBody.scrollTop = logBody.scrollHeight;
+    try {
+      sessionStorage.setItem(LOG_KEY, logBody.textContent.slice(-LOG_KEEP_CHARS));
+    } catch (err) {
+      // not kept - fine
+    }
+  }
+
+  try {
+    const previous = sessionStorage.getItem(LOG_KEY);
+    if (previous) logBody.textContent = previous + "\n--- page reloaded ---";
+  } catch (err) {
+    // nothing to restore
+  }
+
+  // Results of card operations, and errors, shown where they can be seen -
+  // the link log is folded away and easy to miss on a phone.
+  let noticeTimer = null;
+  function notice(text, bad = false) {
+    noticeEl.textContent = text;
+    noticeEl.classList.toggle("bad", bad);
+    noticeEl.hidden = false;
+    clearTimeout(noticeTimer);
+    noticeTimer = setTimeout(() => { noticeEl.hidden = true; }, bad ? 8000 : 4000);
   }
 
   let device = null;
   let dspsRxChar = null;
   let dspsBuffer = "";  // accumulates raw DSPS TX bytes until a newline
+  let connected = false;
   let currentFile = null;
+  let latched = false;
+  let fileNames = [];
 
-  function setConnected(connected) {
-    dot.classList.toggle("connected", connected);
-    statusText.textContent = connected ? "Connected" : "Disconnected";
-    connectBtn.hidden = connected;
-    refreshBtn.disabled = !connected;
-    if (!connected) {
+  // The upload in progress, if any - see runUpload(). While it is set the
+  // board is reading raw file data rather than commands, so every other
+  // command is held back (see sendCommand()).
+  let upload = null;
+
+  // Which row, if any, is showing its rename box or delete confirmation:
+  // { name, kind: "rename" | "delete" }.
+  let rowMode = null;
+
+  const sameName = (a, b) => a != null && b != null && a.toLowerCase() === b.toLowerCase();
+
+  // Enables and disables everything that talks to the board, in one place.
+  function updateControls() {
+    const ready = connected && !upload;
+    refreshBtn.disabled = !ready;
+    uploadBtn.disabled = !ready;
+    // Not while a take is being recorded - a disabled button stops getting
+    // the pointer events that end the recording.
+    if (!recording) recordBtn.disabled = !ready;
+    resetSpeedBtn.disabled = !ready;
+    resetPitchBtn.disabled = !ready;
+    transportBtn.disabled = !ready || (!latched && !currentFile);
+    transportBtn.textContent = latched ? "Stop" : "Play";
+    for (const btn of fileListEl.querySelectorAll("button")) btn.disabled = !ready;
+  }
+
+  function setConnected(isConnected) {
+    connected = isConnected;
+    dot.classList.toggle("connected", isConnected);
+    statusText.textContent = isConnected ? "Connected" : "Disconnected";
+    connectBtn.hidden = isConnected;
+    if (!isConnected) {
       nowPlaying.textContent = "—";
       transportEl.textContent = "—";
       pitchEl.innerHTML = "&mdash;<span class=\"unit\">x</span>";
+      pitchEl.classList.remove("potential");
       transportEl.classList.remove("running");
       speedEl.innerHTML = "&mdash;<span class=\"unit\">x</span>";
       speedEl.classList.remove("potential");
@@ -459,9 +818,48 @@
       underrunsEl.textContent = "—";
       underrunsEl.classList.remove("bad");
       fileListEl.textContent = "";
+      fileNames = [];
+      rowMode = null;
       currentFile = null;
+      latched = false;
+      if (upload) upload.error = "disconnected";
+      wakeWaiters();
+    }
+    updateControls();
+  }
+
+  // -- waiting for replies -----------------------------------------------
+  //
+  // An upload is a conversation: send PUT:, wait for READY:, send data, wait
+  // for ACK:s, wait for SAVED:. waitUntil() resolves once a condition on the
+  // page's state holds, re-checking it after every line from the board, so
+  // the order in which a reply and the wait arrive can never lose a reply.
+
+  const waiters = new Set();
+
+  function waitUntil(condition, timeoutMs) {
+    return new Promise((resolve, reject) => {
+      const waiter = { condition, resolve };
+      waiter.timer = setTimeout(() => {
+        waiters.delete(waiter);
+        reject(new Error("the board stopped answering"));
+      }, timeoutMs);
+      waiters.add(waiter);
+      wakeWaiters();
+    });
+  }
+
+  function wakeWaiters() {
+    for (const waiter of [...waiters]) {
+      if (waiter.condition()) {
+        clearTimeout(waiter.timer);
+        waiters.delete(waiter);
+        waiter.resolve();
+      }
     }
   }
+
+  // -- file list ------------------------------------------------------------
 
   // File list arrives as a block: "FILES:BEGIN", one filename per line,
   // "FILES:END" - not a single line, so it's handled outside
@@ -484,6 +882,7 @@
   const LIST_MAX_RETRIES = 2;
 
   function requestFileList() {
+    if (upload) return;  // the board is taking file data, not commands
     listRetryCount = 0;
     sendListWithRetry();
   }
@@ -503,36 +902,616 @@
     }, LIST_RETRY_TIMEOUT_MS);
   }
 
-  function renderFileList(names) {
+  // Small inline icons, so rows stay compact on a phone without an icon font.
+  const ICONS = {
+    play: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4.5v15l13-7.5z"/></svg>',
+    rename: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></svg>',
+    delete: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>',
+  };
+
+  function makeButton(className, label, onClick, html) {
+    const btn = document.createElement("button");
+    btn.className = className;
+    if (html) {
+      btn.innerHTML = html;
+      btn.setAttribute("aria-label", label);
+      btn.title = label;
+    } else {
+      btn.textContent = label;
+    }
+    btn.addEventListener("click", onClick);
+    return btn;
+  }
+
+  function renderFileList() {
     fileListEl.textContent = "";
-    for (const name of names) {
+    let renameInput = null;
+    for (const name of fileNames) {
       const li = document.createElement("li");
-      li.className = "fileItem" + (name === currentFile ? " playing" : "");
-      li.textContent = name;
-      li.addEventListener("click", () => sendCommand("PLAY:" + name));
+      li.className = "fileItem";
+      li.dataset.name = name;
+      const mode = rowMode && sameName(rowMode.name, name) ? rowMode.kind : null;
+
+      if (mode === "rename") {
+        renameInput = renderRenameRow(li, name);
+      } else if (mode === "delete") {
+        li.classList.add("confirming");
+        const prompt = document.createElement("div");
+        prompt.className = "prompt";
+        prompt.append("Delete ", Object.assign(document.createElement("code"), { textContent: name }), " from the card?");
+        const buttons = document.createElement("div");
+        buttons.className = "rowButtons";
+        buttons.append(
+          makeButton("smallBtn", "Cancel", () => setRowMode(null)),
+          makeButton("smallBtn danger", "Delete", () => {
+            setRowMode(null);
+            sendCommand("DEL:" + name);
+          })
+        );
+        li.append(prompt, buttons);
+      } else {
+        li.classList.toggle("playing", sameName(name, currentFile));
+        li.append(
+          makeButton("fileName", name, () => sendCommand("PLAY:" + name)),
+          makeButton("iconBtn play", `Play and latch ${name}`, () => sendCommand("LATCH:" + name), ICONS.play),
+          makeButton("iconBtn", `Rename ${name}`, () => setRowMode({ name, kind: "rename" }), ICONS.rename),
+          makeButton("iconBtn", `Delete ${name}`, () => setRowMode({ name, kind: "delete" }), ICONS.delete)
+        );
+      }
       fileListEl.appendChild(li);
     }
+    updateControls();
+
+    // Focus the rename box once it is in the page, selecting the name but
+    // not the extension, so typing replaces just that.
+    if (renameInput) {
+      renameInput.focus();
+      const dotAt = renameInput.value.lastIndexOf(".");
+      renameInput.setSelectionRange(0, dotAt > 0 ? dotAt : renameInput.value.length);
+    }
+  }
+
+  function renderRenameRow(li, name) {
+    li.classList.add("editing");
+    const input = document.createElement("input");
+    input.className = "renameInput";
+    input.value = name;
+    input.setAttribute("aria-label", `New name for ${name}`);
+    input.autocapitalize = "off";
+    input.autocomplete = "off";
+    input.spellcheck = false;
+
+    const save = () => {
+      const newName = cleanWavName(input.value);
+      if (!newName) {
+        notice("Enter a name.", true);
+        return;
+      }
+      setRowMode(null);
+      if (newName === name) return;
+      if (!sameName(newName, name) && fileNames.some((n) => sameName(n, newName))) {
+        notice(`${newName} is already on the card.`, true);
+        return;
+      }
+      sendCommand(`REN:${name}/${newName}`);
+    };
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") save();
+      if (e.key === "Escape") setRowMode(null);
+    });
+
+    const buttons = document.createElement("div");
+    buttons.className = "rowButtons";
+    buttons.append(
+      makeButton("smallBtn", "Cancel", () => setRowMode(null)),
+      makeButton("smallBtn primary", "Save", save)
+    );
+    li.append(input, buttons);
+    return input;
+  }
+
+  function setRowMode(mode) {
+    rowMode = mode;
+    renderFileList();
+  }
+
+  // Makes a name the board will accept: the characters FAT forbids become
+  // "_", and it must end in .wav - the board only lists .wav files, so a
+  // file saved under any other name would vanish from this page. Mirrors
+  // isValidWavName() in the sketch.
+  function cleanWavName(raw) {
+    let name = raw.trim().replace(/[\/\\:*?"<>|\x00-\x1f]/g, "_");
+    if (!name || name === ".wav") return "";
+    if (!/\.wav$/i.test(name)) name += ".wav";
+    if (name.length > 64) name = name.slice(0, 60) + name.slice(-4);
+    return name;
   }
 
   function setNowPlaying(name) {
     currentFile = name === "NONE" ? null : name;
     nowPlaying.textContent = currentFile || "—";
     for (const li of fileListEl.children) {
-      li.classList.toggle("playing", li.textContent === currentFile);
+      li.classList.toggle("playing", !rowMode && sameName(li.dataset.name, currentFile));
     }
+    updateControls();
+  }
+
+  // rest is "<filename>:<reason>" - only the first colon in it is ours
+  // to split on, the reason itself is free text and isn't parsed further.
+  function splitError(rest) {
+    const sep = rest.indexOf(":");
+    return sep === -1 ? [rest, ""] : [rest.slice(0, sep), rest.slice(sep + 1)];
   }
 
   function showError(rest) {
-    // rest is "<filename>:<reason>" - only the first colon in it is ours
-    // to split on, the reason itself is free text and isn't parsed further.
-    const sep = rest.indexOf(":");
-    const filename = sep === -1 ? rest : rest.slice(0, sep);
-    const reason = sep === -1 ? "" : rest.slice(sep + 1);
+    const [filename, reason] = splitError(rest);
     log(`! ${filename}: ${reason}`);
+    if (upload && sameName(filename, upload.name)) {
+      upload.error = reason;  // runUpload() reports it
+    } else {
+      notice(`${filename}: ${reason}`, true);
+    }
   }
 
+  // -- upload -------------------------------------------------------------
+
+  function showUploadPanel({ prompt, progress, stats, buttons }) {
+    uploadPanel.hidden = false;
+    uploadPrompt.textContent = "";
+    uploadPrompt.append(...prompt);
+    progressTrack.hidden = progress == null;
+    progressFill.style.width = `${(progress || 0) * 100}%`;
+    uploadStats.textContent = stats || "";
+    uploadStats.hidden = !stats;
+    uploadButtons.textContent = "";
+    uploadButtons.append(...buttons);
+  }
+
+  function hideUploadPanel() {
+    uploadPanel.hidden = true;
+  }
+
+  const code = (text) => Object.assign(document.createElement("code"), { textContent: text });
+
+  function onFilePicked() {
+    const file = fileInput.files[0];
+    fileInput.value = "";  // so picking the same file again still fires
+    if (!file) return;
+    log(`Picked ${file.name} (${file.size} bytes).`);
+    const name = cleanWavName(file.name);
+    if (!name) {
+      notice("That file has no usable name.", true);
+      return;
+    }
+
+    const existing = fileNames.find((n) => sameName(n, name));
+    if (existing) {
+      showUploadPanel({
+        prompt: [code(existing), " is already on the card. Replace it?"],
+        buttons: [
+          makeButton("smallBtn", "Cancel", hideUploadPanel),
+          makeButton("smallBtn danger", "Replace", () => runUpload(file, existing)),
+        ],
+      });
+    } else {
+      runUpload(file, name);
+    }
+  }
+
+  function formatKB(bytes) {
+    return (bytes / 1024).toFixed(1);
+  }
+
+  function updateUploadProgress() {
+    const { name, size, acked, started } = upload;
+    const seconds = (performance.now() - started) / 1000;
+    const rate = seconds > 0.5 ? acked / seconds : 0;
+    const left = rate > 0 ? Math.ceil((size - acked) / rate) : null;
+    const eta = left == null ? "" : ` · ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")} left`;
+    showUploadPanel({
+      prompt: [upload.cancelled ? "Cancelling " : "Uploading ", code(name)],
+      progress: acked / size,
+      stats: `${formatKB(acked)} / ${formatKB(size)} KB` + (rate ? ` · ${formatKB(rate)} KB/s` : "") + eta,
+      buttons: [upload.cancelButton],
+    });
+  }
+
+  // Reads the file a few KB at a time as the upload reaches each part,
+  // rather than all of it up front. An iOS browser that runs out of memory
+  // doesn't report an error - it just reloads the page - and a sample can
+  // easily be tens of MB.
+  const READ_CHUNK_BYTES = 4096;
+
+  function fileReader(file) {
+    let chunk = null;
+    let chunkStart = 0;
+    return async (offset, n) => {
+      if (!chunk || offset < chunkStart || offset + n > chunkStart + chunk.length) {
+        chunkStart = offset;
+        chunk = new Uint8Array(await file.slice(offset, offset + READ_CHUNK_BYTES).arrayBuffer());
+      }
+      return chunk.subarray(offset - chunkStart, offset - chunkStart + n);
+    };
+  }
+
+  // A write that never settles would otherwise hang the upload forever with
+  // nothing on screen to say why.
+  function withTimeout(promise, ms, what) {
+    let timer;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${what} never completed`)), ms);
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+  }
+
+  // file can be any Blob - a picked File, or a recording (see saveTake()).
+  // Returns whether the board saved it.
+  async function runUpload(file, name) {
+    const size = file.size;
+    const readBytes = fileReader(file);
+    if (size === 0) {
+      hideUploadPanel();
+      notice("That file is empty.", true);
+      return false;
+    }
+
+    clearTimeout(listRetryTimer);
+    rowMode = null;
+    upload = {
+      name,
+      size,
+      sent: 0,
+      acked: 0,
+      ready: false,
+      saved: false,
+      error: null,
+      cancelled: false,
+      started: performance.now(),
+    };
+    upload.cancelButton = makeButton("smallBtn", "Cancel", () => {
+      upload.cancelled = true;
+      upload.cancelButton.disabled = true;
+      updateUploadProgress();
+    });
+    renderFileList();
+    updateUploadProgress();
+    log(`Uploading ${name} (${size} bytes)...`);
+
+    const u = upload;
+    let result;
+    try {
+      await withTimeout(sendCommand(`PUT:${size}:${name}`, true), 5000, "sending PUT");
+      await waitUntil(() => u.ready || u.error, 3000);
+      if (u.error) throw new Error(u.error);
+      log("Board is ready - sending data.");
+      u.started = performance.now();  // time the data, not the handshake
+
+      // Keep the window full: send while there's room, otherwise wait for
+      // the board to acknowledge what it has written so far.
+      while (u.sent < u.size && !u.cancelled) {
+        if (u.error) throw new Error(u.error);
+        const room = UPLOAD_WINDOW_BYTES - (u.sent - u.acked);
+        if (room <= 0) {
+          const ackedBefore = u.acked;
+          await waitUntil(() => u.acked > ackedBefore || u.error || u.cancelled, UPLOAD_ACK_TIMEOUT_MS);
+          continue;
+        }
+        const n = Math.min(UPLOAD_PACKET_BYTES, room, u.size - u.sent);
+        const bytes = await readBytes(u.sent, n);
+        await withTimeout(writeToBoard(bytes), 5000, `the Bluetooth write at byte ${u.sent}`);
+        if (u.sent === 0) log(`First data packet sent (${n} bytes).`);
+        u.sent += n;
+      }
+
+      if (u.cancelled) {
+        // The board can't be told to stop mid-stream - anything sent now
+        // would be taken as file data. Going quiet is the signal: it gives
+        // up after a few seconds without data, and deletes the partial copy.
+        await waitUntil(() => u.error, 8000);
+        result = { text: `Upload of ${name} cancelled - nothing on the card was changed.`, bad: false };
+      } else {
+        await waitUntil(() => u.saved || u.error, UPLOAD_ACK_TIMEOUT_MS);
+        if (u.error) throw new Error(u.error);
+        result = { text: `Saved ${name} (${formatKB(u.size)} KB).`, bad: false };
+      }
+    } catch (err) {
+      result = { text: `Upload of ${name} failed: ${err.message}`, bad: true };
+    }
+
+    log(result.text);
+    upload = null;
+    hideUploadPanel();
+    notice(result.text, result.bad);
+    if (connected) requestFileList(); else updateControls();
+    return u.saved;
+  }
+
+  // -- recording (phones and tablets) ---------------------------------------
+  //
+  // On a phone, the files worth uploading are mostly sounds you haven't
+  // recorded yet, so the Upload button becomes Hold to record. Press to
+  // start, release to stop, then listen back and save or discard.
+  //
+  // Recordings are 16kHz mono. Every byte crosses the ~1.8KB/s Bluetooth
+  // upload (see UPLOAD_PACKET_BYTES), so the sample rate is a direct trade
+  // against waiting: at the phone's own 48kHz one second of audio would take
+  // about 53 seconds to send, at 16kHz about 18. Still fine for voice and
+  // drum hits, and the sketch's resampler plays any rate. For the same
+  // reason takes are capped at RECORD_MAX_SECONDS.
+  //
+  // Phone browsers only record compressed audio (AAC or Opus) through
+  // MediaRecorder, and the sketch plays only 16-bit PCM WAV. So this takes
+  // the raw samples through Web Audio instead and writes the WAV itself.
+
+  const RECORD_SAMPLE_RATE = 16000;
+  const RECORD_MAX_SECONDS = 10;
+  const UPLOAD_BYTES_PER_SECOND = 1800;  // measured - only used for the time estimate
+
+  // "A phone or tablet whose browser lets the page use the mic": a
+  // touchscreen as the main pointer, rather than guessing from browser names.
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  const CAN_RECORD = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && AudioCtx) &&
+    matchMedia("(pointer: coarse)").matches;
+
+  let mic = null;         // { ctx, stream, processor } while the mic is open
+  let recording = null;   // the take in progress: { chunks, samples, rate, started }
+  let holding = false;    // finger is down on the record button
+  let micOpening = false; // a press is waiting for the mic to open
+  let take = null;        // the finished take: { wav, seconds }
+  let takeAudio = null;   // the <audio> element playing the take back, if it is
+
+  // The mic is open only while the button is held. Leaving it open between
+  // takes would be quicker, but while any page has the mic, iOS keeps audio
+  // in its record-and-play mode, and in Bluefy that sends all playback to
+  // the earpiece instead of the speaker - confirmed on an iPhone, where
+  // takes played back inaudibly quietly. So each press opens the mic and
+  // each release closes it, audio context and all. The price is a fraction
+  // of a second at the start of each take while the mic opens.
+  //
+  // The ScriptProcessorNode is deprecated in favour of AudioWorklet, but it
+  // works in every browser this page runs in and needs no separate module
+  // file; it only copies samples out.
+  async function openMic(ctx) {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+    });
+    const source = ctx.createMediaStreamSource(stream);
+    const processor = ctx.createScriptProcessor(4096, 1, 1);
+    processor.onaudioprocess = (e) => {
+      if (!recording) return;
+      const input = e.inputBuffer.getChannelData(0);
+      recording.chunks.push(new Float32Array(input));
+      recording.samples += input.length;
+
+      let sum = 0;
+      for (let i = 0; i < input.length; i++) sum += input[i] * input[i];
+      const rms = Math.sqrt(sum / input.length);
+      levelFill.style.width = `${Math.min(100, rms * 400)}%`;  // x400: speech sits mid-scale
+    };
+    // A processor only runs while connected to the output. It writes
+    // nothing to its output buffer, so nothing is heard.
+    source.connect(processor);
+    processor.connect(ctx.destination);
+    mic = { ctx, stream, processor };
+  }
+
+  function closeMic() {
+    if (!mic) return;
+    mic.processor.onaudioprocess = null;
+    for (const track of mic.stream.getTracks()) track.stop();
+    mic.ctx.close();
+    mic = null;
+  }
+
+  async function onRecordDown(e) {
+    e.preventDefault();
+    if (recordBtn.disabled) return;
+    try {
+      recordBtn.setPointerCapture(e.pointerId);  // keep recording if the finger slides off
+    } catch (err) {
+      // no capture - the take still ends on release over the button
+    }
+    holding = true;
+    stopTakePlayback();
+
+    // Created and resumed here, synchronously, before any await: iOS only
+    // lets audio start from inside the tap itself, and a context created
+    // after the mic opens would stay suspended and record silence.
+    if (micOpening || mic) return;  // a previous press is still using it
+    micOpening = true;
+    const ctx = new AudioCtx();
+    const resumed = ctx.resume();
+
+    try {
+      await openMic(ctx);
+      await resumed;
+    } catch (err) {
+      holding = false;
+      if (mic) closeMic(); else ctx.close();
+      notice(`No microphone: ${err.message}`, true);
+      return;
+    } finally {
+      micOpening = false;
+    }
+    // Let go before the mic was ready - a tap, or a permission prompt that
+    // took the press.
+    if (!holding) {
+      closeMic();
+      notice("Hold the button down while you record.");
+      return;
+    }
+    startRecording();
+  }
+
+  function onRecordUp() {
+    holding = false;
+    if (recording) stopRecording();
+  }
+
+  let recTimer = null;
+
+  function startRecording() {
+    recording = { chunks: [], samples: 0, rate: mic.ctx.sampleRate, started: performance.now() };
+    recordBtn.classList.add("recording");
+    recordBtn.textContent = "Recording…";
+    recordPanel.hidden = false;
+    recordPanel.classList.add("live");
+    recLive.hidden = false;
+    levelTrack.hidden = false;
+    levelFill.style.width = "0%";
+    recordPrompt.textContent = `Release to stop - up to ${RECORD_MAX_SECONDS} seconds.`;
+    recordButtons.textContent = "";
+    recTimer = setInterval(() => {
+      const seconds = (performance.now() - recording.started) / 1000;
+      recTime.textContent = `${seconds.toFixed(1)} s`;
+      if (seconds >= RECORD_MAX_SECONDS) stopRecording();
+    }, 100);
+  }
+
+  async function stopRecording() {
+    clearInterval(recTimer);
+    const done = recording;
+    recording = null;
+    closeMic();
+    recordBtn.classList.remove("recording");
+    recordBtn.textContent = "Hold to record";
+    recordPanel.classList.remove("live");
+    recLive.hidden = true;
+    levelTrack.hidden = true;
+    updateControls();
+
+    if (done.samples < done.rate * 0.1) {
+      // Under a tenth of a second is a tap, not a take.
+      recordPanel.hidden = !take;
+      if (take) showTake();
+      notice("Hold the button down while you record.", true);
+      return;
+    }
+
+    const samples = await resample(done.chunks, done.samples, done.rate);
+    take = { wav: encodeWav(samples, RECORD_SAMPLE_RATE), seconds: samples.length / RECORD_SAMPLE_RATE };
+    log(`Recorded ${take.seconds.toFixed(1)} s (${formatKB(take.wav.size)} KB).`);
+    showTake();
+  }
+
+  // Resamples to RECORD_SAMPLE_RATE through an OfflineAudioContext, which
+  // uses the browser's own properly filtered resampler - naively dropping
+  // samples would fold everything above 8kHz back down as aliasing.
+  async function resample(chunks, length, fromRate) {
+    const OfflineCtx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    const outLength = Math.ceil(length * RECORD_SAMPLE_RATE / fromRate);
+    const offline = new OfflineCtx(1, outLength, RECORD_SAMPLE_RATE);
+    const buffer = offline.createBuffer(1, length, fromRate);
+    const data = buffer.getChannelData(0);
+    let at = 0;
+    for (const chunk of chunks) { data.set(chunk, at); at += chunk.length; }
+    const source = offline.createBufferSource();
+    source.buffer = buffer;
+    source.connect(offline.destination);
+    source.start();
+    const rendered = await offline.startRendering();
+    return rendered.getChannelData(0);
+  }
+
+  // Mono 16-bit PCM WAV: the canonical 44-byte header, then the samples,
+  // little-endian - exactly what WavReader in the sketch accepts.
+  function encodeWav(samples, rate) {
+    const view = new DataView(new ArrayBuffer(44 + samples.length * 2));
+    const text = (at, str) => { for (let i = 0; i < str.length; i++) view.setUint8(at + i, str.charCodeAt(i)); };
+    text(0, "RIFF");
+    view.setUint32(4, 36 + samples.length * 2, true);
+    text(8, "WAVE");
+    text(12, "fmt ");
+    view.setUint32(16, 16, true);        // fmt chunk size
+    view.setUint16(20, 1, true);         // PCM
+    view.setUint16(22, 1, true);         // mono
+    view.setUint32(24, rate, true);
+    view.setUint32(28, rate * 2, true);  // bytes per second
+    view.setUint16(32, 2, true);         // bytes per sample frame
+    view.setUint16(34, 16, true);        // bits per sample
+    text(36, "data");
+    view.setUint32(40, samples.length * 2, true);
+    for (let i = 0; i < samples.length; i++) {
+      const v = Math.max(-1, Math.min(1, samples[i]));
+      view.setInt16(44 + i * 2, v < 0 ? v * 0x8000 : v * 0x7fff, true);
+    }
+    return new Blob([view.buffer], { type: "audio/wav" });
+  }
+
+  // The first userNNN.wav not already on the card.
+  function nextUserName() {
+    for (let n = 1; ; n++) {
+      const name = `user${String(n).padStart(3, "0")}.wav`;
+      if (!fileNames.some((f) => sameName(f, name))) return name;
+    }
+  }
+
+  function showTake() {
+    const name = nextUserName();
+    const uploadSeconds = Math.ceil(take.wav.size / UPLOAD_BYTES_PER_SECOND);
+    recordPanel.hidden = false;
+    recordPrompt.textContent =
+      `${take.seconds.toFixed(1)} s take, ${formatKB(take.wav.size)} KB - about ` +
+      `${uploadSeconds < 90 ? uploadSeconds + " s" : Math.round(uploadSeconds / 60) + " min"} to save. ` +
+      "Hold the button again to re-record.";
+    const playBtn = makeButton("smallBtn", takeAudio ? "Stop" : "Play", () => {
+      if (takeAudio) stopTakePlayback(); else playTake();
+    });
+    recordButtons.textContent = "";
+    recordButtons.append(
+      makeButton("smallBtn", "Discard", discardTake),
+      playBtn,
+      makeButton("smallBtn primary", `Save as ${name}`, () => saveTake(name))
+    );
+  }
+
+  // Plays the take as it will be saved - the resampled WAV itself, so what
+  // you hear is what the board will play. Through an <audio> element rather
+  // than Web Audio: on iPhone, Web Audio is also muted by the ring/silent
+  // switch, and an <audio> element isn't.
+  function playTake() {
+    takeAudio = new Audio(URL.createObjectURL(take.wav));
+    takeAudio.onended = stopTakePlayback;
+    takeAudio.play().catch((err) => {
+      notice(`Couldn't play the take: ${err.message}`, true);
+      stopTakePlayback();
+    });
+    showTake();
+  }
+
+  function stopTakePlayback() {
+    if (!takeAudio) return;
+    const audio = takeAudio;
+    takeAudio = null;
+    audio.onended = null;
+    audio.pause();
+    URL.revokeObjectURL(audio.src);
+    if (take) showTake();
+  }
+
+  function discardTake() {
+    stopTakePlayback();
+    take = null;
+    recordPanel.hidden = true;
+  }
+
+  // Hands the take to the ordinary upload path. It is kept until the board
+  // confirms the save, so a failed upload can simply be retried.
+  async function saveTake(name) {
+    stopTakePlayback();
+    recordPanel.hidden = true;
+    const saving = take;
+    if (await runUpload(saving.wav, name)) {
+      if (take === saving) take = null;
+    } else if (take === saving) {
+      showTake();
+    }
+  }
+
+  // -- incoming data --------------------------------------------------------
+
   // The board sends a stats line like
-  // "SPD:2.35,REQ:2.35,BUF:78,UND:0,RUN:1\n"
+  // "SPD:2.35,REQ:2.35,PIT:1.000,BUF:78,UND:0,RUN:1,LAT:0\n"
   // (see SDResampleDemo.ino's header
   // comment) over the DSPS pipe once Binary mode is active.
   function handleTelemetry(line) {
@@ -553,8 +1532,12 @@
     if (parts.BUF !== undefined) {
       bufferEl.innerHTML = `${parts.BUF}<span class="unit">%</span>`;
     }
+    if (parts.LAT !== undefined) {
+      latched = parts.LAT === "1";
+      updateControls();
+    }
     if (parts.RUN !== undefined) {
-      transportEl.textContent = running ? "Running" : "Stopped";
+      transportEl.textContent = latched ? "Latched" : running ? "Running" : "Stopped";
       transportEl.classList.toggle("running", running);
     }
     if (parts.PIT !== undefined) {
@@ -571,7 +1554,7 @@
   }
 
   // One line at a time, dispatched by prefix ahead of the plain
-  // key:value telemetry parser - FILES:/PLAYING:/ERR: are structurally
+  // key:value telemetry parser - FILES:/PLAYING:/ERR:/... are structurally
   // different (a multi-line block, or a payload that itself may contain
   // a colon) from the flat SPD:/BUF:/UND:/... stats line.
   function handleLine(line) {
@@ -581,10 +1564,39 @@
       fileListBuffer = [];
       return;
     }
-    if (line === "FILES:END") { collectingFiles = false; renderFileList(fileListBuffer); return; }
+    if (line === "FILES:END") {
+      collectingFiles = false;
+      fileNames = fileListBuffer;
+      if (rowMode && !fileNames.some((n) => sameName(n, rowMode.name))) rowMode = null;
+      renderFileList();
+      return;
+    }
     if (collectingFiles) { fileListBuffer.push(line); return; }
     if (line.startsWith("PLAYING:")) { setNowPlaying(line.slice(8)); return; }
     if (line.startsWith("ERR:")) { showError(line.slice(4)); return; }
+
+    // Upload replies - see runUpload().
+    if (line.startsWith("READY:")) { if (upload) upload.ready = true; return; }
+    if (line.startsWith("ACK:")) {
+      if (upload) {
+        upload.acked = Number(line.slice(4));
+        updateUploadProgress();
+      }
+      return;
+    }
+    if (line.startsWith("SAVED:")) { if (upload) upload.saved = true; return; }
+
+    if (line.startsWith("RENAMED:")) {
+      const [from, to] = line.slice(8).split("/");
+      notice(`Renamed ${from} to ${to}.`);
+      requestFileList();
+      return;
+    }
+    if (line.startsWith("DELETED:")) {
+      notice(`Deleted ${line.slice(8)}.`);
+      requestFileList();
+      return;
+    }
     handleTelemetry(line);
   }
 
@@ -600,32 +1612,70 @@
       const line = dspsBuffer.slice(0, nl).trim();
       dspsBuffer = dspsBuffer.slice(nl + 1);
       if (line.length === 0) continue;
-      log(`< ${line}`);
+      // ACKs arrive several a second during an upload - too many to log.
+      if (!line.startsWith("ACK:")) log(`< ${line}`);
       handleLine(line);
+      wakeWaiters();
     }
   }
 
-  async function sendCommand(text) {
+  // -- outgoing data -----------------------------------------------------
+
+  // The two platforms this page runs on need opposite write calls, and
+  // both fail silently - the promise resolves, no error, and the bytes
+  // never reach the board:
+  //
+  //   - Desktop Chrome needs writeValueWithoutResponse(). Its plain
+  //     writeValue() is meant to pick the write type the characteristic
+  //     declares (DSPS RX is write-without-response only), but for this
+  //     characteristic it doesn't deliver - confirmed live.
+  //   - Bluefy on iOS needs plain writeValue(). Its
+  //     writeValueWithoutResponse() drops writes - confirmed live in
+  //     AudioKnobsWebBLEDemo, whose page uses writeValue() for that reason.
+  //
+  // Every iOS browser with Web Bluetooth is a third-party app built on
+  // WebKit, so "running on iOS" picks Bluefy's side. iPads report
+  // themselves as Macs, hence the touch-point test.
+  const IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent) ||
+    (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+
+  async function writeToBoard(view) {
+    if (!dspsRxChar) throw new Error("not connected");
+    // Upload packets are views into a larger read buffer (subarray()). A
+    // browser should send only the bytes the view covers, but a WebBLE app
+    // bridging to native code may send the whole underlying buffer instead -
+    // too big for one Bluetooth write, so it would be dropped. Commands,
+    // which are fresh arrays, got through on Bluefy while upload data did
+    // not, which fits exactly that. A copy of exactly the right size is
+    // cheap and rules it out.
+    const bytes = view.byteOffset === 0 && view.byteLength === view.buffer.byteLength
+      ? view
+      : view.slice();
+    if (IS_IOS) {
+      await dspsRxChar.writeValue(bytes);
+    } else {
+      await dspsRxChar.writeValueWithoutResponse(bytes);
+    }
+  }
+
+  // duringUpload is only for runUpload()'s own PUT: - once the board has
+  // said READY:, anything else sent would be written into the file.
+  async function sendCommand(text, duringUpload = false) {
     if (!dspsRxChar) return;
+    if (upload && !duringUpload) {
+      log(`(held back "${text}" - an upload is in progress)`);
+      return;
+    }
     try {
-      // writeValueWithoutResponse(), not plain writeValue(): confirmed
-      // live on desktop Chrome that writeValue() resolves successfully
-      // (no thrown error) without the write actually reaching the
-      // board's Serial2 at all - DSPS RX is declared write-without-
-      // response-only, and Chrome's automatic type-selection fallback
-      // for plain writeValue() doesn't seem to relay correctly for this
-      // characteristic. NOTE: AudioKnobsWebBLEDemo's page uses plain
-      // writeValue() instead, specifically because Bluefy on iOS
-      // silently drops writeValueWithoutResponse() - if this page also
-      // needs to run in a phone WebBLE app rather than a desktop
-      // browser, that trade-off needs revisiting (possibly detecting
-      // the environment, or accepting one platform doesn't work).
-      await dspsRxChar.writeValueWithoutResponse(new TextEncoder().encode(text));
+      await writeToBoard(new TextEncoder().encode(text));
       log(`> ${text}`);
     } catch (err) {
       log(`! write failed: ${err.message}`);
+      if (duringUpload) throw err;
     }
   }
+
+  // -- connection ---------------------------------------------------------
 
   // Negotiates CodeLess's "Binary mode" (UM-140 manual, section 8.6,
   // "Enter Binary mode using Generic GATT Client") so the DSPS
@@ -648,7 +1698,7 @@
     await dspsFlowChar.startNotifications();  // step 3
     dspsTxChar.addEventListener("characteristicvaluechanged", onDspsData);
 
-    await dspsFlowChar.writeValue(new Uint8Array([0x01]));  // step 4 - see sendCommand()'s comment on writeValue() vs writeValueWithoutResponse()
+    await dspsFlowChar.writeValue(new Uint8Array([0x01]));  // step 4 - see writeToBoard()'s comment on writeValue() vs writeValueWithoutResponse()
 
     log("Requesting Binary mode...");
     const atBinreq = new Uint8Array([0x41, 0x54, 0x2b, 0x42, 0x49, 0x4e, 0x52, 0x45, 0x51, 0x00]);  // "AT+BINREQ\0"
@@ -746,7 +1796,7 @@
               optionalServices: [AT_SERVICE_UUID, DSPS_SERVICE_UUID],
             }
       );
-      log(`Picked ${device.name || device.id}.`);
+      log(`Picked ${device.name || device.id}. Writing with ${IS_IOS ? "writeValue() (iOS)" : "writeValueWithoutResponse()"}.`);
       device.addEventListener("gattserverdisconnected", () => {
         log("Disconnected.");
         dspsRxChar = null;
@@ -762,8 +1812,27 @@
     }
   }
 
+  // -- controls ------------------------------------------------------------
+
   connectBtn.addEventListener("click", connect);
   refreshBtn.addEventListener("click", requestFileList);
+  uploadBtn.addEventListener("click", () => fileInput.click());
+  if (CAN_RECORD) {
+    uploadBtn.hidden = true;
+    recordBtn.hidden = false;
+    recordBtn.addEventListener("pointerdown", onRecordDown);
+    recordBtn.addEventListener("pointerup", onRecordUp);
+    recordBtn.addEventListener("pointercancel", onRecordUp);
+    recordBtn.addEventListener("contextmenu", (e) => e.preventDefault());
+  }
+  fileInput.addEventListener("change", onFilePicked);
+  resetSpeedBtn.addEventListener("click", () => sendCommand("RESET:SPEED"));
+  resetPitchBtn.addEventListener("click", () => sendCommand("RESET:PITCH"));
+  // Play latches the cued file, from the top; Stop releases the latch.
+  transportBtn.addEventListener("click", () => {
+    if (latched) sendCommand("STOP");
+    else if (currentFile) sendCommand("LATCH:" + currentFile);
+  });
 
   // Explicitly disconnect before the page actually goes away, rather
   // than leaving the module to notice via its own supervision timeout.

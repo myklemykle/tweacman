@@ -149,7 +149,26 @@
   reads 0.00 while stopped and follows scrub while running; `REQ:` is the
   speed knob's requested ratio, which survives being stopped, so a client
   can show what the transport *would* run at; `PIT:` is the pitch ratio,
-  1.000 meaning unshifted.
+  1.000 meaning unshifted; `LAT:0|1` is whether the transport is latched.
+
+  The page can also drive the transport and manage the card:
+    `LATCH:<name>`       load a file and latch the transport on - plays from
+                         the top and keeps playing, answered like PLAY:
+    `STOP`               clear the latch, as a touch2 press would
+    `RESET:SPEED`        speed back to 1.0x
+    `RESET:PITCH`        pitch back to unshifted
+    `PUT:<bytes>:<name>` upload a file, creating or replacing <name> -
+                         answered `READY:<name>`, then raw data flows with
+                         `ACK:<bytes so far>` coming back, then
+                         `SAVED:<name>`; see startUpload() for the flow
+                         control, which is the tricky part
+    `REN:<old>/<new>`    rename, answered `RENAMED:<old>/<new>`
+    `DEL:<name>`         delete, answered `DELETED:<name>`
+  Any of them can fail with the same `ERR:<name>:<reason>` as PLAY:. Names
+  the page creates must end in .WAV, since those are the only files LIST
+  shows. Touching the file that is playing closes it first (FatFs can't
+  change an open file) and then reloads it, or cues the next playable file
+  if it's gone, restarting playback from the top.
 
   Transport: touch pad D21 held runs the tape, released stops it. Pressing
   D20 while D21 is held latches it on, so playback continues after the finger
@@ -276,6 +295,15 @@
        and confirm speed changes by a correspondingly small amount from
        wherever it just was - not by jumping to whatever an absolute
        mapping of the pot's new position would imply.
+    9. From the page: play a file with its play button and confirm it
+       latches (steady LED, keeps playing with no pad touched), that Stop
+       releases it, and that the two Reset buttons snap speed to 1.00x and
+       pitch to 1.000x in either knob mode.
+    10. Upload a short WAV, then upload it again to confirm the overwrite
+       prompt, rename it, and delete it - each time checking the list
+       updates. Repeat the overwrite, rename and delete on the file that is
+       playing, and cancel an upload halfway to confirm the old file
+       survives. Watch the underrun count while uploading during playback.
 
   This example code is in the public domain.
 */
@@ -466,8 +494,9 @@ FATFileSystem sdFs("sd");
 WavReader wav;
 
 // volatile because audioCallback() reads it - see the idle branch there.
-// Only ever written by loadFile(), which disables the audio interrupt around
-// the whole state swap, so no further guarding is needed.
+// Only ever written by loadFile() and unloadFile(), which both disable the
+// audio interrupt around the whole state swap, so no further guarding is
+// needed.
 volatile bool fileLoaded = false;
 String currentFilename = "NONE";
 float rateFactor = 1.0f;  // wav's native sample rate / 48000 - recomputed on every file load
@@ -561,6 +590,13 @@ bool pitchMode = false;
 // the audio ISR has no opinion about it, since stopping is expressed purely
 // as a step of zero. Reported over BLE as RUN: so the web page can show it.
 bool transportRunning = false;
+
+// Latched transport. Set by pressing touch1 while touch2 is held (or by a
+// BLE LATCH: command), cleared by the next press of touch2 (or BLE STOP) -
+// at which point playback carries on uninterrupted if touch2 is what cleared
+// it, because that same press is also holding the transport up. So the latch
+// is engaged and released without playback ever stopping, which is the point.
+bool transportLatched = false;
 
 // The knob-requested ratio as of the last control-rate tick, kept
 // outside that block too: loadFile() runs on its own schedule (whenever
@@ -789,6 +825,41 @@ void rewindToStart() {
   audioTimer.enable_overflow_irq();
 }
 
+// Closes the current file, leaving nothing loaded. Needed before deleting,
+// renaming or overwriting the file that is playing: FatFs does not support
+// changing a file while it is open, and WavReader holds it open the whole
+// time it is loaded. Same interrupt masking as loadFile(), for the same
+// reason - the audio interrupt reads fileLoaded and the ring buffer.
+void unloadFile() {
+  audioTimer.disable_overflow_irq();
+  fileLoaded = false;
+  wav.close();
+  ring.reset();
+  audioTimer.enable_overflow_irq();
+  currentFilename = "NONE";
+}
+
+// FAT filenames are case-insensitive, so "a.wav" and "A.WAV" are one file.
+bool isCurrentFile(const String &name) {
+  return fileLoaded && name.equalsIgnoreCase(currentFilename);
+}
+
+// Speed and pitch back to their defaults, from the BLE RESET: command.
+// Each sets the live value directly, so it takes effect on the very next
+// audio tick, and also drops its virtual knob's anchor, so the control
+// block re-anchors that knob at the default the next time it is the active
+// mode - otherwise the next turn of the knob would carry on from the old
+// setting. Same mechanism loadFile() uses to start every file at 1.0x.
+void resetSpeedToNative() {
+  lastKnownRatio = 1.0f;
+  resetVirtualKnobToNative();
+}
+
+void resetPitchToUnity() {
+  pitchRatio = 1.0f;
+  pitchKnobAnchored = false;
+}
+
 // Loads the first file on the card this demo can actually play. Returns
 // whether anything was cued. See the call site in setup() for why.
 bool cueFirstPlayableFile() {
@@ -998,19 +1069,312 @@ void pumpFileList() {
   finishFileList();  // directory exhausted
 }
 
+// -- Card management over BLE (upload, rename, delete) --------------------
+
+// Names the phone may create. Must end in .WAV, since LIST shows nothing
+// else - a file uploaded under any other name could never be seen, played or
+// deleted again from the page. Also rejects the characters FAT forbids, and
+// '/', which would reach outside the card's root (and is the separator in
+// the REN: command).
+bool isValidWavName(const String &name) {
+  if (name.length() < 5 || name.length() > 64) return false;
+  for (unsigned int i = 0; i < name.length(); i++) {
+    char c = name[i];
+    if (c < 32 || strchr("/\\:*?\"<>|", c) != nullptr) return false;
+  }
+  String upper = name;
+  upper.toUpperCase();
+  return upper.endsWith(".WAV");
+}
+
+bool fileExists(const String &name) {
+  FILE *f = fopen(("/sd/" + name).c_str(), "rb");
+  if (!f) return false;
+  fclose(f);
+  return true;
+}
+
+// After the loaded file goes away, cue the next playable one, so the board
+// stays usable standing on its own (see setup()), and tell the page.
+void recueAfterLosingFile() {
+  cueFirstPlayableFile();
+  blePrintLine("PLAYING:" + String(fileLoaded ? currentFilename : "NONE"));
+}
+
+// Uploading. The page sends PUT:<bytes>:<name>, waits for READY:<name>, then
+// sends exactly <bytes> bytes of raw file data - not text, not lines, so for
+// the length of an upload loop() stops parsing Serial2 and pumpUpload() reads
+// it directly instead.
+//
+// Flow control is the whole difficulty. The UART between the module and this
+// chip has no hardware flow control, and Serial2's receive buffer is only 512
+// bytes, so anything the phone sends faster than loop() drains it is simply
+// lost. So the board acknowledges every UPLOAD_ACK_BYTES it has written to
+// the card with ACK:<total>, and the page never has more than its window
+// (see UPLOAD_WINDOW_BYTES in wav-remote.html) unacknowledged. The window is
+// what keeps the receive buffer from overflowing, so it must stay below 512.
+//
+// The data goes to a temporary file first and only replaces the real one at
+// the very end. So an upload that fails or is cancelled halfway leaves any
+// existing file of that name untouched, and a file being overwritten keeps
+// playing right up until the new version is complete.
+//
+// Speed: measured at about 1.8KB/s from a Mac - the rate the phone's side
+// sends Bluetooth writes at, well under the 5.6KB/s that 57600 baud allows.
+// A 100KB sample takes about a minute, a 1MB one about ten. Fine for short
+// samples; this is not a way to fill a card.
+const char *UPLOAD_TEMP_PATH = "/sd/UPLOAD.TMP";  // not .WAV, so LIST never shows it
+const size_t UPLOAD_ACK_BYTES = 128;
+const unsigned long UPLOAD_IDLE_TIMEOUT = 3000;   // ms without data before giving up
+const unsigned long UPLOAD_DRAIN_QUIET = 500;     // ms of silence that ends a failed upload
+
+FILE *uploadFile = nullptr;
+String uploadName;
+uint32_t uploadSize = 0;
+uint32_t uploadWritten = 0;
+uint8_t uploadBuffer[UPLOAD_ACK_BYTES];
+size_t uploadBuffered = 0;
+unsigned long uploadLastDataMillis = 0;
+
+// A failed upload doesn't report straight away. The page may still have up
+// to a window of data in flight, and if loop() went back to parsing lines
+// those bytes would be read as commands. So the board keeps swallowing input
+// until the link has been quiet for UPLOAD_DRAIN_QUIET, and only then sends
+// the ERR: - by which point the page has stopped sending.
+bool uploadDraining = false;
+String uploadDrainError;
+
+bool uploadInProgress() { return uploadFile != nullptr || uploadDraining; }
+
+void startUpload(const String &args) {
+  int sep = args.indexOf(':');
+  String sizeText = sep == -1 ? "" : args.substring(0, sep);
+  String name = sep == -1 ? args : args.substring(sep + 1);
+  name.trim();
+
+  long size = sizeText.toInt();
+  if (!isValidWavName(name)) {
+    blePrintLine("ERR:" + name + ":name must end in .wav, with no / \\ : * ? \" < > |");
+    return;
+  }
+  if (size <= 0) {
+    blePrintLine("ERR:" + name + ":empty or unreadable size");
+    return;
+  }
+
+  remove(UPLOAD_TEMP_PATH);  // a leftover from an upload interrupted by a reset
+  uploadFile = fopen(UPLOAD_TEMP_PATH, "wb");
+  if (!uploadFile) {
+    blePrintLine("ERR:" + name + ":could not create a file on the card");
+    return;
+  }
+
+  uploadName = name;
+  uploadSize = (uint32_t)size;
+  uploadWritten = 0;
+  uploadBuffered = 0;
+  uploadLastDataMillis = millis();
+  abortFileList();  // the page doesn't upload mid-list, but don't interleave if it does
+  Serial.print("Receiving ");
+  Serial.print(name);
+  Serial.print(", ");
+  Serial.print(uploadSize);
+  Serial.println(" bytes");
+  blePrintLine("READY:" + name);
+}
+
+void failUpload(const String &reason) {
+  if (uploadFile) {
+    fclose(uploadFile);
+    uploadFile = nullptr;
+  }
+  remove(UPLOAD_TEMP_PATH);
+  Serial.print("Upload failed: ");
+  Serial.println(reason);
+  uploadDraining = true;
+  uploadDrainError = reason;
+  uploadLastDataMillis = millis();
+}
+
+void finishUpload() {
+  fclose(uploadFile);
+  uploadFile = nullptr;
+
+  // FatFs can neither replace an open file nor rename onto an existing name,
+  // so a file that is playing is closed first and the old copy is deleted
+  // before the new one moves into place.
+  bool wasCurrent = isCurrentFile(uploadName);
+  if (wasCurrent) unloadFile();
+  String dest = "/sd/" + uploadName;
+  remove(dest.c_str());  // fails harmlessly when this is a new name
+  if (rename(UPLOAD_TEMP_PATH, dest.c_str()) != 0) {
+    remove(UPLOAD_TEMP_PATH);
+    blePrintLine("ERR:" + uploadName + ":could not move the upload into place");
+    if (wasCurrent) recueAfterLosingFile();
+    return;
+  }
+
+  Serial.print("Saved ");
+  Serial.println(uploadName);
+  blePrintLine("SAVED:" + uploadName);
+
+  // Overwrote what was playing: load the new version in its place. Playback
+  // restarts from the top, since it is a different file now.
+  if (wasCurrent) {
+    String err;
+    if (loadFile(uploadName, err)) {
+      blePrintLine("PLAYING:" + uploadName);
+    } else {
+      blePrintLine("ERR:" + uploadName + ":" + err);
+      recueAfterLosingFile();
+    }
+  }
+}
+
+// Called by loop() instead of the usual line parsing while an upload is in
+// progress. Never blocks: takes whatever has arrived, and writes to the card
+// only once a full acknowledgement's worth (or the end of the file) is in.
+void pumpUpload() {
+  if (uploadDraining) {
+    while (Serial2.available()) {
+      Serial2.read();
+      uploadLastDataMillis = millis();
+    }
+    if (millis() - uploadLastDataMillis >= UPLOAD_DRAIN_QUIET) {
+      uploadDraining = false;
+      blePrintLine("ERR:" + uploadName + ":" + uploadDrainError);
+    }
+    return;
+  }
+
+  while (Serial2.available() && uploadBuffered < UPLOAD_ACK_BYTES &&
+         uploadWritten + uploadBuffered < uploadSize) {
+    uploadBuffer[uploadBuffered++] = (uint8_t)Serial2.read();
+    uploadLastDataMillis = millis();
+  }
+
+  bool complete = uploadWritten + uploadBuffered == uploadSize;
+  if (uploadBuffered == UPLOAD_ACK_BYTES || (complete && uploadBuffered > 0)) {
+    if (fwrite(uploadBuffer, 1, uploadBuffered, uploadFile) != uploadBuffered) {
+      failUpload("write failed - is the card full?");
+      return;
+    }
+    uploadWritten += uploadBuffered;
+    uploadBuffered = 0;
+    blePrintLine("ACK:" + String(uploadWritten));
+  }
+
+  if (uploadWritten == uploadSize) {
+    finishUpload();
+  } else if (millis() - uploadLastDataMillis >= UPLOAD_IDLE_TIMEOUT) {
+    failUpload("timed out waiting for data");
+  }
+}
+
+// REN:<old>/<new>. '/' can't appear in either name (see isValidWavName()),
+// which makes it an unambiguous separator.
+void renameOnCard(const String &args) {
+  int sep = args.indexOf('/');
+  String from = sep == -1 ? args : args.substring(0, sep);
+  String to = sep == -1 ? "" : args.substring(sep + 1);
+  from.trim();
+  to.trim();
+
+  if (!isValidWavName(to)) {
+    blePrintLine("ERR:" + from + ":new name must end in .wav, with no / \\ : * ? \" < > |");
+    return;
+  }
+  // A change of case alone is the same file as far as FAT is concerned, so
+  // "already exists" would be wrong for it.
+  if (!to.equalsIgnoreCase(from) && fileExists(to)) {
+    blePrintLine("ERR:" + from + ":" + to + " already exists");
+    return;
+  }
+
+  // Renaming an open file isn't supported either, so a playing file is
+  // closed around the rename and reloaded under its new name - restarting
+  // from the top, with the transport's latch left as it was.
+  bool wasCurrent = isCurrentFile(from);
+  if (wasCurrent) unloadFile();
+
+  bool ok = rename(("/sd/" + from).c_str(), ("/sd/" + to).c_str()) == 0;
+  if (ok) {
+    blePrintLine("RENAMED:" + from + "/" + to);
+  } else {
+    blePrintLine("ERR:" + from + ":rename failed");
+  }
+
+  if (wasCurrent) {
+    String err;
+    String reload = ok ? to : from;
+    if (loadFile(reload, err)) {
+      blePrintLine("PLAYING:" + reload);
+    } else {
+      recueAfterLosingFile();
+    }
+  }
+}
+
+// DEL:<name>. Deleting what is playing also clears the latch - carrying on
+// latched into whatever file gets cued next would be a surprise.
+void deleteFromCard(const String &nameArg) {
+  String name = nameArg;
+  name.trim();
+  if (name.length() == 0 || name.indexOf('/') != -1) {
+    blePrintLine("ERR:" + name + ":invalid filename");
+    return;
+  }
+
+  bool wasCurrent = isCurrentFile(name);
+  if (wasCurrent) {
+    unloadFile();
+    transportLatched = false;
+  }
+
+  if (remove(("/sd/" + name).c_str()) == 0) {
+    Serial.print("Deleted ");
+    Serial.println(name);
+    blePrintLine("DELETED:" + name);
+  } else {
+    blePrintLine("ERR:" + name + ":delete failed");
+  }
+
+  if (wasCurrent) recueAfterLosingFile();
+}
+
 void handleBLECommand(String line) {
   line.trim();
   if (line == "LIST") {
     startFileList();
-  } else if (line.startsWith("PLAY:")) {
-    String filename = line.substring(5);
+  } else if (line.startsWith("PLAY:") || line.startsWith("LATCH:")) {
+    // PLAY: cues a file, leaving the transport to the touch pads. LATCH:
+    // cues it and latches the transport on, as if both pads had been
+    // chorded, so it plays from the top and keeps playing. No rewind is
+    // needed for that: loading already puts the cursor at the top.
+    bool latch = line.startsWith("LATCH:");
+    String filename = line.substring(latch ? 6 : 5);
     filename.trim();
     String err;
     if (loadFile(filename, err)) {
+      if (latch) transportLatched = true;
       blePrintLine("PLAYING:" + filename);
     } else {
       blePrintLine("ERR:" + filename + ":" + err);
     }
+  } else if (line == "STOP") {
+    // Clears the latch, exactly as a touch2 press would - so a finger that
+    // happens to be holding touch2 keeps the tape running until it lifts.
+    transportLatched = false;
+  } else if (line == "RESET:SPEED") {
+    resetSpeedToNative();
+  } else if (line == "RESET:PITCH") {
+    resetPitchToUnity();
+  } else if (line.startsWith("PUT:")) {
+    startUpload(line.substring(4));
+  } else if (line.startsWith("REN:")) {
+    renameOnCard(line.substring(4));
+  } else if (line.startsWith("DEL:")) {
+    deleteFromCard(line.substring(4));
   } else if (line.length() > 0) {
     Serial.print("Unrecognized BLE command: \"");
     Serial.print(line);
@@ -1143,11 +1507,6 @@ CapTouch touch1(20);
 // the touch1 chord. See the control block in loop().
 CapTouch touch2(21);
 
-// Latched transport. Set by pressing touch1 while touch2 is held, cleared by
-// the next press of touch2 - at which point playback carries on uninterrupted
-// because that same press is also holding the transport up. So the latch is
-// engaged and released without playback ever stopping, which is the point.
-bool transportLatched = false;
 bool touch1WasTouched = false;
 bool touch2WasTouched = false;
 
@@ -1333,8 +1692,11 @@ void loop() {
   // Checked unconditionally every pass, not gated to CONTROL_INTERVAL -
   // a PLAY: request shouldn't wait up to 10ms for no reason, and this
   // is a cheap check when nothing's waiting (see AudioKnobsWebBLEDemo
-  // for the same reasoning).
-  if (ble.available()) {
+  // for the same reasoning). During an upload Serial2 carries raw file data
+  // rather than lines, and pumpUpload() reads it instead.
+  if (uploadInProgress()) {
+    pumpUpload();
+  } else if (ble.available()) {
     String burst = ble.readOutput();
     bleTrace("mod  ->", burst);
 
@@ -1702,7 +2064,8 @@ void loop() {
                      ",REQ:" + String(lastKnownRatio, 2) +
                      ",PIT:" + String(pitchRatio, 3) +
                      ",BUF:" + String((int)fillPercent) + ",UND:" + String(underrunTicks) +
-                     ",RUN:" + String(transportRunning ? 1 : 0);
+                     ",RUN:" + String(transportRunning ? 1 : 0) +
+                     ",LAT:" + String(transportLatched ? 1 : 0);
       if (probing) {
         probeSentMillis = millis();
         awaitingProbeEcho = true;

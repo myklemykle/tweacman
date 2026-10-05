@@ -38,6 +38,10 @@ bool WavReader::open(const char *path) {
     snprintf(msg, sizeof(msg), "couldn't open %s", path);
     return fail(msg);
   }
+  // No stdio buffering: it would chop every large read into 1KB pieces
+  // before FatFs saw it, and a large read is what lets the SD driver fetch
+  // many sectors in one command (see RA6M5FastSD.h).
+  setvbuf(file_, nullptr, _IONBF, 0);
 
   char riff[4], wave[4];
   uint32_t riffSize;
@@ -86,6 +90,23 @@ bool WavReader::open(const char *path) {
     return fail("this demo only plays mono 16-bit PCM WAV files");
   }
 
+  return true;
+}
+
+bool WavReader::openRaw(const char *path, uint32_t sampleRate) {
+  close();
+  file_ = fopen(path, "rb");
+  if (!file_) {
+    char msg[64];
+    snprintf(msg, sizeof(msg), "couldn't open %s", path);
+    return fail(msg);
+  }
+  setvbuf(file_, nullptr, _IONBF, 0);  // see open()
+  fseek(file_, 0, SEEK_END);
+  dataBytes_ = (uint32_t)ftell(file_);
+  dataStart_ = 0;
+  sampleRate_ = sampleRate;
+  if (dataBytes_ < 2) return fail("cache file is empty");
   return true;
 }
 

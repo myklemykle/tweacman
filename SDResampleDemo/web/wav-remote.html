@@ -599,6 +599,14 @@
       <div class="label">Underruns</div>
       <div class="value" id="underruns">&mdash;</div>
     </div>
+    <div class="stat">
+      <div class="label">Playing from</div>
+      <div class="value" id="level">&mdash;</div>
+    </div>
+    <div class="stat">
+      <div class="label">Cache</div>
+      <div class="value" id="cache">&mdash;<span class="unit">%</span></div>
+    </div>
   </div>
 
   <div>
@@ -717,6 +725,8 @@
   const speedEl = $("speed");
   const bufferEl = $("buffer");
   const underrunsEl = $("underruns");
+  const levelEl = $("level");
+  const cacheEl = $("cache");
   const transportEl = $("transport");
   const pitchEl = $("pitch");
   const fileListEl = $("fileList");
@@ -1511,7 +1521,7 @@
   // -- incoming data --------------------------------------------------------
 
   // The board sends a stats line like
-  // "SPD:2.35,REQ:2.35,PIT:1.000,BUF:78,UND:0,RUN:1,LAT:0\n"
+  // "SPD:2.35,REQ:2.35,PIT:1.000,BUF:78,UND:0,RUN:1,LAT:0,LVL:3,CACHE:100\n"
   // (see SDResampleDemo.ino's header
   // comment) over the DSPS pipe once Binary mode is active.
   function handleTelemetry(line) {
@@ -1549,6 +1559,18 @@
     if (parts.UND !== undefined) {
       underrunsEl.textContent = parts.UND;
       underrunsEl.classList.toggle("bad", Number(parts.UND) > 0);
+    }
+    // LVL: which copy of the file is playing - 0 is the original, k the
+    // board's cached copy at 1/2^k of its sample rate (see MipCache.h).
+    if (parts.LVL !== undefined) {
+      const level = Number(parts.LVL);
+      levelEl.textContent = level === 0 ? "original" : `1/${2 ** level} rate`;
+    }
+    // CACHE: how far the board has got building those copies. Until 100%,
+    // the fastest speeds are held back.
+    if (parts.CACHE !== undefined) {
+      cacheEl.innerHTML = `${parts.CACHE}<span class="unit">%</span>`;
+      cacheEl.classList.toggle("potential", parts.CACHE === "100");
     }
     if (parts.FILE !== undefined) setNowPlaying(parts.FILE);
   }

@@ -44,6 +44,24 @@ class WavReader {
   // lastError() for why, which is also printed to Serial as it happens.
   bool open(const char *path);
 
+  // Opens a headerless file of raw 16-bit mono samples - one of the
+  // filtered copies MipCache.h keeps in the card's cache/ folder - at the
+  // given sample rate. Everything else (readSamplesAt()'s seamless looping
+  // included) works exactly as for a WAV.
+  bool openRaw(const char *path, uint32_t sampleRate);
+
+  bool isOpen() const { return file_ != nullptr; }
+
+  // Where sampleOffset falls within a 4-byte word of the file (0 or 2).
+  // FatFs reads whole sectors straight into the destination by DMA, which
+  // only takes RA6M5FastSD's fast multi-block path if they land 4-byte
+  // aligned - true exactly when the destination's address matches the file
+  // position mod 4. So for a large read, pass readSamplesAt() a 4-byte
+  // aligned buffer plus this many bytes.
+  uint32_t alignmentOf(uint32_t sampleOffset) const {
+    return (uint32_t)(dataStart_ + sampleOffset * 2) & 3;
+  }
+
   // Closes the underlying file, if any. Safe to call when already closed.
   void close();
 

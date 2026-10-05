@@ -10,6 +10,7 @@ tools/venv/
 # Generated test fixture for SDResampleDemo (tools/make_test_wav.py) -
 # regenerate it, don't commit it.
 /AUDIO.WAV
+/SINE*.WAV
 
 # Symlink to a locally-downloaded Renesas reference manual - not ours to
 # redistribute, and the target path is machine-specific anyway.

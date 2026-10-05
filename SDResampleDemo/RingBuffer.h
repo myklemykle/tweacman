@@ -91,7 +91,7 @@ class AudioRingBuffer {
       memcpy(&data_[0], src + firstRun, (n - firstRun) * sizeof(int16_t));
     }
     // Publish only after the data above is actually in memory - this
-    // release pairs with the acquire load in peek4().
+    // release pairs with the acquire load in contains().
     validHigh_.store(start + (int32_t)n, std::memory_order_release);
   }
 
@@ -124,38 +124,31 @@ class AudioRingBuffer {
 
   // -- Consumer side (call from the audio interrupt) --------------------
 
-  // Reads the 4 samples a Catmull-Rom interpolation needs to evaluate
-  // at sourceIndex (sourceIndex-1 .. sourceIndex+2). Returns false (an
-  // underrun) unless all four positions are currently buffered - this
-  // can now happen on the low side (playing backward faster than the
-  // producer can seek-and-fill) just as easily as the high side.
-  bool peek4(int32_t sourceIndex, int16_t out[4]) const {
+  // Whether every position from first to last (inclusive) is currently
+  // buffered - checked once before an interpolation reads that whole span
+  // with at(). False means an underrun, which can happen on the low side
+  // (playing backward faster than the producer can seek-and-fill) just as
+  // easily as the high side.
+  bool contains(int32_t first, int32_t last) const {
     int32_t low = validLow_.load(std::memory_order_acquire);
     int32_t high = validHigh_.load(std::memory_order_acquire);
-    // sourceIndex == 0 only recurs at the instant a file was just
-    // loaded (loadFile() resets index to 0, before any data below real
-    // file position 0 exists) - duplicating sample 0 as its own
-    // predecessor is the same one-tick startup approximation the
-    // original forward-only version of this buffer already made, not a
-    // general low-edge accommodation.
-    int32_t before = (sourceIndex == 0) ? 0 : sourceIndex - 1;
-    if (before < low || sourceIndex + 2 >= high) return false;
-    out[0] = data_[(uint32_t)before & (CAPACITY - 1)];
-    out[1] = data_[(uint32_t)sourceIndex & (CAPACITY - 1)];
-    out[2] = data_[(uint32_t)(sourceIndex + 1) & (CAPACITY - 1)];
-    out[3] = data_[(uint32_t)(sourceIndex + 2) & (CAPACITY - 1)];
-    return true;
+    return first >= low && last < high;
   }
 
-  // Discards any buffered samples and re-anchors virtual position 0 to
-  // mean real file offset 0, for switching to a different source file.
-  // Relaxed ordering is enough here specifically because the caller is
-  // required to have the audio interrupt masked first (see
-  // SDResampleDemo.ino's loadFile()) - unlike every other method here,
-  // there's no concurrent ISR access to order against during this call.
-  void reset() {
-    validLow_.store(0, std::memory_order_relaxed);
-    validHigh_.store(0, std::memory_order_relaxed);
+  // The sample at one virtual position. Only meaningful for a position
+  // contains() has just vouched for.
+  int16_t at(int32_t pos) const { return data_[(uint32_t)pos & (CAPACITY - 1)]; }
+
+  // Discards any buffered samples, leaving an empty window at virtual
+  // position `at` - 0 for a freshly loaded file, or wherever a voice
+  // switching to a different cached copy needs to start (see
+  // SDResampleDemo.ino's startLevelChange()). Relaxed ordering is enough
+  // because the caller guarantees the audio interrupt isn't reading this
+  // buffer meanwhile: either it's masked (loadFile(), rewindToStart()) or
+  // this buffer belongs to an idle voice the interrupt doesn't touch.
+  void reset(int32_t at = 0) {
+    validLow_.store(at, std::memory_order_relaxed);
+    validHigh_.store(at, std::memory_order_relaxed);
   }
 
  private:

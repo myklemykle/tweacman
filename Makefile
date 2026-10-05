@@ -51,7 +51,7 @@ ARDUINO_CLI ?= arduino-cli
 # future ones), passed via --library rather than installed into the global
 # sketchbook - keeps them versioned with this repo instead of scattered
 # into ~/Documents/Arduino/libraries.
-LIBRARIES ?= RV112FF RA6M5CapTouch MultiTurnKnob RA6M5AnalogTuning
+LIBRARIES ?= RV112FF RA6M5CapTouch MultiTurnKnob RA6M5AnalogTuning RA6M5FastSD
 LIBRARY_FLAGS = $(foreach lib,$(LIBRARIES),--library $(lib))
 
 # Python virtual environment for tools/ble_test.py. Isolated from system

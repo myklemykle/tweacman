@@ -1360,7 +1360,7 @@ bool cueFirstPlayableFile() {
 // CodeLess Binary mode / DSPS bidirectional protocol - see the header
 // comment and AudioKnobsWebBLEDemo.ino, whose handshake this mirrors and
 // whose header comment documents the whole thing. Once the link is binary,
-// Serial2 is a raw pipe: ble.readOutput() for inbound lines, and a direct
+// Serial2 is a raw pipe: pumpBLEInput() for inbound lines, and a direct
 // Serial2 write for outbound (not ble.sendCommand(), which blocks waiting
 // for an OK/ERROR reply that Binary mode no longer sends).
 
@@ -1938,7 +1938,7 @@ void handleBLELine(const String &line) {
     Serial.println("BLE central disconnected. Advertising again.");
     // Direct write, not bleCommand(): that blocks for its full timeout
     // waiting for a reply - fine at boot, a real problem here, where it
-    // would stall loop() and therefore ble.available() itself for a second
+    // would stall loop() and therefore the BLE input itself for a second
     // or more right as a new connection might already be starting up.
     bleWriteRaw("AT+ADVSTART\r");
   } else if (line.indexOf("+CONNECTED") != -1) {
@@ -1953,7 +1953,14 @@ void handleBLELine(const String &line) {
     awaitingProbeEcho = false;
     lastLineSent = "";
   } else if (linkMode != LINK_BINARY) {
-    if (line.indexOf("+BINREQ") != -1) {
+    // An exact match, not indexOf(): in command mode the module echoes back
+    // everything this sketch sends it, and the echo of our own reply,
+    // "AT+BINREQACK", contains "+BINREQ" too. Matching that would answer
+    // the echo, which gets echoed, which gets answered... The old blocking
+    // reader's 20ms wait per line hid this by slowing the loop to a crawl
+    // until the module stopped echoing; reading lines as fast as they come
+    // turned it into a runaway.
+    if (line == "+BINREQ") {
       // Direct write again, and this one matters even more: it sits in the
       // path of a handshake the client is actively waiting on, and blocking
       // here risks swallowing whatever the client sends immediately after
@@ -1973,6 +1980,57 @@ void handleBLELine(const String &line) {
     // here and ignored.
   } else {
     handleBLECommand(line);
+  }
+}
+
+// Reads whatever has arrived on Serial2 and, once the module has gone quiet,
+// hands each line of it to handleBLELine() - without ever waiting.
+//
+// This used to be ble.readOutput(), which is Serial2.readString(): it reads
+// until the link has been quiet for its timeout (20ms here), so every
+// arrival - a command, a status line, a probe echo - stalled loop() for at
+// least 20ms, knobs and all. This keeps exactly the same rule, but checks
+// it each pass instead of waiting for it: bytes collect in a buffer across
+// loop() passes, and once BLE_QUIET_MS go by with nothing more, the whole
+// burst is split into lines and handled, just as before.
+//
+// Why keep the 20ms of quiet at all, rather than acting on each line the
+// moment its newline arrives? Two reasons. The web page sends commands with
+// no newline, so a gap is the only sign one is over. And the module seems
+// to need it: replying the instant a status line ends - while the module
+// may still be mid-burst - was tried, and the Binary mode handshake stopped
+// working, and the module stopped coming back to advertise after a
+// disconnect. Answering only once it has finished talking had always
+// worked.
+const unsigned long BLE_QUIET_MS = 20;
+const unsigned int BLE_BURST_MAX = 1024;  // a runaway burst is cut here rather than growing forever
+String bleBurst;
+unsigned long bleBurstLastByteMillis = 0;
+
+void pumpBLEInput() {
+  while (Serial2.available()) {
+    char c = (char)Serial2.read();
+    bleBurstLastByteMillis = millis();
+    if (bleBurst.length() < BLE_BURST_MAX) bleBurst += c;
+  }
+  if (bleBurst.length() == 0 || millis() - bleBurstLastByteMillis < BLE_QUIET_MS) return;
+
+  String burst = bleBurst;
+  bleBurst = "";
+  bleTrace("mod  ->", burst);
+
+  // A burst is routinely several \r\n-terminated status lines at once
+  // ("+CONNECTED\r\n+BINREQ\r\n"), and each must be handled - acting on
+  // only the first match once silently lost the +BINREQ and stalled the
+  // handshake.
+  int start = 0;
+  while (start < (int)burst.length()) {
+    int end = start;
+    while (end < (int)burst.length() && burst[end] != '\r' && burst[end] != '\n') end++;
+    String line = burst.substring(start, end);
+    start = end + 1;
+    line.trim();
+    if (line.length() > 0) handleBLELine(line);
   }
 }
 
@@ -2269,27 +2327,11 @@ void loop() {
   // is a cheap check when nothing's waiting (see AudioKnobsWebBLEDemo
   // for the same reasoning). During an upload Serial2 carries raw file data
   // rather than lines, and pumpUpload() reads it instead.
+  //
   if (uploadInProgress()) {
     pumpUpload();
-  } else if (ble.available()) {
-    String burst = ble.readOutput();
-    bleTrace("mod  ->", burst);
-
-    // readOutput() is Serial2.readString(): it returns everything that
-    // arrived in one burst, which at 57600 baud is routinely several
-    // \r\n-terminated status lines at once. Running indexOf() over the whole
-    // burst and acting on the first match silently discards the rest, so a
-    // "+CONNECTED\r\n+BINREQ\r\n" pair loses the +BINREQ entirely and the
-    // handshake stalls with nothing logged. Split first, dispatch each line.
-    int start = 0;
-    while (start < (int)burst.length()) {
-      int end = start;
-      while (end < (int)burst.length() && burst[end] != '\r' && burst[end] != '\n') end++;
-      String line = burst.substring(start, end);
-      start = end + 1;
-      line.trim();
-      if (line.length() > 0) handleBLELine(line);
-    }
+  } else {
+    pumpBLEInput();
   }
   stageDone(STAGE_BLE, t);
   t = DWT->CYCCNT;

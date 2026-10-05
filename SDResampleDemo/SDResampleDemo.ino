@@ -1811,6 +1811,19 @@ void deleteFromCard(const String &nameArg) {
   if (wasCurrent) recueAfterLosingFile();
 }
 
+// Whether a line is one of the commands handleBLECommand() takes - the
+// web page's words, which can only ever reach this sketch through an open
+// Binary mode pipe. See handleBLELine() for why that matters.
+bool isBoardCommand(const String &line) {
+  static const char *const COMMANDS[] = {
+    "LIST", "PLAY:", "LATCH:", "STOP", "RESET:", "PROFILE", "SPEED:", "PITCH:", "PUT:", "REN:", "DEL:"
+  };
+  for (const char *command : COMMANDS) {
+    if (line.startsWith(command)) return true;
+  }
+  return false;
+}
+
 void handleBLECommand(String line) {
   line.trim();
   if (line == "LIST") {
@@ -1960,6 +1973,21 @@ void handleBLELine(const String &line) {
     // reader's 20ms wait per line hid this by slowing the loop to a crawl
     // until the module stopped echoing; reading lines as fast as they come
     // turned it into a runaway.
+    // A command from the page while still waiting to find out whether the
+    // pipe is open: it can only have come through the pipe, so it is. The
+    // probe below would work that out too, but up to 2.3 seconds later -
+    // and the page now reconnects straight into a fresh pipe and starts
+    // sending at once (see establishLink() in wav-remote.html), so a
+    // command often gets here first. Dropping it, as this branch used to,
+    // lost the page's first command after nearly every connect.
+    if (linkMode == LINK_PENDING && isBoardCommand(line)) {
+      Serial.println("A command came through the pipe - Binary mode is live.");
+      linkMode = LINK_BINARY;
+      awaitingProbeEcho = false;
+      handleBLECommand(line);
+      return;
+    }
+
     if (line == "+BINREQ") {
       // Direct write again, and this one matters even more: it sits in the
       // path of a handshake the client is actively waiting on, and blocking

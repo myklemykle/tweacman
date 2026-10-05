@@ -10,6 +10,9 @@ line's LVL:/CACHE: fields along the way. Every file it touches is one it
 created itself (CARDTEST.WAV / CARDTST2.WAV), so it's safe on a real
 sample card.
 
+It connects the same way the page does - see PipeLink below for why that
+takes a deliberate hang-up and reconnect.
+
 What it can't see from here is the board's cache folder: run the board's
 Serial monitor alongside to watch the "Cache: ..." lines - an overwrite
 should rebuild the copies, a rename shouldn't.
@@ -137,11 +140,90 @@ class Board:
         raise RuntimeError(f"cache never reached 100% (stats: {self.stats})")
 
 
-async def connect():
-    for found in await BleakScanner.discover(timeout=10.0):
-        if found.name == DEVICE_NAME:
-            return found
-    raise RuntimeError(f"couldn't find {DEVICE_NAME} - is a phone connected to it?")
+async def find_board():
+    """Scans until the board shows up, rather than for a fixed time."""
+    found = asyncio.Event()
+    hit = {}
+
+    def seen(device, _adv):
+        # Starts-with rather than an exact match, in case the name ever
+        # carries a suffix.
+        if device.name and device.name.startswith(DEVICE_NAME) and not found.is_set():
+            hit["device"] = device
+            found.set()
+
+    async with BleakScanner(detection_callback=seen):
+        try:
+            await asyncio.wait_for(found.wait(), 20)
+        except asyncio.TimeoutError:
+            raise RuntimeError(f"couldn't find {DEVICE_NAME} - is a phone connected to it?")
+    log(f"Found '{hit['device'].name}'")
+    return hit["device"]
+
+
+# The handshake - the same one web/wav-remote.html's establishLink() does.
+# CodeLess Binary mode lasts exactly one connection: a grant asked for on
+# one connection only takes effect when that connection ends, and the
+# module drops back to command mode after the next one. So unless the pipe
+# is already live, connect, ask, hang up straight away, and reconnect.
+PIPE_LIVE_WAIT = 0.7   # s - in Binary mode the board sends stats every 0.5s
+GRANT_SETTLE = 0.5     # s - the board answers +BINREQ within ~40ms
+RECONNECT_WAIT = 3.0   # s - for the pipe after reconnecting
+
+
+class PipeLink:
+    """async with PipeLink(device) as board: - a connected, working pipe."""
+
+    def __init__(self, device):
+        self.device = device
+        self.client = None
+
+    async def _open(self):
+        self.client = BleakClient(self.device)
+        await self.client.connect()
+        board = Board(self.client)
+
+        def ignore(_sender, _data):
+            pass
+
+        # Notification setup, in the order the page does it - see
+        # ble_binary_test.py and SDResampleDemo.ino's BLE section.
+        await self.client.start_notify(AT_FLOWCTRL, ignore)
+        await self.client.start_notify(DSPS_TX, board.on_tx)
+        await self.client.start_notify(DSPS_FLOWCTRL, ignore)
+        await self.client.write_gatt_char(DSPS_FLOWCTRL, bytes([0x01]), response=False)
+        return board
+
+    async def _live(self, board, seconds):
+        end = time.time() + seconds
+        while time.time() < end:
+            if board.stats:
+                return True
+            await asyncio.sleep(0.05)
+        return False
+
+    async def __aenter__(self):
+        for attempt in (1, 2):
+            board = await self._open()
+            log("Connected.")
+            if await self._live(board, PIPE_LIVE_WAIT):
+                return board
+            log("Pipe not live - asking for Binary mode, then reconnecting.")
+            await self.client.write_gatt_char(AT_INBOUND, b"AT+BINREQ\x00", response=True)
+            await asyncio.sleep(GRANT_SETTLE)
+            await self.client.disconnect()
+            await asyncio.sleep(0.3)
+            board = await self._open()
+            log("Reconnected.")
+            if await self._live(board, RECONNECT_WAIT):
+                return board
+            await self.client.disconnect()
+            log(f"Still not live (attempt {attempt}).")
+        raise RuntimeError("no stats line - Binary mode didn't come up")
+
+    async def __aexit__(self, *_exc):
+        if self.client and self.client.is_connected:
+            await self.client.disconnect()
 
 
 async def main():
@@ -149,28 +231,10 @@ async def main():
     parser.add_argument("--leave", metavar="NAME")
     args = parser.parse_args()
 
-    device = await connect()
-    log(f"Connecting to {device.address}...")
-    async with BleakClient(device) as client:
-        board = Board(client)
-
-        async def on_at_flow(_sender, _data):
-            pass
-
-        # The Binary mode handshake, in the order the page does it - see
-        # ble_binary_test.py and SDResampleDemo.ino's BLE section.
-        await client.start_notify(AT_FLOWCTRL, on_at_flow)
-        await client.start_notify(DSPS_TX, board.on_tx)
-        await client.start_notify(DSPS_FLOWCTRL, on_at_flow)
-        await client.write_gatt_char(DSPS_FLOWCTRL, bytes([0x01]), response=False)
-        await client.write_gatt_char(AT_INBOUND, b"AT+BINREQ\x00", response=True)
-        log("Waiting for the pipe to open (first stats line)...")
-        for _ in range(100):
-            if board.stats:
-                break
-            await asyncio.sleep(0.1)
-        if not board.stats:
-            raise RuntimeError("no stats line - Binary mode didn't come up")
+    device = await find_board()
+    connect_started = time.time()
+    async with PipeLink(device) as board:
+        log(f"Pipe open {time.time() - connect_started:.2f}s after starting to connect.")
         missing = [k for k in ("LVL", "CACHE") if k not in board.stats]
         log(f"Stats line OK: {board.stats}" + (f"  MISSING {missing}" if missing else ""))
 

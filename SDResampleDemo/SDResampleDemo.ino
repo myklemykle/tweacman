@@ -6,7 +6,7 @@
   playback-speed ratio - not discrete multiples, and slowing down (in
   either direction) genuinely interpolates new sample values rather than
   just repeating or stepping through existing ones. The pot sweeps from
-  -MAX_RATIO through a real pause at the middle up to +MAX_RATIO;
+  -MAX_RATIO smoothly through zero at the middle up to +MAX_RATIO;
   negative plays the file backward. A second pot adds a tape-scrub
   effect on top - see "Tape scrub" below. A phone/browser can also pick
   which file plays and watch the same live stats over BLE - see "BLE
@@ -91,15 +91,15 @@
   adds directly onto whatever the first pot already requests, rather
   than replacing it - RV112FF already computes this itself as rpm(),
   driven by each read() (see that library's header), so this needed no
-  new velocity-tracking code of its own. With the first pot parked at
-  its pause deadband, this alone drives playback, sounding like
+  new velocity-tracking code of its own. With the transport stopped (or
+  the first pot turned to zero), this alone drives playback, sounding like
   manually scrubbing a reel of tape back and forth; layered on top of
   ordinary forward/backward playback it adds a wow/flutter-style warble
   instead; sitting still, rpm() reads 0 and it contributes nothing at
   all - all three cases fall out of one plain sum (see the control-rate
   block in loop()), no special-casing needed. SCRUB_SCALE (how much
-  speed-ratio contribution one RPM is worth) is tuned by ear, same as
-  DEADBAND_T - see its own comment for the seconds-of-audio-per-turn
+  speed-ratio contribution one RPM is worth) is tuned by ear - see its
+  own comment for the seconds-of-audio-per-turn
   arithmetic, and for why scrubbing against ordinary forward playback
   partly cancels itself.
 
@@ -285,10 +285,10 @@
        zippering or clicks, symmetric behavior above/below 1x forward,
        and that touching the pad switches between fast/coarse and
        slow/fine sweep rates.
-    4. Turn the pot slowly through the middle of its range - confirm a
-       real, silent-but-click-free pause, and that continuing past it
-       resumes playback smoothly in reverse, from the same place in the
-       file, with no gap or glitch. Then spin the pot past either
+    4. Turn the pot slowly through the middle of its range - confirm the
+       speed slows smoothly right down to a standstill, with no jump to
+       silence, and that continuing past it carries on smoothly in
+       reverse, from the same place in the file, with no gap or glitch. Then spin the pot past either
        physical extreme - confirm an instant speed/direction hop there
        (not a slow fold-back through the range) - that seam is the only
        place a discontinuity is expected.
@@ -305,7 +305,7 @@
        filenames from the card, PLAY: on a mono-16-bit file switches
        cleanly, and PLAY: on anything else returns a clean ERR: instead
        of hanging.
-    7. With the first pot parked at its pause deadband, twist the
+    7. With the transport stopped (pad released), twist the
        second pot back and forth - confirm it sounds like manually
        scrubbing tape (pitch/direction tracking the twist directly,
        silent when you stop). Then set the first pot to some steady
@@ -367,49 +367,72 @@
 // knob's own physical wrap point) - so angleToSpeedRatio() below maps
 // the angle directly, with no fold.
 
-const float MIN_RATIO = 0.1f;
 const float MAX_RATIO = 1024.0f;  // magnitude at both extremes - enough to sweep a 20Hz tone up
                                   // past 20kHz, which the cached copies make possible (MipCache.h)
-const float DEADBAND_T = 0.03f;  // fraction of the half-sweep that reads as a real pause - tune on the bench
+const float NATIVE_SPEED_T = 0.27f;  // how far out from the middle 1x sits, as a fraction of
+                                     // the half-sweep - where it sat on the older curve below
+
+// The speed curve: ratio = SPEED_CURVE_R0 * (e^(SPEED_CURVE_K * t) - 1), for
+// t from 0 (the middle of the dial) to 1 (either end), mirrored for reverse.
+//
+// Exponential for most of its range - a linear version was tried and
+// confirmed live to feel too twitchy below 1x, since a linear mapping spends
+// the same rotation on every equal-sized ratio step, leaving only a sliver of
+// the knob's travel for everything under 1x. An exponential spends equal
+// rotation on equal *ratios* instead, which is what fine control at low
+// speed needs.
+//
+// But a pure exponential never reaches zero, which is why this used to need
+// a dead band in the middle: a flat "paused" stretch filling the gap between
+// -0.1x and +0.1x, with a jump from 0 straight to 0.1x at its edges. The
+// "- 1" fixes that: near t = 0 the curve flattens into a straight line
+// through zero, so the speed slows smoothly through 0.05x, 0.01x, 0.001x...
+// to exactly 0 in the middle and on into reverse, with no jump anywhere.
+// (Stopping outright is the transport's job now - release the touch pad.)
+//
+// The two constants are whatever puts MAX_RATIO at the end of the sweep and
+// 1x at NATIVE_SPEED_T - solved once at startup by initSpeedCurve(), since
+// there's no closed form. Above about 0.2x this matches the old curve
+// closely, so the knob's feel there is unchanged.
+float SPEED_CURVE_K = 1.0f;
+float SPEED_CURVE_R0 = 1.0f;
+
+void initSpeedCurve() {
+  // Find k where (e^k - 1) / (e^(k * NATIVE_SPEED_T) - 1) == MAX_RATIO, by
+  // bisection: the ratio grows steadily with k, so halving the interval
+  // forty times pins it down far past float precision.
+  float lo = 0.01f, hi = 50.0f;
+  for (int i = 0; i < 40; i++) {
+    float k = 0.5f * (lo + hi);
+    float spread = (expf(k) - 1.0f) / (expf(k * NATIVE_SPEED_T) - 1.0f);
+    if (spread < MAX_RATIO) lo = k; else hi = k;
+  }
+  SPEED_CURVE_K = 0.5f * (lo + hi);
+  SPEED_CURVE_R0 = 1.0f / (expf(SPEED_CURVE_K * NATIVE_SPEED_T) - 1.0f);
+}
 
 // Maps knobAngle()'s continuous [0,360) angle directly onto a SIGNED
-// ratio: wrapped=0 -> +MAX_RATIO, wrapped=180 -> paused, wrapped
-// approaching (but never reaching) 360 -> -MAX_RATIO. Continuous
-// everywhere a physical sweep passes through smoothly, including
-// straight through zero at the middle - the only discontinuity is
-// exactly at wrapped's own 360/0 seam, which is the knob's own
-// physical wrap point, not anything this function branches on.
-// Exponential in magnitude, same curve AudioKnobsDemo's pitch mapping
-// uses - a linear version was tried and confirmed live to feel too
-// twitchy below 100%, since a purely linear mapping spends the same
-// physical rotation on every equal-sized ratio step regardless of
-// magnitude, spreading only a small fraction of the knob's travel
-// across the whole sub-1x range. Exponential spends equal rotation on
-// equal *ratios* instead, giving much finer control at low speed.
+// ratio: wrapped=0 -> +MAX_RATIO, wrapped=180 -> 0, wrapped approaching
+// (but never reaching) 360 -> -MAX_RATIO. Continuous everywhere, straight
+// through zero in the middle included - the only discontinuity is exactly
+// at wrapped's own 360/0 seam, which is the knob's own physical wrap point,
+// not anything this function branches on.
 float angleToSpeedRatio(float wrappedAngle) {
   float t = 1.0f - (wrappedAngle / 180.0f);  // +1 .. -1 across the full sweep - the
                                               // 1.0f-(...) order (not (...)-1.0f) is
                                               // what reverses the direction sense:
                                               // confirmed live the un-reversed mapping
                                               // spun opposite the intuitive way.
-  float magT = fabsf(t);
-  if (magT < DEADBAND_T) return 0.0f;  // a real pause, not a vanishingly small nonzero speed
-  float scaledT = (magT - DEADBAND_T) / (1.0f - DEADBAND_T);
-  float magnitude = MIN_RATIO * powf(MAX_RATIO / MIN_RATIO, scaledT);
+  float magnitude = SPEED_CURVE_R0 * (expf(SPEED_CURVE_K * fabsf(t)) - 1.0f);
   return copysignf(magnitude, t);
 }
 
-// Inverse of angleToSpeedRatio(), for a nonzero ratio - used only to
-// find where "native speed" (ratio 1.0) lives on the dial, so the
-// virtual-knob tracking below can (re-)anchor itself there. Not
-// meaningful for ratio 0, which isn't a single point on the dial - it's
-// the whole deadband.
+// Inverse of angleToSpeedRatio() - used to find where a given speed lives
+// on the dial, so the virtual-knob tracking below can (re-)anchor itself
+// there: native speed on every file load, or whatever SPEED: asked for.
 float angleForRatio(float ratio) {
-  float magnitude = fabsf(ratio);
-  float scaledT = logf(magnitude / MIN_RATIO) / logf(MAX_RATIO / MIN_RATIO);
-  float magT = DEADBAND_T + scaledT * (1.0f - DEADBAND_T);
-  float t = copysignf(magT, ratio);
-  return (1.0f - t) * 180.0f;
+  float t = logf(1.0f + fabsf(ratio) / SPEED_CURVE_R0) / SPEED_CURVE_K;
+  return (1.0f - copysignf(t, ratio)) * 180.0f;
 }
 
 // Maps the same [0,360) knob angle onto a pitch ratio, one octave either
@@ -1287,10 +1310,7 @@ void resetSpeedToNative() {
 // knob there, so turning it carries on from that speed. Mostly a testing
 // aid: an exact, repeatable speed is hard to dial in by hand.
 void setSpeedRatio(float ratio) {
-  if (ratio != 0.0f) {
-    float magnitude = constrain(fabsf(ratio), MIN_RATIO, MAX_RATIO);
-    ratio = copysignf(magnitude, ratio);
-  }
+  ratio = copysignf(fminf(fabsf(ratio), MAX_RATIO), ratio);
   lastKnownRatio = ratio;
   speedAnchorRatio = ratio;
   speedKnobAnchored = false;
@@ -2025,8 +2045,8 @@ RV112FF pot2(A4, A5, 0.02f, 0.15f, 0.02f);
 //
 // 1/15 gives four seconds per turn, so the cancellation point drops to
 // roughly a quarter turn per second and an ordinary half-turn flick moves a
-// couple of seconds of speech. Still a tuned-by-ear number, same as
-// DEADBAND_T - raise it for coarser scrubbing, lower it for finer. Note it
+// couple of seconds of speech. Still a tuned-by-ear number - raise it for
+// coarser scrubbing, lower it for finer. Note it
 // scales the wow/flutter warble mode by the same factor, since that is the
 // same sum with knob1 left running.
 //
@@ -2158,6 +2178,7 @@ void setup() {
     hannLut[i] = 0.5f * (1.0f - cosf(2.0f * PI * (float)i / (float)HANN_LUT_SIZE));
   }
   initSincTable();
+  initSpeedCurve();
 
   // ---- RA6M5-specific ----
   // Start the Cortex-M33's cycle counter, which the audio interrupt uses to
@@ -2378,9 +2399,7 @@ void loop() {
           // here, ignoring physicalNow's absolute position entirely - the
           // whole point of relative control is that wherever the real
           // knob happens to be sitting doesn't matter.
-          float anchorAngle = (speedAnchorRatio == 0.0f) ? 180.0f  // mid-deadband: paused
-                                                         : angleForRatio(speedAnchorRatio);
-          speedKnobDegrees = anchorAngle * TURNS_PER_SWEEP * 2.0f;
+          speedKnobDegrees = angleForRatio(speedAnchorRatio) * TURNS_PER_SWEEP * 2.0f;
           speedKnobAnchored = true;
         } else {
           speedKnobDegrees += delta;
@@ -2401,7 +2420,7 @@ void loop() {
 
     // Tape-scrub: pot2's rotational velocity adds directly onto
     // whatever knob1 already requests, rather than replacing it -
-    // with knob1 parked at its pause deadband (ratio 0) this alone
+    // with the transport stopped (or knob1 at zero) this alone
     // drives playback, sounding like manually scrubbing a reel of
     // tape; layered on top of ordinary forward/backward playback it
     // adds a wow/flutter-style warble instead; sitting still, rpm() is
@@ -2451,8 +2470,8 @@ void loop() {
     // too, since both sides of the sum scale together.
     //
     // The floor at 1x is what stops this scaling *down*, and it is not
-    // optional: the primary tape-scrub case parks knob1 in its pause
-    // deadband, where the ratio is 0 - a bare multiply would there
+    // optional: the primary tape-scrub case is the transport stopped,
+    // where the ratio is 0 - a bare multiply would there
     // multiply the scrub by zero and disable the feature precisely where
     // it matters most. Below 1x the scrub keeps its absolute feel.
     // Transport: touch pad 2 held means running, released means stopped.
@@ -2466,10 +2485,7 @@ void loop() {
     // So stopping is just declining to add knob1's contribution to the sum.
     //
     // Scrub deliberately survives, because it is a separate term: a stopped
-    // tape still moves when you turn the reel by hand. This is the same
-    // "knob1 parked at its pause deadband" case the scrub was designed
-    // around, now reachable with a finger instead of by hunting for the
-    // deadband.
+    // tape still moves when you turn the reel by hand.
     // Transport, with a latch.
     //
     //   touch2 held                -> running, for as long as it is held
@@ -2601,8 +2617,11 @@ void loop() {
     float fillPercent = 100.0f * voices[activeVoice].ring.usedSpace() / RING_CAPACITY;
     uint8_t level = fileLoaded ? voices[activeVoice].level : 0;
     int cachePercent = (cache.name() == currentFilename) ? cache.percentDone() : 0;
+    // Four decimals below 1x, since the knob now slows smoothly right down
+    // to zero and two would show anything under 0.005x as "0.00x".
+    int speedDecimals = fabsf(ratio) < 1.0f ? 4 : 2;
     Serial.print("speed ");
-    Serial.print(ratio, 2);
+    Serial.print(ratio, speedDecimals);
     Serial.print("x (range ");
     if (minRatioSeen <= maxRatioSeen) {
       Serial.print(minRatioSeen, 3);
@@ -2662,8 +2681,8 @@ void loop() {
       // Lets a client display the speed the transport would run at if
       // started, rather than losing the setting whenever the tape is
       // stopped.
-      String stat = "SPD:" + String(ratio, 2) +
-                     ",REQ:" + String(lastKnownRatio, 2) +
+      String stat = "SPD:" + String(ratio, speedDecimals) +
+                     ",REQ:" + String(lastKnownRatio, fabsf(lastKnownRatio) < 1.0f ? 4 : 2) +
                      ",PIT:" + String(pitchRatio, 3) +
                      ",BUF:" + String((int)fillPercent) + ",UND:" + String(underrunTicks) +
                      ",RUN:" + String(transportRunning ? 1 : 0) +

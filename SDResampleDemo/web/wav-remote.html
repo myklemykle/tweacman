@@ -1536,7 +1536,10 @@
     const showPotential = !running && parts.REQ !== undefined;
     const shownSpeed = showPotential ? parts.REQ : parts.SPD;
     if (shownSpeed !== undefined) {
-      speedEl.innerHTML = `${Number(shownSpeed).toFixed(2)}<span class="unit">x</span>`;
+      // Four decimals below 1x: the board's speed knob slows smoothly
+      // right down to zero, and 0.00 would hide everything under 0.005x.
+      const speed = Number(shownSpeed);
+      speedEl.innerHTML = `${speed.toFixed(Math.abs(speed) < 1 ? 4 : 2)}<span class="unit">x</span>`;
       speedEl.classList.toggle("potential", showPotential);
     }
     if (parts.BUF !== undefined) {

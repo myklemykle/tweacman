@@ -1588,7 +1588,14 @@
     }
     if (line === "FILES:END") {
       collectingFiles = false;
-      fileNames = fileListBuffer;
+      // The board lists files in the card's own directory order - roughly
+      // the order they were created - so sort them here: alphabetical,
+      // ignoring case ("base" sensitivity treats a/A, and á/a, as equal).
+      // Names are plain ASCII in practice: this core's FatFs converts long
+      // filenames through code page 437 rather than Unicode, so anything
+      // else on the card arrives garbled anyway.
+      fileNames = fileListBuffer.sort((a, b) =>
+        a.localeCompare(b, undefined, { sensitivity: "base" }));
       if (rowMode && !fileNames.some((n) => sameName(n, rowMode.name))) rowMode = null;
       renderFileList();
       return;

@@ -82,9 +82,10 @@
   limited the same way on both sides of a switch. That costs CPU in the
   audio interrupt - the Serial status line reports how much ("isr avg/max",
   roughly 20-45% normally, up to ~80% mid-crossfade with the pitch shifter
-  on), along with "late", a count of audio ticks that came late enough to
-  have been skipped. That should stay at the handful caused by loading a
-  file; if it climbs, something is holding interrupts off for too long.
+  on), along with "dropped", a count of audio ticks that never ran because
+  something held interrupts off for longer than a tick (it restarts at
+  each file load and transport start, which pause the audio on purpose).
+  It should stay at zero; if it climbs, something is blocking too long.
 
   Tape scrub: the second pot's ROTATIONAL VELOCITY (not its position)
   adds directly onto whatever the first pot already requests, rather
@@ -166,6 +167,9 @@
     `SPEED:<ratio>`      jump to an exact speed (negative is backward, 0
                          pauses); the knob carries on from there
     `PITCH:<ratio>`      set an exact pitch ratio (1 is unshifted)
+    `PROFILE`            print, over USB Serial, how often each stage of
+                         loop() did work since the last PROFILE and how long
+                         it took - see "loop() profiling" further down
     `PUT:<bytes>:<name>` upload a file, creating or replacing <name> -
                          answered `READY:<name>`, then raw data flows with
                          `ACK:<bytes so far>` coming back, then
@@ -761,20 +765,55 @@ AUDIO_HOT inline bool renderVoice(Voice &v, float step, float pitch, bool shifti
 // -- Audio interrupt timing (diagnostic) -------------------------------------
 // The audio interrupt should fire every 1/48000s exactly. If anything keeps
 // interrupts masked for longer than a tick, a tick is skipped outright and
-// the DAC holds one sample twice - a tiny click. These count how often that
-// happens, and how much of each tick the interrupt itself takes, using the
-// CPU's own cycle counter. Both are reported in the Serial status line.
-uint32_t cyclesPerTick = 0;         // set in setup()
-uint32_t lastTickCycles = 0;
-volatile uint32_t lateTicks = 0;     // ticks that arrived 1.5+ ticks after the last
+// the DAC holds one sample twice - a tiny click. The Serial status line
+// reports how many ticks have been dropped, and how much of each tick the
+// interrupt itself takes.
+//
+// Dropped ticks are found by counting: the interrupt counts every tick it
+// runs, and loop() compares that with how many there should have been by
+// now according to micros(). Timing each gap from inside the interrupt
+// doesn't work here, for two reasons found the hard way: FastLED's driver
+// for this chip zeroes the CPU's cycle counter on every LED update, and
+// micros() itself depends on a lower-priority interrupt, so read from
+// inside this one it occasionally jumps by a millisecond. (The interrupt's
+// own run time is still safe on the cycle counter - nothing can reset it
+// partway through an interrupt.)
+uint32_t cyclesPerTick = 0;          // set in setup()
+volatile uint32_t audioTicks = 0;    // every tick the interrupt has run
+uint32_t dropCountTicks = 0;         // audioTicks when counting (re)started
+uint32_t dropCountMicros = 0;        // micros() then
+uint64_t dropCountElapsed = 0;       // microseconds counted since
+uint32_t dropCountLastMicros = 0;
+// The timer's real rate is its clock divided by a whole number of counts
+// per tick - about 48008Hz rather than exactly 48000 - which is enough to
+// look like 8 ticks a second going missing, so the count uses the real one.
+uint64_t tickClockHz = 48000;        // set in setup(), from the timer itself
+uint64_t tickClockCountsPerTick = 1;
+
+// Starts counting dropped ticks afresh - after loading a file or rewinding,
+// which pause the audio on purpose and so would swamp the count.
+void restartDropCount() {
+  dropCountTicks = audioTicks;
+  dropCountMicros = dropCountLastMicros = micros();
+  dropCountElapsed = 0;
+}
+
+// Ticks that should have run since restartDropCount() but didn't.
+int32_t droppedTicks() {
+  uint32_t now = micros();
+  dropCountElapsed += (uint32_t)(now - dropCountLastMicros);
+  dropCountLastMicros = now;
+  uint32_t expected =
+      (uint32_t)(dropCountElapsed * tickClockHz / (tickClockCountsPerTick * 1000000));
+  return (int32_t)(expected - (audioTicks - dropCountTicks));
+}
 volatile uint32_t isrCyclesMax = 0;  // since the last status line
 volatile uint32_t isrCyclesSum = 0;
 volatile uint32_t isrCount = 0;
 
 AUDIO_HOT void audioCallback(timer_callback_args_t *args) {
   uint32_t tickStart = DWT->CYCCNT;
-  if (lastTickCycles != 0 && tickStart - lastTickCycles > cyclesPerTick * 3 / 2) lateTicks++;
-  lastTickCycles = tickStart;
+  audioTicks++;
 
   int16_t outSample;
 
@@ -1151,6 +1190,7 @@ bool loadFile(const String &filename, String &errorOut) {
   primeVoice(v, -PRIME_BEHIND, RING_CAPACITY);
 
   audioTimer.enable_overflow_irq();
+  restartDropCount();
 
   currentFilename = filename;
   fileLoaded = true;
@@ -1202,6 +1242,7 @@ void rewindToStart() {
   primeVoice(v, -PRIME_BEHIND, RING_CAPACITY);  // see loadFile()
 
   audioTimer.enable_overflow_irq();
+  restartDropCount();
 }
 
 // Closes the current file, leaving nothing loaded. Needed before deleting,
@@ -1775,6 +1816,8 @@ void handleBLECommand(String line) {
     transportLatched = false;
   } else if (line == "RESET:SPEED") {
     resetSpeedToNative();
+  } else if (line == "PROFILE") {
+    printProfile();
   } else if (line.startsWith("SPEED:")) {
     setSpeedRatio(line.substring(6).toFloat());
   } else if (line.startsWith("PITCH:")) {
@@ -1999,6 +2042,82 @@ unsigned long previousControlMillis = 0;
 const unsigned long STATUS_INTERVAL = 500;  // ms
 unsigned long previousStatusMillis = 0;
 
+// -- loop() profiling -----------------------------------------------------
+// loop() isn't one job but about ten, each on its own schedule. The PROFILE
+// command (USB serial or BLE) prints how often each one actually did work
+// since the last PROFILE, how long it took when it did, and its share of
+// the CPU - timed with the same cycle counter the audio interrupt uses, so
+// no debugger is needed. Times include any audio interrupts that landed
+// mid-stage, since the interrupt pre-empts loop() wherever it is - up to
+// ~17us each, which is why a stage only counts as "busy" (as having done
+// real work rather than just checked whether it had any) past 30us.
+//
+// One catch: FastLED zeroes the cycle counter on every LED update (see
+// "Audio interrupt timing"), so the LED stage is timed with micros()
+// instead, and any measurement spanning a reset is thrown away.
+enum LoopStage : uint8_t {
+  STAGE_BLE, STAGE_USB, STAGE_FILE_LIST, STAGE_REFILL, STAGE_CACHE,
+  STAGE_TOUCH, STAGE_CONTROL, STAGE_COPY_CHANGE, STAGE_LED, STAGE_STATUS, STAGE_COUNT
+};
+const char *const STAGE_NAMES[STAGE_COUNT] = {
+  "BLE input", "USB input", "file list", "SD refill", "cache build",
+  "touch scan", "knobs+transport", "copy change", "LED", "status lines"
+};
+struct StageStats {
+  uint32_t busyPasses = 0;  // passes where it took long enough to count as work
+  uint64_t busyCycles = 0;  // ...and the time those took
+  uint64_t cycles = 0;      // total, busy or not
+  uint32_t maxCycles = 0;
+};
+StageStats stageStats[STAGE_COUNT];
+uint32_t profilePasses = 0;
+uint32_t profileMaxPassCycles = 0;
+unsigned long profileStartMillis = 0;
+const uint32_t STAGE_BUSY_CYCLES = 6000;   // 30us at 200MHz
+const uint32_t STAGE_BOGUS_CYCLES = 1u << 30;  // ~5s: only a counter reset looks like this
+
+// Takes the stage as a plain uint8_t rather than a LoopStage only because
+// Arduino's generated prototypes land above the enum's definition.
+inline void stageTook(uint8_t stage, uint32_t used) {
+  if (used >= STAGE_BOGUS_CYCLES) return;
+  StageStats &st = stageStats[stage];
+  st.cycles += used;
+  if (used > st.maxCycles) st.maxCycles = used;
+  if (used >= STAGE_BUSY_CYCLES) {
+    st.busyPasses++;
+    st.busyCycles += used;
+  }
+}
+
+inline void stageDone(uint8_t stage, uint32_t startCycles) {
+  stageTook(stage, DWT->CYCCNT - startCycles);
+}
+
+void printProfile() {
+  unsigned long elapsed = millis() - profileStartMillis;
+  if (elapsed == 0) elapsed = 1;
+  float cyclesPerUs = SystemCoreClock / 1e6f;
+  char line[120];
+  snprintf(line, sizeof(line), "loop(): %lu passes in %lums (%lu/s), longest pass %lu us",
+           (unsigned long)profilePasses, elapsed, (unsigned long)(profilePasses * 1000UL / elapsed),
+           (unsigned long)(profileMaxPassCycles / cyclesPerUs));
+  Serial.println(line);
+  Serial.println("  stage              busy/s   avg us when busy   max us   CPU %");
+  for (int i = 0; i < STAGE_COUNT; i++) {
+    const StageStats &st = stageStats[i];
+    float busyPerSec = st.busyPasses * 1000.0f / elapsed;
+    float avgUs = st.busyPasses ? (st.busyCycles / cyclesPerUs) / st.busyPasses : 0.0f;
+    float cpu = 100.0f * (st.cycles / cyclesPerUs) / (elapsed * 1000.0f);
+    snprintf(line, sizeof(line), "  %-17s %8.1f %13.0f %13.0f %7.1f", STAGE_NAMES[i], busyPerSec,
+             avgUs, st.maxCycles / cyclesPerUs, cpu);
+    Serial.println(line);
+    stageStats[i] = StageStats();
+  }
+  profilePasses = 0;
+  profileMaxPassCycles = 0;
+  profileStartMillis = millis();
+}
+
 void setup() {
   Serial.begin(115200);
   unsigned long start = millis();
@@ -2115,9 +2234,15 @@ void setup() {
   audioTimer.setup_overflow_irq(1);  // high priority: audio timing is jitter-sensitive
   audioTimer.open();
   audioTimer.start();
+  tickClockHz = audioTimer.get_freq_hz();
+  tickClockCountsPerTick = audioTimer.get_period_raw();
+  restartDropCount();
 }
 
 void loop() {
+  uint32_t passStart = DWT->CYCCNT;
+  uint32_t t = passStart;
+
   // Checked unconditionally every pass, not gated to CONTROL_INTERVAL -
   // a PLAY: request shouldn't wait up to 10ms for no reason, and this
   // is a cheap check when nothing's waiting (see AudioKnobsWebBLEDemo
@@ -2145,6 +2270,8 @@ void loop() {
       if (line.length() > 0) handleBLELine(line);
     }
   }
+  stageDone(STAGE_BLE, t);
+  t = DWT->CYCCNT;
 
   // The same commands also work typed into the USB serial monitor, one per
   // line - handy for testing without a phone (e.g. LATCH:AUDIO.WAV, then
@@ -2160,9 +2287,12 @@ void loop() {
       usbLine += c;
     }
   }
+  stageDone(STAGE_USB, t);
 
   // Emits the next file-list line if one is due - see pumpFileList().
+  t = DWT->CYCCNT;
   pumpFileList();
+  stageDone(STAGE_FILE_LIST, t);
 
   // A probe that was never echoed means the module stopped echoing, i.e. the
   // pipe is finally open. Checked every pass so the promotion is prompt.
@@ -2187,25 +2317,29 @@ void loop() {
   // its copy much faster than real time, whatever the speed.
   if (fileLoaded) {
     float step = currentStep;  // snapshot once per pass
+    t = DWT->CYCCNT;
     refillVoice(voices[activeVoice], step);
     int8_t fading = fadingVoice;
     if (fading >= 0) refillVoice(voices[fading], step);
+    stageDone(STAGE_REFILL, t);
 
     // Build cached copies in the gaps: only when the playing voices are
     // topped up, and never during an upload, whose flow control needs
     // loop() to keep answering promptly. Each step is a few milliseconds.
+    t = DWT->CYCCNT;
     if (cache.building() && !uploadInProgress() && voicesToppedUp(step)) cache.step();
+    stageDone(STAGE_CACHE, t);
   }
 
   unsigned long currentMillis = millis();
 
   if (currentMillis - previousControlMillis >= CONTROL_INTERVAL) {
     previousControlMillis = currentMillis;
+    t = DWT->CYCCNT;
     CapTouch::scan();
+    stageDone(STAGE_TOUCH, t);
 
-
-
-
+    t = DWT->CYCCNT;
     float physicalNow = knob1.read();
     if (physicalNow != -1.0f) {
       // Whichever mode is active drives its own accumulator; the other
@@ -2405,6 +2539,7 @@ void loop() {
       if (fabsf(step) > cap) step = copysignf(cap, step);
     }
     currentStep = step;
+    stageDone(STAGE_CONTROL, t);
 
     // Move to a different copy if this speed calls for one. Not while
     // paused - there's nothing to hear, and the tape will most likely
@@ -2414,7 +2549,9 @@ void loop() {
         millis() - levelChangeFailedMillis >= LEVEL_CHANGE_RETRY_MS) {
       uint8_t current = voices[activeVoice].level;
       uint8_t target = chooseLevel(fabsf(step), current, ready);
+      t = DWT->CYCCNT;
       if (target != current) startLevelChange(target);
+      stageDone(STAGE_COPY_CHANGE, t);
     }
 
     // Transport indicator: steady at full level when latched, blinking at
@@ -2425,6 +2562,7 @@ void loop() {
     // straddle a 48kHz audio tick. So it is called only when the colour
     // actually changes, which during a blink is a handful of times a second
     // rather than a hundred.
+    uint32_t ledStartMicros = micros();  // see "loop() profiling" on why not the cycle counter
     bool blinking = transportRunning && !transportLatched;
     if (blinking && !wasBlinking) blinkPhaseStartMillis = currentMillis;
     wasBlinking = blinking;
@@ -2449,12 +2587,14 @@ void loop() {
       leds[0] = wanted;
       FastLED.show();
     }
+    stageTook(STAGE_LED, (micros() - ledStartMicros) * (SystemCoreClock / 1000000));
   }
 
   // Deliberately short and infrequent: Serial here is native USB CDC
   // (see CLAUDE.md), and a blocking print sitting in a hot loop would
   // itself steal cycles from the SD refill above, manufacturing the
   // very underrun this demo is trying to measure honestly.
+  t = DWT->CYCCNT;
   if (currentMillis - previousStatusMillis >= STATUS_INTERVAL) {
     previousStatusMillis = currentMillis;
     float ratio = currentStep / rateFactor;
@@ -2484,8 +2624,8 @@ void loop() {
     Serial.print(count ? 100 * (isrCyclesSum / count) / cyclesPerTick : 0);
     Serial.print("% max ");
     Serial.print(100 * isrCyclesMax / cyclesPerTick);
-    Serial.print("%  late ");
-    Serial.println(lateTicks);
+    Serial.print("%  dropped ");
+    Serial.println(droppedTicks());
     isrCyclesMax = 0;
     isrCyclesSum = 0;
     isrCount = 0;
@@ -2539,4 +2679,11 @@ void loop() {
     minRatioSeen = 1e9f;
     maxRatioSeen = -1e9f;
   }
+  stageDone(STAGE_STATUS, t);
+
+  uint32_t passCycles = DWT->CYCCNT - passStart;
+  if (passCycles < STAGE_BOGUS_CYCLES && passCycles > profileMaxPassCycles) {
+    profileMaxPassCycles = passCycles;
+  }
+  profilePasses++;
 }

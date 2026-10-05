@@ -1418,6 +1418,19 @@ void bleWriteRaw(const String &data) {
 // can recognise its own words coming back at it - see handleBLELine().
 String lastLineSent = "";
 
+// How often the module advertises while nothing is connected, in ms - the
+// fastest CodeLess allows (AT+ADVSTART=<ms>, 100-3000). Its default is
+// about 690ms, and phones and laptops only listen in short windows, so at
+// that rate the board could take anywhere from an instant to 20 seconds to
+// show up in a device picker. Seven times as many announcements gives a
+// listener seven times the chances. The cost is tens of microamps on the
+// module, while nothing is connected - nothing next to the RA6M5's own
+// draw.
+const unsigned int BLE_ADV_INTERVAL_MS = 100;
+
+// The advertising command, with that interval.
+String bleAdvertiseCommand() { return "AT+ADVSTART=" + String(BLE_ADV_INTERVAL_MS); }
+
 void blePrintLine(const String &line) {
   lastLineSent = line;
   bleWriteRaw(line + "\n");
@@ -1932,6 +1945,23 @@ void handleBLELine(const String &line) {
   // echo and stay put, and if it was not, the probe promotes and the link
   // recovers on its own. LINK_COMMAND would instead sit waiting for a
   // +BINREQ that Binary mode can never send.
+  // The module restarted itself. It does this every time it leaves Binary
+  // mode - i.e. after every working connection - so whatever this sketch
+  // believed a moment ago (and while the module reboots, an unanswered
+  // probe can look like an open pipe), it's now in command mode with nobody
+  // connected. It also comes back advertising at its own default interval,
+  // so restart advertising at ours: stop first, since starting while
+  // already advertising is an error.
+  if (line == "+READY") {
+    Serial.println("Module restarted - advertising again.");
+    linkMode = LINK_COMMAND;
+    awaitingProbeEcho = false;
+    lastLineSent = "";
+    bleWriteRaw("AT+ADVSTOP\r");
+    bleWriteRaw(bleAdvertiseCommand() + "\r");
+    return;
+  }
+
   if (line == "+++") {
     Serial.println("Module requested Binary mode exit - acknowledging.");
     bleWriteRaw("AT\r");
@@ -1953,7 +1983,7 @@ void handleBLELine(const String &line) {
     // waiting for a reply - fine at boot, a real problem here, where it
     // would stall loop() and therefore the BLE input itself for a second
     // or more right as a new connection might already be starting up.
-    bleWriteRaw("AT+ADVSTART\r");
+    bleWriteRaw(bleAdvertiseCommand() + "\r");
   } else if (line.indexOf("+CONNECTED") != -1) {
     // A fresh +CONNECTED always means a fresh handshake is starting, even if
     // the link was still believed binary from a previous session -
@@ -2327,7 +2357,7 @@ void setup() {
   // when one fails there is nothing to see.
   bleCommand("ATR");
   bleCommand("AT+ADVSTOP");
-  bleCommand("AT+ADVSTART");
+  bleCommand(bleAdvertiseCommand());
 
   // A hardware timer fires at a fixed 48000Hz; the speed knob changes
   // how far the resampler steps through the source each tick, not this

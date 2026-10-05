@@ -1,7 +1,21 @@
 /*
-  WavReader - opens a mono 16-bit PCM WAV file on the mounted SD card
-  and reads raw samples from any starting position, looping seamlessly
-  at end-of-file.
+  WavReader - opens a mono WAV file on the mounted SD card and reads
+  samples from any starting position, looping seamlessly at end-of-file.
+
+  Whatever the file's own sample format, samples come out as 16-bit
+  signed integers - the one format everything downstream (ring buffers,
+  cached copies, the interpolator) deals in. Read as:
+    - 16-bit PCM: as-is, straight off the card.
+    - 8-bit PCM (unsigned, centred on 128): shifted up to 16 bits.
+    - 24- and 32-bit PCM: the top 16 bits. The DAC only has 12, so the
+      bits dropped were never going to be heard.
+    - 32- and 64-bit IEEE float: scaled from [-1, 1) and clipped.
+  Any of those can also come in a WAVE_FORMAT_EXTENSIBLE header, which
+  many editors write for anything beyond plain 16-bit; its "valid bits"
+  field needs no special handling, since valid bits are always the top
+  ones of their container. Conversion happens in small pieces as samples
+  are read, so it costs a little time in loop() and no extra memory per
+  file. Stereo and wider files are refused, for now.
 
   Parses the RIFF chunk structure properly (skipping any chunk it
   doesn't need) rather than assuming a fixed 44-byte header - real WAV
@@ -38,10 +52,9 @@ class WavReader {
   WavReader(WavReader &&other) noexcept { *this = static_cast<WavReader &&>(other); }
   WavReader &operator=(WavReader &&other) noexcept;
 
-  // Opens path (e.g. "/sd/AUDIO.WAV"), parses its header, and leaves
-  // the file positioned at the start of its sample data. Returns false
-  // if the file can't be opened or isn't mono 16-bit PCM - see
-  // lastError() for why, which is also printed to Serial as it happens.
+  // Opens path (e.g. "/sd/AUDIO.WAV") and parses its header. Returns false
+  // if the file can't be opened or isn't a format this reads (see above) -
+  // see lastError() for why, which is also printed to Serial as it happens.
   bool open(const char *path);
 
   // Opens a headerless file of raw 16-bit mono samples - one of the
@@ -58,7 +71,11 @@ class WavReader {
   // aligned - true exactly when the destination's address matches the file
   // position mod 4. So for a large read, pass readSamplesAt() a 4-byte
   // aligned buffer plus this many bytes.
+  // (Only 16-bit files are read straight into the caller's buffer -
+  // anything else goes through a conversion buffer first - so for those
+  // this is 0.)
   uint32_t alignmentOf(uint32_t sampleOffset) const {
+    if (encoding_ != PCM16) return 0;
     return (uint32_t)(dataStart_ + sampleOffset * 2) & 3;
   }
 
@@ -66,7 +83,10 @@ class WavReader {
   void close();
 
   uint32_t nativeSampleRate() const { return sampleRate_; }
-  uint32_t totalSamples() const { return dataBytes_ / 2; }
+  uint32_t totalSamples() const { return dataBytes_ / bytesPerSample_; }
+
+  // The file's own sample format, e.g. "24-bit PCM" or "32-bit float".
+  const char *formatName() const;
   const char *lastError() const { return lastError_; }
 
   // Seeks to sampleOffset (must be < totalSamples() - callers wrap
@@ -80,6 +100,12 @@ class WavReader {
   size_t readSamplesAt(uint32_t sampleOffset, int16_t *dst, size_t maxSamples);
 
  private:
+  enum Encoding : uint8_t { PCM8, PCM16, PCM24, PCM32, FLOAT32, FLOAT64 };
+
+  // Reads n samples from sampleOffset onward, all before the end of the
+  // data - readSamplesAt()'s looping is built on this.
+  size_t readRun(uint32_t sampleOffset, int16_t *dst, size_t n);
+
   // Records msg as the reason open() failed (for lastError()/the BLE
   // ERR: reply), prints it to Serial the same way every failure path
   // here always has, closes any partially-opened file, and returns
@@ -90,5 +116,7 @@ class WavReader {
   uint32_t sampleRate_ = 0;
   long dataStart_ = 0;
   uint32_t dataBytes_ = 0;
+  Encoding encoding_ = PCM16;
+  uint8_t bytesPerSample_ = 2;
   char lastError_[64] = "";
 };

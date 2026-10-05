@@ -10,6 +10,8 @@ WavReader &WavReader::operator=(WavReader &&other) noexcept {
   sampleRate_ = other.sampleRate_;
   dataStart_ = other.dataStart_;
   dataBytes_ = other.dataBytes_;
+  encoding_ = other.encoding_;
+  bytesPerSample_ = other.bytesPerSample_;
   memcpy(lastError_, other.lastError_, sizeof(lastError_));
   other.file_ = nullptr;
   return *this;
@@ -60,6 +62,7 @@ bool WavReader::open(const char *path) {
     if (fread(chunkId, 1, 4, file_) != 4 || fread(&chunkSize, 4, 1, file_) != 1) {
       return fail("hit EOF before finding a data chunk");
     }
+    long chunkEnd = ftell(file_) + chunkSize + (chunkSize & 1);  // RIFF pads odd chunks to even
 
     if (memcmp(chunkId, "fmt ", 4) == 0) {
       uint32_t byteRate;
@@ -70,27 +73,72 @@ bool WavReader::open(const char *path) {
       fread(&byteRate, 4, 1, file_);
       fread(&blockAlign, 2, 1, file_);
       fread(&bitsPerSample, 2, 1, file_);
-      // fmt chunks are sometimes larger than the 16 bytes just read
-      // (extensible-format fields) - skip whatever's left of it.
-      if (chunkSize > 16) fseek(file_, chunkSize - 16, SEEK_CUR);
+      // WAVE_FORMAT_EXTENSIBLE: the real format is the first two bytes of
+      // a GUID further on (the rest of the GUID is the same for every
+      // standard format). Before it: the extension's size, the valid
+      // bits, and which speakers the channels map to.
+      if (audioFormat == 0xFFFE && chunkSize >= 40) {
+        uint16_t extensionSize, validBits;
+        uint32_t channelMask;
+        fread(&extensionSize, 2, 1, file_);
+        fread(&validBits, 2, 1, file_);
+        fread(&channelMask, 4, 1, file_);
+        fread(&audioFormat, 2, 1, file_);
+      }
       haveFmt = true;
     } else if (memcmp(chunkId, "data", 4) == 0) {
       dataStart_ = ftell(file_);
       dataBytes_ = chunkSize;
       break;
-    } else {
-      fseek(file_, chunkSize + (chunkSize & 1), SEEK_CUR);  // RIFF pads odd chunks to even
     }
+    fseek(file_, chunkEnd, SEEK_SET);  // skip whatever's left of this chunk
   }
 
   if (!haveFmt) {
     return fail("no fmt chunk found");
   }
-  if (audioFormat != 1 || numChannels != 1 || bitsPerSample != 16) {
-    return fail("this demo only plays mono 16-bit PCM WAV files");
-  }
 
+  // Some recorders write a data size larger than what's actually there
+  // (or a placeholder, if they were interrupted) - trust the file instead.
+  fseek(file_, 0, SEEK_END);
+  long available = ftell(file_) - dataStart_;
+  if (available >= 0 && (long)dataBytes_ > available) dataBytes_ = (uint32_t)available;
+
+  char msg[64];
+  if (numChannels != 1) {
+    snprintf(msg, sizeof(msg), "%u-channel files aren't supported yet - mono only", numChannels);
+    return fail(msg);
+  }
+  if (audioFormat == 1 && bitsPerSample == 8) encoding_ = PCM8;
+  else if (audioFormat == 1 && bitsPerSample == 16) encoding_ = PCM16;
+  else if (audioFormat == 1 && bitsPerSample == 24) encoding_ = PCM24;
+  else if (audioFormat == 1 && bitsPerSample == 32) encoding_ = PCM32;
+  else if (audioFormat == 3 && bitsPerSample == 32) encoding_ = FLOAT32;
+  else if (audioFormat == 3 && bitsPerSample == 64) encoding_ = FLOAT64;
+  else if (audioFormat == 1 || audioFormat == 3) {
+    snprintf(msg, sizeof(msg), "%u-bit %s isn't supported", bitsPerSample,
+             audioFormat == 1 ? "PCM" : "float");
+    return fail(msg);
+  } else {
+    // ADPCM, A-law, mu-law, MP3-in-WAV...
+    snprintf(msg, sizeof(msg), "compressed WAV (format 0x%04X) isn't supported", audioFormat);
+    return fail(msg);
+  }
+  bytesPerSample_ = bitsPerSample / 8;
+  if (dataBytes_ < bytesPerSample_) return fail("no sample data");
   return true;
+}
+
+const char *WavReader::formatName() const {
+  switch (encoding_) {
+    case PCM8: return "8-bit PCM";
+    case PCM16: return "16-bit PCM";
+    case PCM24: return "24-bit PCM";
+    case PCM32: return "32-bit PCM";
+    case FLOAT32: return "32-bit float";
+    case FLOAT64: return "64-bit float";
+  }
+  return "?";
 }
 
 bool WavReader::openRaw(const char *path, uint32_t sampleRate) {
@@ -106,30 +154,84 @@ bool WavReader::openRaw(const char *path, uint32_t sampleRate) {
   dataBytes_ = (uint32_t)ftell(file_);
   dataStart_ = 0;
   sampleRate_ = sampleRate;
+  encoding_ = PCM16;
+  bytesPerSample_ = 2;
   if (dataBytes_ < 2) return fail("cache file is empty");
   return true;
 }
 
 size_t WavReader::readSamplesAt(uint32_t sampleOffset, int16_t *dst, size_t maxSamples) {
-  fseek(file_, dataStart_ + (long)sampleOffset * 2, SEEK_SET);
-  uint32_t bytesRemaining = dataBytes_ - sampleOffset * 2;
+  uint32_t total = totalSamples();
+  uint32_t pos = sampleOffset;
   size_t samplesRead = 0;
 
   while (samplesRead < maxSamples) {
-    if (bytesRemaining < 2) {
-      // Hit the end of the data chunk - loop back to the start for
-      // seamless continuous playback; callers never see this boundary.
-      fseek(file_, dataStart_, SEEK_SET);
-      bytesRemaining = dataBytes_;
-      if (dataBytes_ < 2) break;  // pathological empty file - avoid spinning forever
-    }
-    size_t samplesLeftHere = maxSamples - samplesRead;
-    size_t samplesAvailableHere = bytesRemaining / 2;
-    size_t chunk = samplesLeftHere < samplesAvailableHere ? samplesLeftHere : samplesAvailableHere;
-    size_t got = fread(dst + samplesRead, 2, chunk, file_);
-    samplesRead += got;
-    bytesRemaining -= got * 2;
+    // Hit the end of the data chunk - loop back to the start for seamless
+    // continuous playback; callers never see this boundary.
+    if (pos >= total) pos = 0;
+    size_t n = maxSamples - samplesRead;
+    if (n > total - pos) n = total - pos;
+    size_t got = readRun(pos, dst + samplesRead, n);
     if (got == 0) break;  // shouldn't happen, but avoid spinning forever
+    samplesRead += got;
+    pos += got;
   }
   return samplesRead;
+}
+
+// Where non-16-bit samples land before conversion. Shared by every reader:
+// reads only ever happen from loop(), one at a time.
+static uint8_t convertBuf[2048];
+
+static inline int16_t floatToSample(float f) {
+  f *= 32768.0f;
+  if (f >= 32767.0f) return 32767;
+  if (f <= -32768.0f) return -32768;
+  return (int16_t)(f + (f >= 0.0f ? 0.5f : -0.5f));
+}
+
+size_t WavReader::readRun(uint32_t sampleOffset, int16_t *dst, size_t n) {
+  fseek(file_, dataStart_ + (long)sampleOffset * bytesPerSample_, SEEK_SET);
+  if (encoding_ == PCM16) return fread(dst, 2, n, file_);
+
+  size_t done = 0;
+  size_t perPiece = sizeof(convertBuf) / bytesPerSample_;
+  while (done < n) {
+    size_t piece = n - done < perPiece ? n - done : perPiece;
+    size_t got = fread(convertBuf, bytesPerSample_, piece, file_);
+    const uint8_t *b = convertBuf;
+    int16_t *out = dst + done;
+    // Little-endian throughout, like the file - so the top 16 bits of a
+    // wider sample are simply its last two bytes.
+    for (size_t i = 0; i < got; i++) {
+      switch (encoding_) {
+        case PCM8:
+          out[i] = (int16_t)((b[i] - 128) * 256);
+          break;
+        case PCM24:
+          out[i] = (int16_t)(b[3 * i + 1] | (b[3 * i + 2] << 8));
+          break;
+        case PCM32:
+          out[i] = (int16_t)(b[4 * i + 2] | (b[4 * i + 3] << 8));
+          break;
+        case FLOAT32: {
+          float f;
+          memcpy(&f, b + 4 * i, 4);
+          out[i] = floatToSample(f);
+          break;
+        }
+        case FLOAT64: {
+          double d;
+          memcpy(&d, b + 8 * i, 8);
+          out[i] = floatToSample((float)d);
+          break;
+        }
+        case PCM16:
+          break;  // handled above
+      }
+    }
+    done += got;
+    if (got < piece) break;
+  }
+  return done;
 }

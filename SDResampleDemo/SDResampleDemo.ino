@@ -221,11 +221,15 @@
   latched - green while knob1 sets speed, blue while it sets pitch. "Full" is
   RGBLED_MAX_BRIGHTNESS, which is 20% of what the LED can actually do - it is
   startlingly bright otherwise. Note the mode is not visible while stopped,
-  since the LED is dark then. This demo only plays
-  mono 16-bit PCM; picking anything else from the pile of real-world
-  samples (stereo, 8/24-bit, float, WAVE_FORMAT_EXTENSIBLE - all present
-  on a real sample library) will cleanly error via BLE until WavReader
-  grows support for them - a deliberately separate, not-yet-done task.
+  since the LED is dark then.
+
+  File formats: any sample rate, in 8-, 16-, 24- or 32-bit PCM or 32- or
+  64-bit float, with plain or WAVE_FORMAT_EXTENSIBLE headers - see
+  WavReader.h, which converts each to the 16 bits everything else here
+  works in. Mono only, for now: stereo files, and compressed ones (ADPCM,
+  A-law...), are refused with a clear ERR: over BLE. tools/
+  make_format_test_wavs.py writes a set of test files covering all of it,
+  each playing the same three notes, so at 1x they should all sound alike.
 
   Nothing is loaded or played until a BLE PLAY: command asks for it -
   the board boots silent, with no SD reads happening in loop() at all.
@@ -302,9 +306,11 @@
        appear again), and delete the card's cache/ folder from a computer
        to confirm it's rebuilt.
     6. Open web/wav-remote.html, connect, confirm LIST populates real
-       filenames from the card, PLAY: on a mono-16-bit file switches
-       cleanly, and PLAY: on anything else returns a clean ERR: instead
-       of hanging.
+       filenames from the card, PLAY: on a supported file switches
+       cleanly, and PLAY: on anything else (a stereo file, say) returns a
+       clean ERR: instead of hanging. Play each of the
+       make_format_test_wavs.py files at 1x and confirm they all sound
+       the same - the same notes, at the same tempo.
     7. With the transport stopped (pad released), twist the
        second pot back and forth - confirm it sounds like manually
        scrubbing tape (pitch/direction tracking the twist directly,
@@ -1217,6 +1223,15 @@ bool loadFile(const String &filename, String &errorOut) {
 
   currentFilename = filename;
   fileLoaded = true;
+  Serial.print("Loaded ");
+  Serial.print(filename);
+  Serial.print(": ");
+  Serial.print(nativeRate);
+  Serial.print(" Hz, ");
+  Serial.print(v.reader.formatName());
+  Serial.print(", ");
+  Serial.print(v.reader.totalSamples());
+  Serial.println(" samples");
   // Check this file's cached copies, and build whatever's missing - in the
   // background, a step per loop() pass. Until they're ready, high speeds are
   // capped (see the control block in loop()).
@@ -2321,8 +2336,8 @@ void setup() {
   // Cue the first file the demo can actually play, so the board is usable
   // standing on its own - hold the transport pad and it makes a sound, with
   // no phone, no browser and no BLE connection needed. Skipping files that
-  // fail to load matters on a real card: a sample library is full of stereo,
-  // 24-bit, float and WAVE_FORMAT_EXTENSIBLE files this demo cannot open, and
+  // fail to load matters on a real card: a sample library is full of stereo
+  // and compressed files this demo cannot open, and
   // stopping at the first *name* rather than the first playable file would
   // leave it silent for no visible reason.
   //
@@ -2651,7 +2666,10 @@ void loop() {
     const float MAX_STEP_UNCACHED = 2.0f;
     uint8_t ready = readyLevels();
     if (ready < cache.levelCount()) {
-      float cap = ldexpf(MAX_STEP_UNCACHED, ready);
+      // ...but never below native speed: a 192kHz file needs 4 samples per
+      // tick just to play at 1x, and capping that at 2 would play it at
+      // half speed until its copies were built.
+      float cap = fmaxf(ldexpf(MAX_STEP_UNCACHED, ready), rateFactor);
       if (fabsf(step) > cap) step = copysignf(cap, step);
     }
     currentStep = step;

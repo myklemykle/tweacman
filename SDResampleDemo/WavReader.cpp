@@ -12,6 +12,7 @@ WavReader &WavReader::operator=(WavReader &&other) noexcept {
   dataBytes_ = other.dataBytes_;
   encoding_ = other.encoding_;
   bytesPerSample_ = other.bytesPerSample_;
+  channels_ = other.channels_;
   memcpy(lastError_, other.lastError_, sizeof(lastError_));
   other.file_ = nullptr;
   return *this;
@@ -105,10 +106,12 @@ bool WavReader::open(const char *path) {
   if (available >= 0 && (long)dataBytes_ > available) dataBytes_ = (uint32_t)available;
 
   char msg[64];
-  if (numChannels != 1) {
-    snprintf(msg, sizeof(msg), "%u-channel files aren't supported yet - mono only", numChannels);
+  if (numChannels != 1 && numChannels != 2) {
+    snprintf(msg, sizeof(msg), "%u-channel files aren't supported - mono and stereo only",
+             numChannels);
     return fail(msg);
   }
+  channels_ = (uint8_t)numChannels;
   if (audioFormat == 1 && bitsPerSample == 8) encoding_ = PCM8;
   else if (audioFormat == 1 && bitsPerSample == 16) encoding_ = PCM16;
   else if (audioFormat == 1 && bitsPerSample == 24) encoding_ = PCM24;
@@ -125,7 +128,7 @@ bool WavReader::open(const char *path) {
     return fail(msg);
   }
   bytesPerSample_ = bitsPerSample / 8;
-  if (dataBytes_ < bytesPerSample_) return fail("no sample data");
+  if (dataBytes_ < (uint32_t)bytesPerSample_ * channels_) return fail("no sample data");
   return true;
 }
 
@@ -141,7 +144,7 @@ const char *WavReader::formatName() const {
   return "?";
 }
 
-bool WavReader::openRaw(const char *path, uint32_t sampleRate) {
+bool WavReader::openRaw(const char *path, uint32_t sampleRate, uint8_t channels) {
   close();
   file_ = fopen(path, "rb");
   if (!file_) {
@@ -156,27 +159,28 @@ bool WavReader::openRaw(const char *path, uint32_t sampleRate) {
   sampleRate_ = sampleRate;
   encoding_ = PCM16;
   bytesPerSample_ = 2;
-  if (dataBytes_ < 2) return fail("cache file is empty");
+  channels_ = channels;
+  if (dataBytes_ < 2u * channels) return fail("cache file is empty");
   return true;
 }
 
-size_t WavReader::readSamplesAt(uint32_t sampleOffset, int16_t *dst, size_t maxSamples) {
-  uint32_t total = totalSamples();
-  uint32_t pos = sampleOffset;
-  size_t samplesRead = 0;
+size_t WavReader::readFramesAt(uint32_t frameOffset, int16_t *dst, size_t maxFrames) {
+  uint32_t total = totalFrames();
+  uint32_t pos = frameOffset;
+  size_t framesRead = 0;
 
-  while (samplesRead < maxSamples) {
+  while (framesRead < maxFrames) {
     // Hit the end of the data chunk - loop back to the start for seamless
     // continuous playback; callers never see this boundary.
     if (pos >= total) pos = 0;
-    size_t n = maxSamples - samplesRead;
+    size_t n = maxFrames - framesRead;
     if (n > total - pos) n = total - pos;
-    size_t got = readRun(pos, dst + samplesRead, n);
+    size_t got = readRun(pos, dst + framesRead * channels_, n);
     if (got == 0) break;  // shouldn't happen, but avoid spinning forever
-    samplesRead += got;
+    framesRead += got;
     pos += got;
   }
-  return samplesRead;
+  return framesRead;
 }
 
 // Where non-16-bit samples land before conversion. Shared by every reader:
@@ -190,12 +194,17 @@ static inline int16_t floatToSample(float f) {
   return (int16_t)(f + (f >= 0.0f ? 0.5f : -0.5f));
 }
 
-size_t WavReader::readRun(uint32_t sampleOffset, int16_t *dst, size_t n) {
-  fseek(file_, dataStart_ + (long)sampleOffset * bytesPerSample_, SEEK_SET);
-  if (encoding_ == PCM16) return fread(dst, 2, n, file_);
+size_t WavReader::readRun(uint32_t frameOffset, int16_t *dst, size_t frames) {
+  size_t bytesPerFrame = (size_t)bytesPerSample_ * channels_;
+  fseek(file_, dataStart_ + (long)frameOffset * bytesPerFrame, SEEK_SET);
+  if (encoding_ == PCM16) return fread(dst, bytesPerFrame, frames, file_);
 
+  // Everything else is converted sample by sample - for stereo, left and
+  // right samples alternate exactly as they do in the file, so a frame
+  // count just becomes twice as many samples.
+  size_t n = frames * channels_;
   size_t done = 0;
-  size_t perPiece = sizeof(convertBuf) / bytesPerSample_;
+  size_t perPiece = sizeof(convertBuf) / bytesPerFrame * channels_;
   while (done < n) {
     size_t piece = n - done < perPiece ? n - done : perPiece;
     size_t got = fread(convertBuf, bytesPerSample_, piece, file_);
@@ -233,5 +242,5 @@ size_t WavReader::readRun(uint32_t sampleOffset, int16_t *dst, size_t n) {
     done += got;
     if (got < piece) break;
   }
-  return done;
+  return done / channels_;
 }

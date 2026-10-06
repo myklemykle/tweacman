@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-make_format_test_wavs.py - writes a set of mono WAV files in assorted sample
-rates, bit depths and header styles, for testing SDResampleDemo's WAV
-decoding.
+make_format_test_wavs.py - writes a set of WAV files in assorted sample
+rates, bit depths, channel counts and header styles, for testing
+SDResampleDemo's WAV decoding.
 
 Every file holds the same short loop - three notes, A4, C#5 and E5, a tenth
 of a second each - so played at 1x they should all sound identical: same
@@ -19,6 +19,11 @@ t_<rate>_<format>.wav, where the format is:
 
 t_44100_08.wav also has an odd-length chunk before its sample data, to
 check the reader honours RIFF's pad byte.
+
+Stereo files are named t2_..., and play the same notes an octave lower in
+the right channel - so left and right are easy to tell apart by ear, and a
+swapped or mixed-up channel is obvious. t3_44100_16.wav has three channels
+(the third silent), which the demo doesn't support.
 
 Usage:
     python3 make_format_test_wavs.py [output_dir]     (default: test_wavs/)
@@ -41,16 +46,24 @@ FLOAT = 3
 EXTENSIBLE = 0xFFFE
 
 
-def melody(rate):
-    """The loop, as floats in [-1, 1)."""
+def melody(rate, octave=0):
+    """The loop, as floats in [-1, 1) - octave=-1 for an octave lower."""
     out = []
     per_note = int(rate * NOTE_S)
     fade = max(1, int(rate * FADE_S))
     for hz in NOTES_HZ:
+        hz *= 2.0 ** octave
         for i in range(per_note):
             env = min(1.0, i / fade, (per_note - 1 - i) / fade)
             out.append(AMPLITUDE * env * math.sin(2 * math.pi * hz * i / rate))
     return out
+
+
+def channels_of(rate, channels):
+    """Interleaved samples: left the melody, right an octave down, any more silent."""
+    parts = [melody(rate), melody(rate, -1)] + [[0.0] * int(rate * NOTE_S) * len(NOTES_HZ)] * 2
+    parts = parts[:channels]
+    return [ch[i] for i in range(len(parts[0])) for ch in parts]
 
 
 def encode(samples, bits, is_float):
@@ -65,22 +78,24 @@ def encode(samples, bits, is_float):
         int(round(s * full)).to_bytes(nbytes, "little", signed=True) for s in samples)
 
 
-def fmt_chunk(rate, bits, is_float, extensible, valid_bits=None):
-    block = bits // 8
+def fmt_chunk(rate, bits, is_float, extensible, valid_bits=None, channels=1):
+    block = bits // 8 * channels
     if not extensible:
-        body = struct.pack("<HHIIHH", FLOAT if is_float else PCM, 1, rate, rate * block, block, bits)
+        body = struct.pack("<HHIIHH", FLOAT if is_float else PCM, channels, rate, rate * block, block, bits)
         return b"fmt " + struct.pack("<I", len(body)) + body
     # WAVE_FORMAT_EXTENSIBLE: the real format is the first two bytes of a
     # GUID at the end; the rest of the GUID is fixed.
     sub = FLOAT if is_float else PCM
     guid = struct.pack("<H", sub) + bytes.fromhex("000000001000800000aa00389b71")
-    body = struct.pack("<HHIIHH", EXTENSIBLE, 1, rate, rate * block, block, bits)
-    body += struct.pack("<HHI", 22, valid_bits or bits, 0x4) + guid  # 0x4 = front centre
+    body = struct.pack("<HHIIHH", EXTENSIBLE, channels, rate, rate * block, block, bits)
+    mask = {1: 0x4, 2: 0x3}.get(channels, 0x7)  # centre; left+right; left+right+centre
+    body += struct.pack("<HHI", 22, valid_bits or bits, mask) + guid
     return b"fmt " + struct.pack("<I", len(body)) + body
 
 
-def write_wav(path, rate, bits, is_float=False, extensible=False, valid_bits=None, odd_chunk=False):
-    samples = melody(rate)
+def write_wav(path, rate, bits, is_float=False, extensible=False, valid_bits=None, odd_chunk=False,
+              channels=1):
+    samples = channels_of(rate, channels)
     if valid_bits and valid_bits < bits:
         # Valid bits sit at the top of the container; the low ones are zero.
         step = 1 << (bits - valid_bits)
@@ -91,7 +106,7 @@ def write_wav(path, rate, bits, is_float=False, extensible=False, valid_bits=Non
     else:
         data = encode(samples, bits, is_float)
 
-    chunks = fmt_chunk(rate, bits, is_float, extensible, valid_bits)
+    chunks = fmt_chunk(rate, bits, is_float, extensible, valid_bits, channels)
     if odd_chunk:
         note = b"odd"  # 3 bytes, so a pad byte must follow
         chunks += b"note" + struct.pack("<I", len(note)) + note + b"\0"
@@ -120,6 +135,14 @@ def main():
         ("t_44100_x20.wav", dict(rate=44100, bits=24, extensible=True, valid_bits=20)),
         ("t_44100_x32f.wav", dict(rate=44100, bits=32, is_float=True, extensible=True)),
         ("t_96000_24.wav", dict(rate=96000, bits=24)),
+        ("t2_22050_16.wav", dict(rate=22050, bits=16, channels=2)),
+        ("t2_44100_16.wav", dict(rate=44100, bits=16, channels=2)),
+        ("t2_44100_08.wav", dict(rate=44100, bits=8, channels=2)),
+        ("t2_44100_24.wav", dict(rate=44100, bits=24, channels=2)),
+        ("t2_44100_32f.wav", dict(rate=44100, bits=32, is_float=True, channels=2)),
+        ("t2_44100_x24.wav", dict(rate=44100, bits=24, extensible=True, channels=2)),
+        ("t2_96000_24.wav", dict(rate=96000, bits=24, channels=2)),
+        ("t3_44100_16.wav", dict(rate=44100, bits=16, channels=3)),
     ]
     total = 0
     for name, kw in files:

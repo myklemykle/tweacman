@@ -15,10 +15,12 @@
 #include "Resampler.h"
 #include "WavReader.h"
 
-const uint32_t RING_CAPACITY = 16384;  // per voice: ~370ms at 1x on a 44.1kHz source. A
-                                        // voice never reads its copy much faster than 2x
-                                        // (see LEVEL_UP_STEP in the sketch). Part of this is
-                                        // kept as trailing-edge headroom (REVERSAL_MARGIN).
+const uint32_t RING_CAPACITY = 32768;  // per voice, in samples: 16384 stereo frames or
+                                        // 32768 mono ones - ~370ms of stereo at 1x on a
+                                        // 44.1kHz source. A voice never reads its copy much
+                                        // faster than 2x (see LEVEL_UP_STEP in the sketch).
+                                        // Part of this is kept as trailing-edge headroom
+                                        // (REVERSAL_MARGIN).
 
 struct Voice {
   WavReader reader;                     // the WAV itself, or one of its cached copies

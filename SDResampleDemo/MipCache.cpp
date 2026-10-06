@@ -9,7 +9,7 @@
 // older version of this code are recognised as stale and rebuilt. (2: caches
 // built while reads into misaligned buffers came back garbled - see
 // RA6M5FastSD.cpp - can have corrupt stretches near their loop points.)
-static const char *CACHE_FORMAT = "MIPCACHE 2";
+static const char *CACHE_FORMAT = "MIPCACHE 3";  // 3: copies can be stereo
 
 // -- The half-band filter --------------------------------------------------
 // A half-band low-pass cuts at a quarter of the input rate - exactly the
@@ -40,25 +40,28 @@ static void initFilter() {
   filterReady = true;
 }
 
-// One building step filters OUT_BLOCK output samples - few enough that each
+// One building step filters OUT_BLOCK output frames - few enough that each
 // step is quick. The card, though, is happiest with fewer, larger transfers
-// (see RA6M5FastSD.h), so input is read READ_OUTPUTS outputs' worth at a
-// time - the 2 * READ_OUTPUTS input samples they're centred on, plus
+// (see RA6M5FastSD.h), so input is read READ_OUTPUTS mono outputs' worth at
+// a time - the 2 * READ_OUTPUTS input frames they're centred on, plus
 // FILTER_HALF either side - and output collects in writeBuf until there are
-// WRITE_BLOCK samples (8KB) to write in one go. WRITE_BLOCK stays a multiple
-// of 256 samples (one sector), so every write but a copy's last is
-// sector-aligned in the file, which multi-block writing needs.
+// WRITE_BLOCK samples (8KB) to write in one go. Stereo frames are twice the
+// size, so a stereo copy is read and written half as many frames at a time,
+// in the same buffers. WRITE_BLOCK stays a multiple of 256 samples (one
+// sector), so every write but a copy's last is sector-aligned in the file,
+// which multi-block writing needs.
 //
 // Writes are still the slow part, and the stalls a build causes in loop()
 // come from them: this card takes ~25ms to write 8KB (about 0.35MB/s,
 // measured - multi-block commands only help by about 1.5x here).
 static const uint32_t OUT_BLOCK = 256;
 static const uint32_t READ_OUTPUTS = 2048;
-static const uint32_t IN_CAPACITY = 2 * READ_OUTPUTS + 2 * FILTER_HALF;
+static const uint32_t IN_CAPACITY = 2 * READ_OUTPUTS + 4 * FILTER_HALF;  // samples - room
+                                                                         // for stereo's margins
 static const uint32_t WRITE_BLOCK = 4096;
 // Both 4-byte aligned for the SD host's DMA. inRaw has a spare sample so a
 // read can start one sample in, to match the file position - see
-// WavReader::alignmentOf().
+// WavReader::alignmentOf(). Both hold interleaved frames.
 alignas(4) static int16_t inRaw[IN_CAPACITY + 1];
 alignas(4) static int16_t writeBuf[WRITE_BLOCK];
 static int16_t *inData = inRaw;  // where the current input window starts in inRaw
@@ -83,23 +86,26 @@ static uint32_t fnv1a(uint32_t h, const void *data, size_t len) {
   return h;
 }
 
-// Length, rate, and the first and last 4KB of sample data.
+// Length, rate, channels, and the first and last 4KB of sample data.
 static uint32_t fingerprint(WavReader &wav) {
   uint32_t h = 2166136261u;
-  uint32_t total = wav.totalSamples();
+  uint32_t total = wav.totalFrames();
   uint32_t rate = wav.nativeSampleRate();
+  uint8_t channels = wav.channels();
   h = fnv1a(h, &total, sizeof(total));
   h = fnv1a(h, &rate, sizeof(rate));
-  const uint32_t span = 2048;  // samples, i.e. 4KB
+  h = fnv1a(h, &channels, sizeof(channels));
+  uint32_t span = 2048 / channels;  // frames, i.e. 4KB
   uint32_t n = total < span ? total : span;
+  uint32_t perPiece = IN_CAPACITY / channels;
   // Hashed a buffer's worth at a time, borrowing the builder's input
   // buffer, which is sized for building, not for this.
   for (uint32_t start : {(uint32_t)0, total - n}) {
     for (uint32_t done = 0; done < n;) {
-      uint32_t piece = n - done < IN_CAPACITY ? n - done : IN_CAPACITY;
-      size_t got = wav.readSamplesAt(start + done, inRaw, piece);
+      uint32_t piece = n - done < perPiece ? n - done : perPiece;
+      size_t got = wav.readFramesAt(start + done, inRaw, piece);
       if (got == 0) break;
-      h = fnv1a(h, inRaw, got * 2);
+      h = fnv1a(h, inRaw, got * 2 * channels);
       done += got;
     }
   }
@@ -177,6 +183,7 @@ void MipCache::start(const String &wavName) {
   initFilter();
   name_ = wavName;
   ready_ = 0;
+  wipeLevel_ = 0;
   count_ = 0;
   workTotal_ = 0;
   workDone_ = 0;
@@ -184,7 +191,8 @@ void MipCache::start(const String &wavName) {
   WavReader wav;
   if (!wav.open(("/sd/" + wavName).c_str())) return;
   sampleRate_ = wav.nativeSampleRate();
-  levelLen_[0] = wav.totalSamples();
+  channels_ = wav.channels();
+  levelLen_[0] = wav.totalFrames();
   while (count_ < MAX_LEVELS && levelLen_[count_] / 2 >= MIN_LEVEL_SAMPLES) {
     levelLen_[count_ + 1] = levelLen_[count_] / 2;
     count_++;
@@ -192,8 +200,8 @@ void MipCache::start(const String &wavName) {
   if (count_ == 0) return;  // too short to be worth caching
 
   char expected[64];
-  snprintf(expected, sizeof(expected), "%s %lu %lu %08lx", CACHE_FORMAT,
-           (unsigned long)levelLen_[0], (unsigned long)sampleRate_,
+  snprintf(expected, sizeof(expected), "%s %lu %lu %u %08lx", CACHE_FORMAT,
+           (unsigned long)levelLen_[0], (unsigned long)sampleRate_, channels_,
            (unsigned long)fingerprint(wav));
   wav.close();
 
@@ -209,23 +217,22 @@ void MipCache::start(const String &wavName) {
     found[strcspn(found, "\r\n")] = '\0';
   }
   if (strcmp(found, expected) != 0) {
-    // Missing, stale, or from an older format: start over.
+    // Missing, stale, or from an older format: start over. The old copies
+    // are deleted a couple per step() rather than all at once here - a
+    // card can take a few hundred milliseconds to delete twenty files,
+    // and the file that's just been loaded is already playing. info.txt is
+    // only rewritten once they're gone, so a reset mid-wipe just finds the
+    // cache still stale next time, and wipes again.
     if (found[0]) {
       Serial.print("Cache: ");
       Serial.print(wavName);
       Serial.println(" has changed since its copies were made - rebuilding.");
     }
-    emptyDir(wavName);
-    info = fopen(infoPath.c_str(), "w");
-    if (!info) {
-      Serial.println("Cache: couldn't write to the card - playing without copies.");
-      return;
-    }
-    fprintf(info, "%s\n", expected);
-    fclose(info);
+    wipeLevel_ = MAX_LEVELS;
+    strncpy(info_, expected, sizeof(info_) - 1);
+  } else {
+    while (ready_ < count_ && exists(levelPath(wavName, ready_ + 1))) ready_++;
   }
-
-  while (ready_ < count_ && exists(levelPath(wavName, ready_ + 1))) ready_++;
 
   workTotal_ = 0;
   workDone_ = 0;
@@ -261,7 +268,8 @@ int MipCache::percentDone() const {
 bool MipCache::openNextLevel() {
   uint8_t k = ready_ + 1;
   bool ok = (k == 1) ? src_.open(("/sd/" + name_).c_str())
-                     : src_.openRaw(levelPath(name_, k - 1).c_str(), sampleRate_ >> (k - 1));
+                     : src_.openRaw(levelPath(name_, k - 1).c_str(), sampleRate_ >> (k - 1),
+                                    channels_);
   if (!ok) return false;
   out_ = fopen(levelPath(name_, k, true).c_str(), "wb");
   if (!out_) {
@@ -305,6 +313,25 @@ void MipCache::finishLevel() {
 
 bool MipCache::step() {
   if (!active_) return false;
+
+  // Clearing out a stale cache first, one level's files per step - see
+  // start(). Then the new description, and building can begin.
+  if (wipeLevel_ > 0) {
+    remove(levelPath(name_, wipeLevel_).c_str());
+    remove(levelPath(name_, wipeLevel_, true).c_str());
+    if (--wipeLevel_ == 0) {
+      FILE *info = fopen((dirFor(name_) + "/info.txt").c_str(), "w");
+      if (!info) {
+        Serial.println("Cache: couldn't write to the card - playing without copies.");
+        stop();
+        return false;
+      }
+      fprintf(info, "%s\n", info_);
+      fclose(info);
+    }
+    return true;
+  }
+
   // Opening and finishing a copy each get a step to themselves - file
   // creation and renaming are some of the slowest things FatFs does, and
   // stacking them on top of a block of filtering would double the stall.
@@ -323,43 +350,49 @@ bool MipCache::step() {
     return true;
   }
   // Read the next stretch of input if this step's outputs aren't covered by
-  // the last one. Output sample m is centred on input sample 2m, so outputs
+  // the last one. Output frame m is centred on input frame 2m, so outputs
   // from outDone_ need input from 2 * outDone_ - FILTER_HALF onward.
-  // readSamplesAt() loops past the end of the file, which is what makes the
+  // readFramesAt() loops past the end of the file, which is what makes the
   // filter wrap around the loop point the same way playback does.
+  const uint8_t ch = channels_;
   if (outDone_ >= inFirst_ + inCovered_) {
     inFirst_ = outDone_;
     inCovered_ = outLen - outDone_;
-    if (inCovered_ > READ_OUTPUTS) inCovered_ = READ_OUTPUTS;
+    if (inCovered_ > READ_OUTPUTS / ch) inCovered_ = READ_OUTPUTS / ch;
     uint32_t offset = wrapOffset(2 * (int32_t)outDone_ - FILTER_HALF, srcLen);
     inData = inRaw + src_.alignmentOf(offset) / 2;
-    src_.readSamplesAt(offset, inData, 2 * inCovered_ + 2 * FILTER_HALF);
+    src_.readFramesAt(offset, inData, 2 * inCovered_ + 2 * FILTER_HALF);
   }
 
+  const uint32_t writeBlockFrames = WRITE_BLOCK / ch;
   uint32_t n = inFirst_ + inCovered_ - outDone_;
   if (n > OUT_BLOCK) n = OUT_BLOCK;
-  if (n > WRITE_BLOCK - pending_) n = WRITE_BLOCK - pending_;
+  if (n > writeBlockFrames - pending_) n = writeBlockFrames - pending_;
 
-  const int16_t *first = inData + 2 * (outDone_ - inFirst_) + FILTER_HALF;
+  // Each channel is filtered on its own: in interleaved data, a channel's
+  // neighbouring samples are `ch` apart rather than adjacent.
+  const int16_t *first = inData + (2 * (outDone_ - inFirst_) + FILTER_HALF) * ch;
   for (uint32_t i = 0; i < n; i++) {
-    const int16_t *c = first + 2 * i;  // the centre sample
-    float acc = 0.5f * c[0];
-    for (int t = 0; t < ODD_TAPS; t++) {
-      int d = 2 * t + 1;
-      acc += oddTap[t] * (float)(c[d] + c[-d]);
+    for (uint8_t c = 0; c < ch; c++) {
+      const int16_t *centre = first + 2 * i * ch + c;
+      float acc = 0.5f * centre[0];
+      for (int t = 0; t < ODD_TAPS; t++) {
+        int d = (2 * t + 1) * ch;
+        acc += oddTap[t] * (float)(centre[d] + centre[-d]);
+      }
+      // Round to nearest by hand - lroundf() was a large share of the time.
+      int32_t v = (int32_t)(acc + (acc >= 0.0f ? 0.5f : -0.5f));
+      if (v > 32767) v = 32767;
+      if (v < -32768) v = -32768;
+      writeBuf[(pending_ + i) * ch + c] = (int16_t)v;
     }
-    // Round to nearest by hand - lroundf() was a large share of the time.
-    int32_t v = (int32_t)(acc + (acc >= 0.0f ? 0.5f : -0.5f));
-    if (v > 32767) v = 32767;
-    if (v < -32768) v = -32768;
-    writeBuf[pending_ + i] = (int16_t)v;
   }
   pending_ += n;
   outDone_ += n;
   workDone_ += n;
 
-  if (pending_ == WRITE_BLOCK || outDone_ == outLen) {
-    if (fwrite(writeBuf, 2, pending_, out_) != pending_) {
+  if (pending_ == writeBlockFrames || outDone_ == outLen) {
+    if (fwrite(writeBuf, 2 * ch, pending_, out_) != pending_) {
       Serial.println("Cache: write failed - is the card full? Stopping.");
       stop();
       return false;

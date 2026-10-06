@@ -81,8 +81,8 @@
   low-passes as it reads (SincInterpolator.h), so every copy is band-
   limited the same way on both sides of a switch. That costs CPU in the
   audio interrupt - the Serial status line reports how much ("isr avg/max",
-  roughly 20-30% normally, up to about 45% with the pitch shifter on), along
-  with "dropped", a count of audio ticks that never ran because
+  roughly 20-30% for mono and 30-40% for stereo normally, up to about 45%
+  and 60% with the pitch shifter on), along with "dropped", a count of audio ticks that never ran because
   something held interrupts off for longer than a tick (it restarts at
   each file load and transport start, which pause the audio on purpose).
   It should stay at zero; if it climbs, something is blocking too long.
@@ -223,13 +223,16 @@
   startlingly bright otherwise. Note the mode is not visible while stopped,
   since the LED is dark then.
 
-  File formats: any sample rate, in 8-, 16-, 24- or 32-bit PCM or 32- or
-  64-bit float, with plain or WAVE_FORMAT_EXTENSIBLE headers - see
-  WavReader.h, which converts each to the 16 bits everything else here
-  works in. Mono only, for now: stereo files, and compressed ones (ADPCM,
-  A-law...), are refused with a clear ERR: over BLE. tools/
-  make_format_test_wavs.py writes a set of test files covering all of it,
-  each playing the same three notes, so at 1x they should all sound alike.
+  File formats: mono or stereo, at any sample rate, in 8-, 16-, 24- or
+  32-bit PCM or 32- or 64-bit float, with plain or WAVE_FORMAT_EXTENSIBLE
+  headers - see WavReader.h, which converts each to the 16 bits everything
+  else here works in. Stereo plays left out of A0 (the jack's tip) and right
+  out of A1 (its ring); mono plays the same signal out of both. Files with
+  more channels, and compressed ones (ADPCM, A-law...), are refused with a
+  clear ERR: over BLE. tools/make_format_test_wavs.py writes a set of test
+  files covering all of it, each playing the same three notes (an octave
+  lower on the right, for the stereo ones), so at 1x they should all sound
+  alike.
 
   Nothing is loaded or played until a BLE PLAY: command asks for it -
   the board boots silent, with no SD reads happening in loop() at all.
@@ -310,7 +313,8 @@
        cleanly, and PLAY: on anything else (a stereo file, say) returns a
        clean ERR: instead of hanging. Play each of the
        make_format_test_wavs.py files at 1x and confirm they all sound
-       the same - the same notes, at the same tempo.
+       the same - the same notes, at the same tempo - and that the stereo
+       ones (t2_...) are an octave lower in the right ear.
     7. With the transport stopped (pad released), twist the
        second pot back and forth - confirm it sounds like manually
        scrubbing tape (pitch/direction tracking the twist directly,
@@ -571,6 +575,7 @@ volatile bool fileLoaded = false;
 String currentFilename = "NONE";
 float rateFactor = 1.0f;  // wav's native sample rate / 48000 - recomputed on every file load
 uint32_t nativeRate = 0;  // the WAV's own sample rate, in Hz
+uint8_t fileChannels = 1; // 1 for mono, 2 for stereo
 
 // -- Playback voices ----------------------------------------------------------
 // A voice plays one copy of the current file - the WAV itself, or one of the
@@ -599,8 +604,14 @@ uint32_t nativeRate = 0;  // the WAV's own sample rate, in Hz
 
 // The Voice struct itself lives in Voice.h - only so Arduino's automatic
 // function prototypes, which land near the top of this file, can name it.
-const size_t CHUNK_SAMPLES = 1024;     // samples per SD read when refilling a voice
-const int32_t REVERSAL_MARGIN = 4096;  // ~93ms at 44.1kHz; must stay < RING_CAPACITY
+const size_t CHUNK_FRAMES = 1024;      // frames per SD read when refilling a voice
+
+// Where each chunk lands on its way from the card into a ring buffer -
+// room for a stereo chunk. Static rather than on the stack, which a 4KB
+// buffer would strain; only loop() ever reads the card, one chunk at a time.
+alignas(4) int16_t chunkBuffer[CHUNK_FRAMES * 2];
+const int32_t REVERSAL_MARGIN = 4096;  // frames, ~93ms at 44.1kHz; must stay well under
+                                       // a ring's frameCapacity()
 
 Voice voices[2];
 
@@ -614,7 +625,15 @@ volatile uint8_t activeVoice = 0;
 // ring buffer itself is a different, larger problem that does need
 // real atomics).
 volatile float currentStep = 1.0f;
-volatile int16_t lastGoodSample = 0;
+volatile int16_t lastGoodLeft = 0;   // the last frame played, held through an underrun
+volatile int16_t lastGoodRight = 0;
+
+// Rounds toward zero and clips to the 16-bit range.
+AUDIO_HOT inline int16_t clampToSample(float x) {
+  if (x > 32767.0f) return 32767;
+  if (x < -32768.0f) return -32768;
+  return (int16_t)x;
+}
 volatile uint32_t underrunTicks = 0;
 
 // -- Pitch shifting -------------------------------------------------------
@@ -739,12 +758,13 @@ AUDIO_HOT inline float bandwidthFor(float samplesPerTick) {
   return 1.0f / s;
 }
 
-// Reads one interpolated sample from a voice, at whole sample idx plus
-// fraction frac of its copy, plus an offset in samples (which may be
-// fractional or negative). Kept as a whole/fraction pair rather than one
-// float position, since a float can't hold a large sample index exactly.
+// Reads one interpolated frame from a voice - out[0] left, out[1] right,
+// the same for mono - at whole frame idx plus fraction frac of its copy,
+// plus an offset in frames (which may be fractional or negative). Kept as a
+// whole/fraction pair rather than one float position, since a float can't
+// hold a large frame index exactly.
 AUDIO_HOT inline bool readAt(Voice &v, int32_t idx, float frac, float offset, float bandwidth,
-                             float &out) {
+                             float out[2]) {
   float rel = frac + offset;
   float whole = __builtin_floorf(rel);
   return readSinc(v.ring, idx + (int32_t)whole, rel - whole, bandwidth, out);
@@ -757,19 +777,21 @@ AUDIO_HOT inline bool readAt(Voice &v, int32_t idx, float frac, float offset, fl
 // counted in the original file's samples, so it's scaled into this voice's
 // copy - which keeps the grains in step when playback moves to another copy.
 AUDIO_HOT inline bool readGrains(Voice &v, int32_t idx, float frac, float step, float bandwidth,
-                       float &out) {
+                                 float out[2]) {
   float dir = (step < 0.0f) ? -1.0f : 1.0f;
 
   float offsetA = grainOffset;
   float offsetB = offsetA + GRAIN_LENGTH_SAMPLES * 0.5f;
   if (offsetB >= GRAIN_LENGTH_SAMPLES) offsetB -= GRAIN_LENGTH_SAMPLES;
 
-  float a, b;
+  float a[2], b[2];
   if (!readAt(v, idx, frac, -dir * offsetA * v.levelScale, bandwidth, a)) return false;
   if (!readAt(v, idx, frac, -dir * offsetB * v.levelScale, bandwidth, b)) return false;
 
-  out = a * hannAt(offsetA / GRAIN_LENGTH_SAMPLES) +
-        b * hannAt(offsetB / GRAIN_LENGTH_SAMPLES);
+  float gainA = hannAt(offsetA / GRAIN_LENGTH_SAMPLES);
+  float gainB = hannAt(offsetB / GRAIN_LENGTH_SAMPLES);
+  out[0] = a[0] * gainA + b[0] * gainB;
+  out[1] = a[1] * gainA + b[1] * gainB;
   return true;
 }
 
@@ -782,7 +804,7 @@ AUDIO_HOT inline bool readGrains(Voice &v, int32_t idx, float frac, float step, 
 // one - and the audio interrupt's budget is being kept free for other
 // processing. The shifter is a lo-fi effect with its own warble anyway.
 AUDIO_HOT inline bool renderVoice(Voice &v, float step, float pitch, bool shifting,
-                                  float &out) {
+                                  float out[2]) {
   int32_t idx = v.resampler.index;
   float frac = v.resampler.frac;
   float rate = step * v.levelScale;  // samples of this copy per tick
@@ -849,7 +871,7 @@ AUDIO_HOT void audioCallback(timer_callback_args_t *args) {
   uint32_t tickStart = DWT->CYCCNT;
   audioTicks++;
 
-  int16_t outSample;
+  int16_t outLeft, outRight;
 
   if (!fileLoaded) {
     // Nothing loaded: idle, not starved. An underrun means the producer
@@ -858,7 +880,8 @@ AUDIO_HOT void audioCallback(timer_callback_args_t *args) {
     // bury the real measurement under 48000 phantom underruns per second
     // for as long as the board sat at the menu. Hold the output steady and
     // leave the resampler alone.
-    outSample = lastGoodSample;
+    outLeft = lastGoodLeft;
+    outRight = lastGoodRight;
   } else {
     float step = currentStep;
     float p = pitchRatio;
@@ -866,14 +889,14 @@ AUDIO_HOT void audioCallback(timer_callback_args_t *args) {
 
     Voice &active = voices[activeVoice];
 
-    float sample;
-    bool ok = renderVoice(active, step, p, shifting, sample);
+    float frame[2];
+    bool ok = renderVoice(active, step, p, shifting, frame);
 
     if (ok) {
-      if (sample > 32767.0f) sample = 32767.0f;
-      if (sample < -32768.0f) sample = -32768.0f;
-      outSample = (int16_t)sample;
-      lastGoodSample = outSample;
+      outLeft = clampToSample(frame[0]);
+      outRight = clampToSample(frame[1]);
+      lastGoodLeft = outLeft;
+      lastGoodRight = outRight;
 
       // Ramp the grain offset by (1 - pitchRatio) * |step| and wrap it into
       // one grain - the wrap is the splice the crossfade exists to hide.
@@ -901,7 +924,8 @@ AUDIO_HOT void audioCallback(timer_callback_args_t *args) {
       }
       active.resampler.advance(activeRate);
     } else {
-      outSample = lastGoodSample;  // hold the last good sample - see header comment
+      outLeft = lastGoodLeft;  // hold the last good frame - see header comment
+      outRight = lastGoodRight;
       underrunTicks++;
     }
   }
@@ -909,10 +933,11 @@ AUDIO_HOT void audioCallback(timer_callback_args_t *args) {
   // 16-bit signed -> 12-bit unsigned, same shift-based rescale used
   // throughout this pipeline for cheapness; a few LSBs of resolution
   // given up is inaudible against this DAC's own ~24-LSB absolute
-  // accuracy (RA6M5 datasheet, Table 53.48).
-  uint16_t dacValue = (uint16_t)(((int32_t)outSample + 32768) >> 4);
-  R_DAC->DADR[0] = dacValue;
-  R_DAC->DADR[1] = dacValue;
+  // accuracy (RA6M5 datasheet, Table 53.48). Left to DAC0 (A0, the jack's
+  // tip), right to DAC1 (A1, its ring) - a mono file's frames carry the
+  // same value in both.
+  R_DAC->DADR[0] = (uint16_t)(((int32_t)outLeft + 32768) >> 4);
+  R_DAC->DADR[1] = (uint16_t)(((int32_t)outRight + 32768) >> 4);
 
   uint32_t used = DWT->CYCCNT - tickStart;
   if (used > isrCyclesMax) isrCyclesMax = used;
@@ -940,24 +965,25 @@ bool openVoice(Voice &v, const String &name, uint8_t level) {
   WavReader reader;
   bool ok = (level == 0)
                 ? reader.open(("/sd/" + name).c_str())
-                : reader.openRaw(MipCache::levelPath(name, level).c_str(), nativeRate >> level);
+                : reader.openRaw(MipCache::levelPath(name, level).c_str(), nativeRate >> level,
+                                 fileChannels);
   if (!ok) return false;
   v.reader = std::move(reader);  // closes whatever the voice had open before
+  v.ring.setChannels(v.reader.channels());
   v.level = level;
   v.levelScale = ldexpf(1.0f, -(int)level);
   return true;
 }
 
 // Empties a voice's ring buffer to start at virtual position `from`, then
-// fills it forward until it holds `samples` (or is full).
-void primeVoice(Voice &v, int32_t from, uint32_t samples) {
-  int16_t chunk[CHUNK_SAMPLES];
+// fills it forward until it holds `frames` (or is full).
+void primeVoice(Voice &v, int32_t from, uint32_t frames) {
   v.ring.reset(from);
-  while (v.ring.usedSpace() < samples && v.ring.freeSpace() >= CHUNK_SAMPLES) {
-    uint32_t offset = fileOffsetFor(v.ring.validHigh(), v.reader.totalSamples());
-    size_t got = v.reader.readSamplesAt(offset, chunk, CHUNK_SAMPLES);
+  while (v.ring.usedSpace() < frames && v.ring.freeSpace() >= CHUNK_FRAMES) {
+    uint32_t offset = fileOffsetFor(v.ring.validHigh(), v.reader.totalFrames());
+    size_t got = v.reader.readFramesAt(offset, chunkBuffer, CHUNK_FRAMES);
     if (got == 0) break;
-    v.ring.pushHigh(chunk, got);
+    v.ring.pushHigh(chunkBuffer, got);
   }
 }
 
@@ -999,7 +1025,7 @@ uint8_t chooseLevel(float stepMagnitude, uint8_t current, uint8_t maxLevel) {
 // double precision - and since a float can't hold a large sample position
 // exactly anyway.
 void positionInCopy(Voice &from, Voice &to, int32_t &idx, float &frac) {
-  uint64_t whole = fileOffsetFor(from.resampler.index, from.reader.totalSamples());
+  uint64_t whole = fileOffsetFor(from.resampler.index, from.reader.totalFrames());
   float part = from.resampler.frac;
   int shift = (int)from.level - (int)to.level;
   if (shift >= 0) {
@@ -1016,7 +1042,7 @@ void positionInCopy(Voice &from, Voice &to, int32_t &idx, float &frac) {
     whole >>= down;
     part = ldexpf((float)remainder + part, -down);
   }
-  idx = (int32_t)(whole % to.reader.totalSamples());
+  idx = (int32_t)(whole % to.reader.totalFrames());
   frac = part;
 }
 
@@ -1065,7 +1091,7 @@ void startLevelChange(uint8_t target) {
   // If it crossed the end of the file meanwhile, the fresh position will
   // have wrapped round to the start - but the ring was primed in one
   // continuous stretch, so unwrap it back alongside where priming began.
-  int32_t len = (int32_t)incoming.reader.totalSamples();
+  int32_t len = (int32_t)incoming.reader.totalFrames();
   if (idx < primedAt - len / 2) idx += len;
   if (idx > primedAt + len / 2) idx -= len;
   incoming.resampler.index = idx;
@@ -1091,29 +1117,27 @@ void startLevelChange(uint8_t target) {
 void refillVoice(Voice &v, float step) {
   if (!v.reader.isOpen()) return;
   int32_t pos = v.resampler.index;
-  uint32_t total = v.reader.totalSamples();
+  uint32_t total = v.reader.totalFrames();
 
   if (step > 0.0f) {
     int32_t wantLow = pos - REVERSAL_MARGIN;
     if (wantLow > v.ring.validLow()) v.ring.releaseLow(wantLow);
-    if (v.ring.freeSpace() >= CHUNK_SAMPLES) {
-      int16_t chunk[CHUNK_SAMPLES];
-      size_t got = v.reader.readSamplesAt(fileOffsetFor(v.ring.validHigh(), total), chunk,
-                                          CHUNK_SAMPLES);
-      if (got > 0) v.ring.pushHigh(chunk, got);
+    if (v.ring.freeSpace() >= CHUNK_FRAMES) {
+      size_t got = v.reader.readFramesAt(fileOffsetFor(v.ring.validHigh(), total), chunkBuffer,
+                                         CHUNK_FRAMES);
+      if (got > 0) v.ring.pushHigh(chunkBuffer, got);
     }
   } else if (step < 0.0f) {
     int32_t wantHigh = pos + REVERSAL_MARGIN;
     if (wantHigh < v.ring.validHigh()) v.ring.releaseHigh(wantHigh);
-    if (v.ring.freeSpace() >= CHUNK_SAMPLES) {
-      int16_t chunk[CHUNK_SAMPLES];
+    if (v.ring.freeSpace() >= CHUNK_FRAMES) {
       // A "backward" chunk needs no in-memory reversal: it's an
       // ordinary forward read starting earlier in the file, which
       // lands in exactly the ascending order pushLow() expects.
-      int32_t startVirtual = v.ring.validLow() - (int32_t)CHUNK_SAMPLES;
-      size_t got = v.reader.readSamplesAt(fileOffsetFor(startVirtual, total), chunk,
-                                          CHUNK_SAMPLES);
-      if (got > 0) v.ring.pushLow(chunk, got);
+      int32_t startVirtual = v.ring.validLow() - (int32_t)CHUNK_FRAMES;
+      size_t got = v.reader.readFramesAt(fileOffsetFor(startVirtual, total), chunkBuffer,
+                                         CHUNK_FRAMES);
+      if (got > 0) v.ring.pushLow(chunkBuffer, got);
     }
   }
   // step == 0: paused - deliberately untouched. See Resampler.h's
@@ -1126,7 +1150,7 @@ void refillVoice(Voice &v, float step) {
 // playback.
 bool voiceToppedUp(float step) {
   if (step == 0.0f) return true;
-  return voices[activeVoice].ring.freeSpace() < CHUNK_SAMPLES;
+  return voices[activeVoice].ring.freeSpace() < CHUNK_FRAMES;
 }
 
 // Validates and switches to a new file. On failure, errorOut is set and
@@ -1160,7 +1184,7 @@ bool loadFile(const String &filename, String &errorOut) {
   v.levelScale = 1.0f;
   v.resampler.index = 0;
   v.resampler.frac = 0.0f;
-  lastGoodSample = 0;  // don't carry a stale sample into the new file
+  lastGoodLeft = lastGoodRight = 0;  // don't carry a stale frame into the new file
   grainOffset = 0.0f;
   // Per-file, not cumulative: the interesting number is how badly *this*
   // file underruns at the ratio being asked for, which is not comparable
@@ -1168,6 +1192,9 @@ bool loadFile(const String &filename, String &errorOut) {
   // bare here - the audio interrupt is disabled for this whole block.
   underrunTicks = 0;
   nativeRate = v.reader.nativeSampleRate();
+  fileChannels = v.reader.channels();
+  v.ring.setChannels(fileChannels);
+  voices[1].ring.setChannels(fileChannels);
   rateFactor = nativeRate / 48000.0f;
   // Every fresh sample starts at native speed, regardless of wherever
   // the (relative, not absolute - see resetVirtualKnobToNative()'s
@@ -1190,7 +1217,7 @@ bool loadFile(const String &filename, String &errorOut) {
   // Starts PRIME_BEHIND samples before the top of the file - i.e. from the
   // end of it, since the file plays as a loop - so the interpolator has
   // history to reach back into from the very first sample.
-  primeVoice(v, -PRIME_BEHIND, RING_CAPACITY);
+  primeVoice(v, -PRIME_BEHIND, v.ring.frameCapacity());
 
   audioTimer.enable_overflow_irq();
   restartDropCount();
@@ -1203,9 +1230,9 @@ bool loadFile(const String &filename, String &errorOut) {
   Serial.print(nativeRate);
   Serial.print(" Hz, ");
   Serial.print(v.reader.formatName());
-  Serial.print(", ");
-  Serial.print(v.reader.totalSamples());
-  Serial.println(" samples");
+  Serial.print(fileChannels == 2 ? " stereo, " : " mono, ");
+  Serial.print(v.reader.totalFrames());
+  Serial.println(" frames");
   // Check this file's cached copies, and build whatever's missing - in the
   // background, a step per loop() pass. Until they're ready, high speeds are
   // capped (see the control block in loop()).
@@ -1245,13 +1272,13 @@ void rewindToStart() {
   }
   v.resampler.index = 0;
   v.resampler.frac = 0.0f;
-  lastGoodSample = 0;   // don't carry a stale sample across the jump
+  lastGoodLeft = lastGoodRight = 0;  // don't carry a stale frame across the jump
   grainOffset = 0.0f;   // start the next grain cycle from the seam, not mid-crossfade
   // Same per-playback logic as loadFile(): the interesting figure is how
   // this pass underruns, not one accumulated across every previous pass.
   underrunTicks = 0;
 
-  primeVoice(v, -PRIME_BEHIND, RING_CAPACITY);  // see loadFile()
+  primeVoice(v, -PRIME_BEHIND, v.ring.frameCapacity());  // see loadFile()
 
   audioTimer.enable_overflow_irq();
   restartDropCount();
@@ -2350,7 +2377,7 @@ void setup() {
   // A hardware timer fires at a fixed 48000Hz; the speed knob changes
   // how far the resampler steps through the source each tick, not this
   // timer's own rate - see the header comment on why. It starts even
-  // with nothing loaded yet - audioCallback() just holds lastGoodSample
+  // with nothing loaded yet - audioCallback() just holds lastGoodLeft/Right
   // (0, i.e. silence) until a file is loaded.
   uint8_t timerType;
   int8_t timerIndex = FspTimer::get_available_timer(timerType);
@@ -2702,7 +2729,8 @@ void loop() {
   if (currentMillis - previousStatusMillis >= STATUS_INTERVAL) {
     previousStatusMillis = currentMillis;
     float ratio = currentStep / rateFactor;
-    float fillPercent = 100.0f * voices[activeVoice].ring.usedSpace() / RING_CAPACITY;
+    float fillPercent = 100.0f * voices[activeVoice].ring.usedSpace() /
+                        voices[activeVoice].ring.frameCapacity();
     uint8_t level = fileLoaded ? voices[activeVoice].level : 0;
     int cachePercent = (cache.name() == currentFilename) ? cache.percentDone() : 0;
     // Four decimals below 1x, since the knob now slows smoothly right down

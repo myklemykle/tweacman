@@ -86,12 +86,19 @@ inline void initSincTable() {
   }
 }
 
-// Reads one sample at position base + frac (frac in [0,1)) from anything
-// with contains(first, last) and at(pos) - an AudioRingBuffer - low-passed
-// at `bandwidth` (1 for the full band, 1/s when reading s samples per
-// output sample). Returns false if the samples it needs aren't all there.
+// Reads one frame at position base + frac (frac in [0,1)) from anything with
+// contains(first, last), frame(pos) and channels() - an AudioRingBuffer -
+// low-passed at `bandwidth` (1 for the full band, 1/s when reading s frames
+// per output sample). out[0] gets the left (or only) channel, out[1] the
+// right - the same value again for a mono source. Returns false if the
+// frames it needs aren't all there.
+//
+// The weights depend only on where the taps fall, not on what's in them,
+// so stereo works them out once and applies them to both channels: a
+// second channel costs a multiply-add per tap, not a whole second read.
 template <typename Ring>
-AUDIO_HOT inline bool readSinc(const Ring &ring, int32_t base, float frac, float bandwidth, float &out) {
+AUDIO_HOT inline bool readSinc(const Ring &ring, int32_t base, float frac, float bandwidth,
+                               float out[2]) {
   float reach = SINC_HALF_WIDTH / bandwidth;
   int32_t first = base - (int32_t)reach;
   int32_t last = base + (int32_t)reach + 1;
@@ -103,14 +110,29 @@ AUDIO_HOT inline bool readSinc(const Ring &ring, int32_t base, float frac, float
   // fractional position, whatever the table's own rounding.
   float tableStep = bandwidth * SINC_RES;
   float u = ((float)(first - base) - frac) * tableStep;
-  float acc = 0.0f, weightSum = 0.0f;
-  for (int32_t i = first; i <= last; i++, u += tableStep) {
-    float d = __builtin_fabsf(u);
-    int k = (int)d;
-    float w = sincTable[k] + (d - (float)k) * (sincTable[k + 1] - sincTable[k]);
-    acc += w * (float)ring.at(i);
-    weightSum += w;
+  float left = 0.0f, right = 0.0f, weightSum = 0.0f;
+  if (ring.channels() == 1) {
+    for (int32_t i = first; i <= last; i++, u += tableStep) {
+      float d = __builtin_fabsf(u);
+      int k = (int)d;
+      float w = sincTable[k] + (d - (float)k) * (sincTable[k + 1] - sincTable[k]);
+      left += w * (float)ring.frame(i)[0];
+      weightSum += w;
+    }
+    out[0] = out[1] = left / weightSum;
+  } else {
+    for (int32_t i = first; i <= last; i++, u += tableStep) {
+      float d = __builtin_fabsf(u);
+      int k = (int)d;
+      float w = sincTable[k] + (d - (float)k) * (sincTable[k + 1] - sincTable[k]);
+      const int16_t *f = ring.frame(i);
+      left += w * (float)f[0];
+      right += w * (float)f[1];
+      weightSum += w;
+    }
+    float norm = 1.0f / weightSum;
+    out[0] = left * norm;
+    out[1] = right * norm;
   }
-  out = acc / weightSum;
   return true;
 }

@@ -18,13 +18,13 @@
   much space as the original file.
 
   On the card: /sd/cache/<wav name>/ holds L01.raw ... L10.raw (raw 16-bit
-  mono samples, no header) and info.txt, a one-line description of the WAV
-  they were made from - its length, sample rate, and a hash of its first and
-  last 4KB. This core can't read file timestamps, so content is the only way
+  samples, no header - mono, or interleaved left/right for a stereo WAV) and
+  info.txt, a one-line description of the WAV they were made from - its
+  length, sample rate, channel count, and a hash of its first and last 4KB. This core can't read file timestamps, so content is the only way
   to notice a WAV has changed underneath its cache. info.txt is written
-  before the copies, and each copy is written under a .tmp name and renamed
-  when complete, so a reset mid-build loses at most the copy in progress -
-  the next build resumes from there.
+  before the copies (once any stale ones are gone), and each copy is written
+  under a .tmp name and renamed when complete, so a reset mid-build loses at
+  most the copy in progress - the next build resumes from there.
 
   Building: each copy is made from the one before it (L01 from the WAV, L02
   from L01, ...) in small blocks, one per step() call, so loop() can keep
@@ -37,6 +37,16 @@
   mid-playback without a jump.
   It also treats each file as a loop (the first block reaches back around to
   the end of the file), matching how the sketch plays it.
+
+  Known limitation: each copy is exactly half the length of the one before,
+  rounded down, so a copy of a file whose length doesn't divide evenly
+  loops very slightly early - a 21-sample file's half-rate copy has 10
+  samples, covering 20. That gives a tiny pitch error and a tiny glitch at
+  each loop, only noticeable (if at all) on short files at high speeds.
+  The cure, if it's ever needed: give each copy a whole number of samples
+  that spans the file exactly (11 for that 21-sample file, spaced 21/11
+  apart) and build it with a fractional resampler instead of the half-band
+  filter, playing it back at that exact ratio rather than a power of two.
 */
 
 #pragma once
@@ -94,15 +104,18 @@ class MipCache {
   uint8_t ready_ = 0;
   uint32_t levelLen_[MAX_LEVELS + 1] = {};  // [0] is the WAV itself
   uint32_t sampleRate_ = 0;
+  uint8_t channels_ = 1;
 
   WavReader src_;       // the copy being read from: the WAV, or the copy before
   FILE *out_ = nullptr; // the copy being written
-  uint32_t outDone_ = 0;  // samples of it filtered so far
+  uint32_t outDone_ = 0;  // frames of it filtered so far
   uint32_t pending_ = 0;  // ...of which this many are waiting in the write buffer
   uint32_t inFirst_ = 0;    // the first output the input buffer currently covers
   uint32_t inCovered_ = 0;  // ...and how many outputs it covers
 
-  uint32_t workTotal_ = 0;  // samples to write across all copies
+  uint8_t wipeLevel_ = 0;   // stale copies still to delete, from this level down
+  char info_[64] = "";      // the description to write once they're gone
+  uint32_t workTotal_ = 0;  // frames to write across all copies
   uint32_t workDone_ = 0;
   unsigned long startMillis_ = 0;
 };

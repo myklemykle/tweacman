@@ -1,6 +1,7 @@
 /*
   RingBuffer - a fixed-capacity, lock-free single-producer/single-consumer
-  circular buffer of 16-bit PCM samples that can slide in EITHER direction.
+  circular buffer of 16-bit PCM frames (mono or stereo) that can slide in
+  EITHER direction.
 
   Used to hand raw audio data from the SD-reading producer in loop() to
   the DAC-writing consumer in the audio-rate interrupt (see
@@ -65,6 +66,22 @@ class AudioRingBuffer {
  public:
   static_assert((CAPACITY & (CAPACITY - 1)) == 0, "CAPACITY must be a power of two");
 
+  // Positions, counts and capacities below are all in *frames* - one sample
+  // per channel, for a single instant - while CAPACITY is in samples, since
+  // that's what the storage is. A frame is one sample for a mono file, a
+  // left/right pair (stored interleaved) for stereo; setChannels() picks.
+
+  // Sets how many channels each frame holds (1 or 2), emptying the buffer.
+  // Same rule as reset(): only while the audio interrupt isn't reading it.
+  void setChannels(uint8_t channels) {
+    channels_ = channels;
+    frameMask_ = CAPACITY / channels - 1;
+    reset();
+  }
+
+  uint8_t channels() const { return channels_; }
+  uint32_t frameCapacity() const { return frameMask_ + 1; }
+
   // -- Producer side (call from loop()) --------------------------------
 
   uint32_t usedSpace() const {
@@ -72,50 +89,35 @@ class AudioRingBuffer {
                        validLow_.load(std::memory_order_acquire));
   }
 
-  uint32_t freeSpace() const { return CAPACITY - usedSpace(); }
+  uint32_t freeSpace() const { return frameCapacity() - usedSpace(); }
 
   int32_t validLow() const { return validLow_.load(std::memory_order_acquire); }
   int32_t validHigh() const { return validHigh_.load(std::memory_order_acquire); }
 
-  // Appends n samples (ascending virtual-position order) at the current
-  // high edge, extending it by n. Caller must have already checked
-  // freeSpace() >= n.
+  // Appends n frames (ascending virtual-position order, interleaved) at
+  // the current high edge, extending it by n. Caller must have already
+  // checked freeSpace() >= n.
   void pushHigh(const int16_t *src, uint32_t n) {
     int32_t start = validHigh_.load(std::memory_order_relaxed);
-    uint32_t writeIndex = (uint32_t)start & (CAPACITY - 1);
-    uint32_t firstRun = CAPACITY - writeIndex;
-    if (firstRun >= n) {
-      memcpy(&data_[writeIndex], src, n * sizeof(int16_t));
-    } else {
-      memcpy(&data_[writeIndex], src, firstRun * sizeof(int16_t));
-      memcpy(&data_[0], src + firstRun, (n - firstRun) * sizeof(int16_t));
-    }
+    copyIn(start, src, n);
     // Publish only after the data above is actually in memory - this
     // release pairs with the acquire load in contains().
     validHigh_.store(start + (int32_t)n, std::memory_order_release);
   }
 
-  // Prepends n samples at the current low edge, extending it downward by
+  // Prepends n frames at the current low edge, extending it downward by
   // n. src[] is still in ascending order: src[0] lands at the new lowest
   // position, src[n-1] immediately below the old low edge - i.e. exactly
   // what a forward read starting at (validLow() - n) produces, so the
   // caller never needs to reverse anything in memory to play backward.
   void pushLow(const int16_t *src, uint32_t n) {
-    int32_t oldLow = validLow_.load(std::memory_order_relaxed);
-    int32_t newLow = oldLow - (int32_t)n;
-    uint32_t writeIndex = (uint32_t)newLow & (CAPACITY - 1);
-    uint32_t firstRun = CAPACITY - writeIndex;
-    if (firstRun >= n) {
-      memcpy(&data_[writeIndex], src, n * sizeof(int16_t));
-    } else {
-      memcpy(&data_[writeIndex], src, firstRun * sizeof(int16_t));
-      memcpy(&data_[0], src + firstRun, (n - firstRun) * sizeof(int16_t));
-    }
+    int32_t newLow = validLow_.load(std::memory_order_relaxed) - (int32_t)n;
+    copyIn(newLow, src, n);
     validLow_.store(newLow, std::memory_order_release);
   }
 
   // Trims the trailing edge to make room on the leading edge, without
-  // ever exceeding CAPACITY. newLow/newHigh must stay within the
+  // ever exceeding the capacity. newLow/newHigh must stay within the
   // current [validLow(), validHigh()] window - the caller (loop()) is
   // responsible for that, same as it's responsible for checking
   // freeSpace() before push*().
@@ -126,7 +128,7 @@ class AudioRingBuffer {
 
   // Whether every position from first to last (inclusive) is currently
   // buffered - checked once before an interpolation reads that whole span
-  // with at(). False means an underrun, which can happen on the low side
+  // with frame(). False means an underrun, which can happen on the low side
   // (playing backward faster than the producer can seek-and-fill) just as
   // easily as the high side.
   bool contains(int32_t first, int32_t last) const {
@@ -135,11 +137,14 @@ class AudioRingBuffer {
     return first >= low && last < high;
   }
 
-  // The sample at one virtual position. Only meaningful for a position
-  // contains() has just vouched for.
-  int16_t at(int32_t pos) const { return data_[(uint32_t)pos & (CAPACITY - 1)]; }
+  // The frame at one virtual position: frame(pos)[0] is its (left or only)
+  // sample, frame(pos)[1] its right one in stereo. Only meaningful for a
+  // position contains() has just vouched for.
+  const int16_t *frame(int32_t pos) const {
+    return &data_[((uint32_t)pos & frameMask_) * channels_];
+  }
 
-  // Discards any buffered samples, leaving an empty window at virtual
+  // Discards any buffered frames, leaving an empty window at virtual
   // position `at` - 0 for a freshly loaded file, or wherever a voice
   // switching to a different cached copy needs to start (see
   // SDResampleDemo.ino's startLevelChange()). Relaxed ordering is enough
@@ -152,7 +157,21 @@ class AudioRingBuffer {
   }
 
  private:
+  // Copies n frames into the storage starting at virtual position `pos`,
+  // wrapping round the end of the array if need be.
+  void copyIn(int32_t pos, const int16_t *src, uint32_t n) {
+    uint32_t writeFrame = (uint32_t)pos & frameMask_;
+    uint32_t firstRun = frameCapacity() - writeFrame;
+    if (firstRun > n) firstRun = n;
+    memcpy(&data_[writeFrame * channels_], src, firstRun * channels_ * sizeof(int16_t));
+    if (n > firstRun) {
+      memcpy(&data_[0], src + firstRun * channels_, (n - firstRun) * channels_ * sizeof(int16_t));
+    }
+  }
+
   int16_t data_[CAPACITY];
+  uint8_t channels_ = 1;
+  uint32_t frameMask_ = CAPACITY - 1;
   std::atomic<int32_t> validLow_{0};   // written by the producer (loop()) only
   std::atomic<int32_t> validHigh_{0};  // written by the producer (loop()) only
 };

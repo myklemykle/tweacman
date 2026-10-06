@@ -10,6 +10,8 @@ tools/venv/
 # Generated test fixture for SDResampleDemo (tools/make_test_wav.py) -
 # regenerate it, don't commit it.
 /AUDIO.WAV
+/SINE*.WAV
+/SAW*.WAV
 
 # Symlink to a locally-downloaded Renesas reference manual - not ours to
 # redistribute, and the target path is machine-specific anyway.
@@ -19,3 +21,7 @@ r01uh0891ej0150-ra6m5.pdf
 # WAV file formats from the coding environment - not reachable by the
 # board and not portable across machines.
 /SDResampleDemo/wav files
+
+# Generated format test files for SDResampleDemo (tools/make_format_test_wavs.py) -
+# regenerate them, don't commit them.
+/test_wavs/

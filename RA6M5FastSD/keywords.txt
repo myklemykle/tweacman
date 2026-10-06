@@ -1,0 +1,2 @@
+FastSDCardBlockDevice	KEYWORD1
+setMultiBlock	KEYWORD2

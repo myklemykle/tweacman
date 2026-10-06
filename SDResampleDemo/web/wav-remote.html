@@ -599,6 +599,14 @@
       <div class="label">Underruns</div>
       <div class="value" id="underruns">&mdash;</div>
     </div>
+    <div class="stat">
+      <div class="label">Playing from</div>
+      <div class="value" id="level">&mdash;</div>
+    </div>
+    <div class="stat">
+      <div class="label">Cache</div>
+      <div class="value" id="cache">&mdash;<span class="unit">%</span></div>
+    </div>
   </div>
 
   <div>
@@ -717,6 +725,8 @@
   const speedEl = $("speed");
   const bufferEl = $("buffer");
   const underrunsEl = $("underruns");
+  const levelEl = $("level");
+  const cacheEl = $("cache");
   const transportEl = $("transport");
   const pitchEl = $("pitch");
   const fileListEl = $("fileList");
@@ -770,6 +780,8 @@
   let device = null;
   let dspsRxChar = null;
   let dspsBuffer = "";  // accumulates raw DSPS TX bytes until a newline
+  let heardFromBoard = false;  // any line at all on DSPS TX since the last openLink()
+  let regranting = false;      // hanging up on purpose mid-handshake - see establishLink()
   let connected = false;
   let currentFile = null;
   let latched = false;
@@ -867,15 +879,10 @@
   let collectingFiles = false;
   let fileListBuffer = [];
 
-  // The board doesn't always cleanly complete its side of the Binary
-  // mode handshake on every connection - confirmed live that the
-  // module can simply fail to relay a fresh +CONNECTED/+BINREQ pair to
-  // it on some reconnects, for reasons outside this page's or the
-  // sketch's control. When that happens, this page is genuinely
-  // connected at the Bluetooth layer, but the board can never dispatch
-  // LIST, so no response ever comes - not a slow response, no response
-  // at all. Retry a couple of times with a timeout rather than hanging
-  // silently forever.
+  // A safety net. establishLink() only reports a connection once the board
+  // has been heard from through the pipe, so LIST should always be
+  // answered - but if it isn't, retry a couple of times, then reconnect,
+  // rather than hanging silently forever.
   let listRetryTimer = null;
   let listRetryCount = 0;
   const LIST_RETRY_TIMEOUT_MS = 1500;  // a working board answers near-instantly
@@ -1511,7 +1518,7 @@
   // -- incoming data --------------------------------------------------------
 
   // The board sends a stats line like
-  // "SPD:2.35,REQ:2.35,PIT:1.000,BUF:78,UND:0,RUN:1,LAT:0\n"
+  // "SPD:2.35,REQ:2.35,PIT:1.000,BUF:78,UND:0,RUN:1,LAT:0,LVL:3,CACHE:100\n"
   // (see SDResampleDemo.ino's header
   // comment) over the DSPS pipe once Binary mode is active.
   function handleTelemetry(line) {
@@ -1526,7 +1533,10 @@
     const showPotential = !running && parts.REQ !== undefined;
     const shownSpeed = showPotential ? parts.REQ : parts.SPD;
     if (shownSpeed !== undefined) {
-      speedEl.innerHTML = `${Number(shownSpeed).toFixed(2)}<span class="unit">x</span>`;
+      // Four decimals below 1x: the board's speed knob slows smoothly
+      // right down to zero, and 0.00 would hide everything under 0.005x.
+      const speed = Number(shownSpeed);
+      speedEl.innerHTML = `${speed.toFixed(Math.abs(speed) < 1 ? 4 : 2)}<span class="unit">x</span>`;
       speedEl.classList.toggle("potential", showPotential);
     }
     if (parts.BUF !== undefined) {
@@ -1550,6 +1560,18 @@
       underrunsEl.textContent = parts.UND;
       underrunsEl.classList.toggle("bad", Number(parts.UND) > 0);
     }
+    // LVL: which copy of the file is playing - 0 is the original, k the
+    // board's cached copy at 1/2^k of its sample rate (see MipCache.h).
+    if (parts.LVL !== undefined) {
+      const level = Number(parts.LVL);
+      levelEl.textContent = level === 0 ? "original" : `1/${2 ** level} rate`;
+    }
+    // CACHE: how far the board has got building those copies. Until 100%,
+    // the fastest speeds are held back.
+    if (parts.CACHE !== undefined) {
+      cacheEl.innerHTML = `${parts.CACHE}<span class="unit">%</span>`;
+      cacheEl.classList.toggle("potential", parts.CACHE === "100");
+    }
     if (parts.FILE !== undefined) setNowPlaying(parts.FILE);
   }
 
@@ -1566,7 +1588,14 @@
     }
     if (line === "FILES:END") {
       collectingFiles = false;
-      fileNames = fileListBuffer;
+      // The board lists files in the card's own directory order - roughly
+      // the order they were created - so sort them here: alphabetical,
+      // ignoring case ("base" sensitivity treats a/A, and á/a, as equal).
+      // Names are plain ASCII in practice: this core's FatFs converts long
+      // filenames through code page 437 rather than Unicode, so anything
+      // else on the card arrives garbled anyway.
+      fileNames = fileListBuffer.sort((a, b) =>
+        a.localeCompare(b, undefined, { sensitivity: "base" }));
       if (rowMode && !fileNames.some((n) => sameName(n, rowMode.name))) rowMode = null;
       renderFileList();
       return;
@@ -1605,6 +1634,7 @@
   // into one. Buffer and split on newlines rather than assuming each
   // notification is exactly one line.
   function onDspsData(event) {
+    heardFromBoard = true;
     const bytes = new Uint8Array(event.target.value.buffer);
     dspsBuffer += new TextDecoder().decode(bytes);
     let nl;
@@ -1677,75 +1707,127 @@
 
   // -- connection ---------------------------------------------------------
 
-  // Negotiates CodeLess's "Binary mode" (UM-140 manual, section 8.6,
-  // "Enter Binary mode using Generic GATT Client") so the DSPS
-  // characteristics below carry real application data instead of the
-  // AT-command link rejecting everything written to it. Confirmed live
-  // (in AudioKnobsWebBLEDemo) that the module waits for the *local* host
-  // (the RA6M5 sketch) to approve this before it actually activates -
-  // that approval isn't anything this page does, it's SDResampleDemo.ino's
-  // own job.
+  // -- connecting -----------------------------------------------------------
   //
-  // Step order matters here: steps 1-4 must all finish before step 5 (the
-  // actual Binary-mode request), or the module never grants it even
-  // though every individual GATT call still succeeds with no error.
-  async function enterBinaryMode(atService, dspsTxChar, dspsFlowChar) {
-    const inboundChar = await atService.getCharacteristic(AT_INBOUND_UUID);
-    const atFlowChar = await atService.getCharacteristic(AT_FLOWCTRL_UUID);
+  // The DSPS characteristics below only carry real data once CodeLess's
+  // "Binary mode" is on (UM-140 manual, section 8.6, "Enter Binary mode
+  // using Generic GATT Client") - otherwise the module's AT-command parser
+  // gets everything written to it. Two things about Binary mode shape how
+  // this page connects, both traced on the wire:
+  //
+  //   - It lasts exactly one connection. Asked for on one connection, it
+  //     only takes effect when that connection *ends*, and the module drops
+  //     back to command mode when the *next* one ends. So a fresh visit
+  //     nearly always needs two connections: one to ask, one to use.
+  //   - The board has to approve it: the module passes the request on to
+  //     the sketch, which answers (SDResampleDemo.ino's handleBLELine()).
+  //
+  // So: connect, and if the board isn't already talking through the pipe
+  // within PIPE_LIVE_WAIT_MS (it sends stats every 0.5s once it is), ask
+  // for Binary mode, give the board a moment to approve, hang up, and
+  // reconnect - this time to a live pipe. That used to be done the slow
+  // way round: the page stayed on the first connection, waited for a LIST
+  // reply that could never come there, and only reconnected after its
+  // retries ran out.
+  const PIPE_LIVE_WAIT_MS = 700;
+  const GRANT_SETTLE_MS = 500;      // the board approves within ~40ms
+  const RECONNECT_PIPE_WAIT_MS = 3000;
 
-    await atFlowChar.startNotifications();    // step 1
-    await dspsTxChar.startNotifications();    // step 2
-    await dspsFlowChar.startNotifications();  // step 3
-    dspsTxChar.addEventListener("characteristicvaluechanged", onDspsData);
+  const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-    await dspsFlowChar.writeValue(new Uint8Array([0x01]));  // step 4 - see writeToBoard()'s comment on writeValue() vs writeValueWithoutResponse()
-
-    log("Requesting Binary mode...");
-    const atBinreq = new Uint8Array([0x41, 0x54, 0x2b, 0x42, 0x49, 0x4e, 0x52, 0x45, 0x51, 0x00]);  // "AT+BINREQ\0"
-    await inboundChar.writeValue(atBinreq);  // step 5
+  async function pipeIsLive(ms) {
+    try {
+      await waitUntil(() => heardFromBoard, ms);
+      return true;
+    } catch (err) {
+      return false;
+    }
   }
 
-  // The GATT-connect-through-file-list sequence, factored out so
-  // reconnectAndRetry() below can redo it without requestDevice() -
-  // that API requires a direct user gesture and can't be called from a
-  // timeout, but reconnecting an already-granted device reference has
-  // no such restriction.
-  async function establishLink() {
+  // Connects, finds the characteristics, and switches notifications and
+  // DSPS flow control on. Order matters: these must all be done before
+  // Binary mode is requested, or the module never grants it, even though
+  // every individual call succeeds. Returns the AT service, which is where
+  // that request goes.
+  async function openLink() {
     const server = await device.gatt.connect();
-
     const atService = await server.getPrimaryService(AT_SERVICE_UUID);
     const dspsService = await server.getPrimaryService(DSPS_SERVICE_UUID);
+    const atFlowChar = await atService.getCharacteristic(AT_FLOWCTRL_UUID);
     const dspsTxChar = await dspsService.getCharacteristic(DSPS_TX_UUID);
     const dspsFlowChar = await dspsService.getCharacteristic(DSPS_FLOWCTRL_UUID);
     dspsRxChar = await dspsService.getCharacteristic(DSPS_RX_UUID);
 
-    await enterBinaryMode(atService, dspsTxChar, dspsFlowChar);
-
-    setConnected(true);
-    log("Connected. Waiting for telemetry...");
-    requestFileList();
+    heardFromBoard = false;
+    dspsBuffer = "";
+    await atFlowChar.startNotifications();
+    await dspsTxChar.startNotifications();
+    await dspsFlowChar.startNotifications();
+    // A browser may hand back the same characteristic object after a
+    // reconnect - remove first, so lines are never handled twice.
+    dspsTxChar.removeEventListener("characteristicvaluechanged", onDspsData);
+    dspsTxChar.addEventListener("characteristicvaluechanged", onDspsData);
+    await dspsFlowChar.writeValue(new Uint8Array([0x01]));  // see writeToBoard()'s comment on writeValue() vs writeValueWithoutResponse()
+    return atService;
   }
 
-  // Used when the board never completes its side of the handshake (see
-  // the LIST-retry comment above). Confirmed live: this reliably
-  // happens in an exact alternating (ABAB) pattern across repeated page
-  // reloads - a reload doesn't always give the module a clean, immediate
-  // disconnect signal (the browser can tear the tab down without
-  // completing the BLE disconnect procedure), so the module only
-  // notices via its own supervision timeout; reconnecting faster than
-  // that timeout lands on a module that still thinks the old link is
-  // live and never sends a fresh +CONNECTED/+BINREQ. An explicit
-  // disconnect()/reconnect() cycle from inside the page gives the
-  // module that clean signal immediately instead.
-  async function reconnectAndRetry() {
-    if (!device) return;
-    log("Reconnecting to recover...");
+  async function requestBinaryMode(atService) {
+    const inboundChar = await atService.getCharacteristic(AT_INBOUND_UUID);
+    const atBinreq = new Uint8Array([0x41, 0x54, 0x2b, 0x42, 0x49, 0x4e, 0x52, 0x45, 0x51, 0x00]);  // "AT+BINREQ\0"
+    await inboundChar.writeValue(atBinreq);
+  }
+
+  // Hangs up without the page treating it as the end of the session - the
+  // gattserverdisconnected handler in connect() ignores it.
+  async function hangUpQuietly() {
+    regranting = true;
     try {
       if (device.gatt.connected) device.gatt.disconnect();
     } catch (err) {
-      // ignore - proceed to reconnect regardless
+      // already gone - fine
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await pause(300);
+  }
+
+  // Everything from a picked device to a working pipe. Factored out of
+  // connect() so reconnectAndRetry() can redo it without requestDevice(),
+  // which needs a fresh user gesture.
+  async function establishLink() {
+    statusText.textContent = "Connecting\u2026";
+    const started = performance.now();
+    try {
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        const atService = await openLink();
+        regranting = false;
+        if (await pipeIsLive(PIPE_LIVE_WAIT_MS)) break;
+
+        log("Requesting Binary mode, then reconnecting...");
+        await requestBinaryMode(atService);
+        await pause(GRANT_SETTLE_MS);
+        await hangUpQuietly();
+        await openLink();
+        regranting = false;
+        if (await pipeIsLive(RECONNECT_PIPE_WAIT_MS)) break;
+
+        await hangUpQuietly();
+        if (attempt === 2) throw new Error("the board never opened its data pipe");
+        log("The pipe didn't open - trying once more...");
+      }
+    } finally {
+      regranting = false;
+    }
+
+    setConnected(true);
+    log(`Connected in ${((performance.now() - started) / 1000).toFixed(1)}s.`);
+    requestFileList();
+  }
+
+  // Used if LIST still isn't answered after its retries - see
+  // sendListWithRetry().
+  async function reconnectAndRetry() {
+    if (!device) return;
+    log("Reconnecting to recover...");
+    await hangUpQuietly();
     try {
       await establishLink();
     } catch (err) {
@@ -1798,6 +1880,7 @@
       );
       log(`Picked ${device.name || device.id}. Writing with ${IS_IOS ? "writeValue() (iOS)" : "writeValueWithoutResponse()"}.`);
       device.addEventListener("gattserverdisconnected", () => {
+        if (regranting) return;  // establishLink() hanging up on purpose
         log("Disconnected.");
         dspsRxChar = null;
         dspsBuffer = "";
@@ -1835,16 +1918,12 @@
   });
 
   // Explicitly disconnect before the page actually goes away, rather
-  // than leaving the module to notice via its own supervision timeout.
-  // This is the real fix for the ABAB reconnect-failure pattern seen
-  // in testing: a plain reload/navigate/close doesn't always complete
-  // the BLE disconnect procedure before the tab is torn down, so the
-  // module can still think the old link is live when the very next
-  // connection attempt arrives - it then never sends a fresh
-  // +CONNECTED/+BINREQ to the board for that attempt. pagehide fires
-  // reliably in all of those cases (unlike beforeunload, which modern
-  // browsers increasingly restrict); reconnectAndRetry() above is the
-  // fallback for whatever this doesn't catch (e.g. a crashed tab).
+  // than leaving the module to notice via its own supervision timeout: a
+  // plain reload/navigate/close doesn't always complete the BLE disconnect
+  // before the tab is torn down, and a module that still thinks the old
+  // link is live won't treat the next connection as a fresh one. pagehide
+  // fires reliably in all of those cases (unlike beforeunload, which modern
+  // browsers increasingly restrict).
   window.addEventListener("pagehide", () => {
     if (device && device.gatt && device.gatt.connected) {
       device.gatt.disconnect();

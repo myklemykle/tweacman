@@ -51,7 +51,7 @@ ARDUINO_CLI ?= arduino-cli
 # future ones), passed via --library rather than installed into the global
 # sketchbook - keeps them versioned with this repo instead of scattered
 # into ~/Documents/Arduino/libraries.
-LIBRARIES ?= RV112FF RA6M5CapTouch MultiTurnKnob RA6M5AnalogTuning
+LIBRARIES ?= RV112FF RA6M5CapTouch MultiTurnKnob RA6M5AnalogTuning RA6M5FastSD
 LIBRARY_FLAGS = $(foreach lib,$(LIBRARIES),--library $(lib))
 
 # Python virtual environment for tools/ble_test.py. Isolated from system
@@ -62,7 +62,7 @@ BLE_PYTHON ?= $(BLE_VENV)/bin/python3
 FAUST ?= faust
 
 .DEFAULT_GOAL := build
-.PHONY: build upload monitor run clean ports boards info help require-port ble-venv ble-test ble-binary-test faust
+.PHONY: build upload monitor run clean ports boards info help require-port ble-venv ble-test ble-binary-test ble-card-test faust
 
 # ---------------------------------------------------------------------------
 
@@ -120,6 +120,12 @@ ble-test: ble-venv
 ble-binary-test: ble-venv
 	$(BLE_PYTHON) -u tools/ble_binary_test.py
 
+# Exercises SDResampleDemo's card management over BLE - upload, overwrite,
+# rename, delete - using only test files it creates itself, and checks the
+# answers. Run `make monitor` alongside to watch the board's cache messages.
+ble-card-test: ble-venv
+	$(BLE_PYTHON) -u tools/ble_card_test.py
+
 # Regenerates AudioKnobsDemo's synth.h from synth.dsp. Not needed for a
 # normal build - the generated header is committed - only after editing
 # the .dsp source. Needs the `faust` compiler on PATH.
@@ -150,6 +156,7 @@ help:
 	@echo "  run       upload, then open the monitor"
 	@echo "  ble-test  watch the board's Bluetooth LE output (sets up a venv on first run)"
 	@echo "  ble-binary-test  drive the CodeLess Binary mode handshake from here, with a full trace"
+	@echo "  ble-card-test  test SDResampleDemo's upload/rename/delete over BLE"
 	@echo "  faust     regenerate AudioKnobsDemo/synth.h from synth.dsp (needs faust on PATH)"
 	@echo "  clean     remove build output"
 	@echo "  ports     list connected boards"

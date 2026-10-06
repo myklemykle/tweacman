@@ -6,7 +6,7 @@
   playback-speed ratio - not discrete multiples, and slowing down (in
   either direction) genuinely interpolates new sample values rather than
   just repeating or stepping through existing ones. The pot sweeps from
-  -MAX_RATIO through a real pause at the middle up to +MAX_RATIO;
+  -MAX_RATIO smoothly through zero at the middle up to +MAX_RATIO;
   negative plays the file backward. A second pot adds a tape-scrub
   effect on top - see "Tape scrub" below. A phone/browser can also pick
   which file plays and watch the same live stats over BLE - see "BLE
@@ -31,70 +31,75 @@
   just changed the DAC's own output clock to change speed, tape-style -
   simple, but it directly couples "how fast can we go" to the DAC
   hardware's own conversion-time ceiling (~333kHz per the RA6M5
-  datasheet, Table 53.48), which isn't the interesting limit here. This
-  version fixes the DAC at a constant, comfortable 48kHz always, and
-  does real-time resampling from whatever rate the SD card is actually
-  being asked to supply. That decouples the speed knob from the DAC
-  entirely and points it at the thing this demo is actually about: SD
-  read throughput (the RA6M5's SDHI peripheral has a theoretical ~25MB/s
-  ceiling per the datasheet's Table 53.34). Turn the speed ratio up far
-  enough and the SD reader in loop() should eventually fail to keep the
-  ring buffer fed before the DAC or CPU ever struggle - see "underrun"
-  below.
-
-  Measured on the first bench card (a plain microSD, brand/speed class
-  unrecorded), forward playback only: underruns start right around speed
-  ratio ~23-25x with this sketch's default settings, regardless of
-  whether SD reads happen in 2KB or 32KB chunks and regardless of the
-  ring buffer's size - both were tried and neither moved the wall, which
-  rules out per-fread()-call overhead as the cause. That points at
-  ~2-2.2MB/s as this card's real sustained sequential read speed - a
-  small fraction of the SDHI bus's theoretical ceiling above, and
-  apparently the card's own limit, not this sketch's. This number needs
-  re-measuring now that bidirectional playback reserves REVERSAL_MARGIN
-  samples of the ring buffer as standing headroom on the trailing edge
-  at all times (see loop()'s refill comment) - forward runway is smaller
-  than it used to be, so the ceiling has likely moved down somewhat.
-  Backward playback's ceiling turned out to be dramatically lower, not
-  just somewhat lower: underruns on the same card start around ratio
-  magnitude ~0.28x going backward - *below* native speed, not some large
-  multiple of it. Consistent with the suspicion that FAT's singly-linked
-  cluster chain (no native "previous cluster" pointer) makes backward
-  seeks meaningfully more expensive than forward reads on this SD/FatFs
-  stack - confirmed as a real, large effect rather than a minor one.
+  datasheet, Table 53.48). This version fixes the DAC at a constant,
+  comfortable 48kHz always, and does real-time resampling from whatever
+  rate the source is actually being read at. That decouples the speed
+  knob from the DAC entirely.
 
   How the resampling works: RingBuffer.h holds raw samples read from SD,
   as a window that can slide in EITHER direction; Resampler.h tracks a
   signed fractional read position into that window and advances it by a
   continuously-variable, signed amount (`step`) once per 48kHz tick,
-  interpolating a fresh output value with a 4-point Catmull-Rom curve
-  each time. The same mechanism handles speeding up, slowing down,
+  interpolating a fresh output value with a windowed-sinc kernel each
+  time (SincInterpolator.h) - one that low-passes as it goes when reading
+  faster than real time, so speeding up never aliases. The same mechanism handles speeding up, slowing down,
   reversing direction, and pausing (step == 0, which freezes the
   position exactly with no special-casing needed) with no separate code
   path for any of them - see both of those files' own comments for more
   detail, and loop()'s refill comment for how the SD-reading side stays
   in sync with whichever direction is currently active.
 
-  Aliasing at high |speed ratio| is expected, not a bug: no filter tracks
-  the ratio to prevent high source frequencies folding down as `step`'s
-  magnitude grows past ~2 in either direction. A proper fix needs a
-  cutoff that tracks the live ratio - real DSP scope this hand-rolled
-  kernel deliberately skips. It's also a useful signpost, since it shows
-  up audibly before the harder SD-bandwidth wall.
+  Very high speeds - cached copies: the speed range runs to MAX_RATIO,
+  1024x, which is enough to sweep a 20Hz tone right up past 20kHz. Read
+  straight from the WAV, that would be hopeless on two counts. The card
+  can't deliver it - reading a 44.1kHz file at 20x already means reading
+  20 seconds of audio every second, and that's where this demo used to
+  hit its wall (~20x forward, ~13x backward). And it would sound wrong
+  long before that: content pushed above what the DAC can reproduce
+  doesn't vanish, it folds back down as aliasing - tones that move the
+  wrong way as the speed rises, with a ring-modulator sound to them.
+
+  So MipCache.h builds a ladder of filtered copies of each file on the
+  card, in a cache/ folder - at 1/2, 1/4 ... 1/1024 of its sample rate,
+  each holding only what will still be audible at the speeds it serves.
+  At any speed, playback reads whichever copy keeps it stepping through
+  about one sample per output sample (see chooseLevel()), so the card is
+  never asked for much more than real time, whatever the speed, and
+  aliasing stays out of the way. Changing copies is a straight swap
+  between two playback voices, one playing while the other is readied
+  (see "Playback voices" below, and startLevelChange()). Copies are built in the background the first time
+  a file is cued - a few seconds for a short sample - and until they're
+  ready the fastest speeds are capped; the Serial status and the BLE
+  CACHE: field show progress. The copies live as long as their WAV and
+  are rebuilt if it changes - see "BLE control" below for what happens to
+  them when the web page uploads, renames or deletes a file.
+
+  The copies alone don't make changing between them seamless, though.
+  Each copy is free of aliasing only up to one sample per tick, so reading
+  one any faster - which happens just below every switch - used to alias,
+  and the switch made it suddenly vanish. What fixes that is the interpolator: it
+  low-passes as it reads (SincInterpolator.h), so every copy is band-
+  limited the same way on both sides of a switch. That costs CPU in the
+  audio interrupt - the Serial status line reports how much ("isr avg/max",
+  roughly 20-30% for mono and 30-40% for stereo normally, up to about 45%
+  and 60% with the pitch shifter on), along with "dropped", a count of audio ticks that never ran because
+  something held interrupts off for longer than a tick (it restarts at
+  each file load and transport start, which pause the audio on purpose).
+  It should stay at zero; if it climbs, something is blocking too long.
 
   Tape scrub: the second pot's ROTATIONAL VELOCITY (not its position)
   adds directly onto whatever the first pot already requests, rather
   than replacing it - RV112FF already computes this itself as rpm(),
   driven by each read() (see that library's header), so this needed no
-  new velocity-tracking code of its own. With the first pot parked at
-  its pause deadband, this alone drives playback, sounding like
+  new velocity-tracking code of its own. With the transport stopped (or
+  the first pot turned to zero), this alone drives playback, sounding like
   manually scrubbing a reel of tape back and forth; layered on top of
   ordinary forward/backward playback it adds a wow/flutter-style warble
   instead; sitting still, rpm() reads 0 and it contributes nothing at
   all - all three cases fall out of one plain sum (see the control-rate
   block in loop()), no special-casing needed. SCRUB_SCALE (how much
-  speed-ratio contribution one RPM is worth) is tuned by ear, same as
-  DEADBAND_T - see its own comment for the seconds-of-audio-per-turn
+  speed-ratio contribution one RPM is worth) is tuned by ear - see its
+  own comment for the seconds-of-audio-per-turn
   arithmetic, and for why scrubbing against ordinary forward playback
   partly cancels itself.
 
@@ -123,9 +128,8 @@
   and leaving the underrun. The resampler's position is frozen too, so
   playback resumes exactly where it left off with no skipped content.
   underrunTicks (printed periodically over Serial, along with live ring
-  buffer occupancy) is this demo's actual headline measurement - watch
-  it, and the occupancy trending toward zero, as you turn the ratio up.
-  It counts underruns for the *current file only*, resetting on every
+  buffer occupancy) should stay at zero at any speed once a file's
+  copies are built - if it climbs, something is starving playback. It counts underruns for the *current file only*, resetting on every
   load, and does not tick at all while no file is loaded: with nothing
   playing there is no producer to fall behind, so idling is not an
   underrun. Before that distinction existed the counter accumulated
@@ -149,7 +153,10 @@
   reads 0.00 while stopped and follows scrub while running; `REQ:` is the
   speed knob's requested ratio, which survives being stopped, so a client
   can show what the transport *would* run at; `PIT:` is the pitch ratio,
-  1.000 meaning unshifted; `LAT:0|1` is whether the transport is latched.
+  1.000 meaning unshifted; `LAT:0|1` is whether the transport is latched;
+  `LVL:` is which copy is playing (0 the original, k the cached copy at
+  1/2^k its rate); `CACHE:` is how far building those copies has got, in
+  percent.
 
   The page can also drive the transport and manage the card:
     `LATCH:<name>`       load a file and latch the transport on - plays from
@@ -157,6 +164,12 @@
     `STOP`               clear the latch, as a touch2 press would
     `RESET:SPEED`        speed back to 1.0x
     `RESET:PITCH`        pitch back to unshifted
+    `SPEED:<ratio>`      jump to an exact speed (negative is backward, 0
+                         pauses); the knob carries on from there
+    `PITCH:<ratio>`      set an exact pitch ratio (1 is unshifted)
+    `PROFILE`            print, over USB Serial, how often each stage of
+                         loop() did work since the last PROFILE and how long
+                         it took - see "loop() profiling" further down
     `PUT:<bytes>:<name>` upload a file, creating or replacing <name> -
                          answered `READY:<name>`, then raw data flows with
                          `ACK:<bytes so far>` coming back, then
@@ -168,7 +181,17 @@
   the page creates must end in .WAV, since those are the only files LIST
   shows. Touching the file that is playing closes it first (FatFs can't
   change an open file) and then reloads it, or cues the next playable file
-  if it's gone, restarting playback from the top.
+  if it's gone, restarting playback from the top. Each also keeps the
+  file's cached copies in step: an upload that replaces a file deletes its
+  old copies (they're rebuilt when it's next cued), a rename moves them to
+  the new name rather than rebuilding, and a delete removes them. Copies
+  whose WAV has vanished some other way - deleted from a computer, say -
+  are cleared out at boot, and if the cache/ folder is deleted outright it
+  is simply rebuilt.
+
+  Every one of these commands also works typed into the USB serial
+  monitor, one per line, which makes for easy testing without a phone:
+  LATCH:<name> then SPEED:500, for instance.
 
   Transport: touch pad D21 held runs the tape, released stops it. Pressing
   D20 while D21 is held latches it on, so playback continues after the finger
@@ -198,11 +221,18 @@
   latched - green while knob1 sets speed, blue while it sets pitch. "Full" is
   RGBLED_MAX_BRIGHTNESS, which is 20% of what the LED can actually do - it is
   startlingly bright otherwise. Note the mode is not visible while stopped,
-  since the LED is dark then. This demo only plays
-  mono 16-bit PCM; picking anything else from the pile of real-world
-  samples (stereo, 8/24-bit, float, WAVE_FORMAT_EXTENSIBLE - all present
-  on a real sample library) will cleanly error via BLE until WavReader
-  grows support for them - a deliberately separate, not-yet-done task.
+  since the LED is dark then.
+
+  File formats: mono or stereo, at any sample rate, in 8-, 16-, 24- or
+  32-bit PCM or 32- or 64-bit float, with plain or WAVE_FORMAT_EXTENSIBLE
+  headers - see WavReader.h, which converts each to the 16 bits everything
+  else here works in. Stereo plays left out of A0 (the jack's tip) and right
+  out of A1 (its ring); mono plays the same signal out of both. Files with
+  more channels, and compressed ones (ADPCM, A-law...), are refused with a
+  clear ERR: over BLE. tools/make_format_test_wavs.py writes a set of test
+  files covering all of it, each playing the same three notes (an octave
+  lower on the right, for the stereo ones), so at 1x they should all sound
+  alike.
 
   Nothing is loaded or played until a BLE PLAY: command asks for it -
   the board boots silent, with no SD reads happening in loop() at all.
@@ -262,25 +292,30 @@
        zippering or clicks, symmetric behavior above/below 1x forward,
        and that touching the pad switches between fast/coarse and
        slow/fine sweep rates.
-    4. Turn the pot slowly through the middle of its range - confirm a
-       real, silent-but-click-free pause, and that continuing past it
-       resumes playback smoothly in reverse, from the same place in the
-       file, with no gap or glitch. Then spin the pot past either
+    4. Turn the pot slowly through the middle of its range - confirm the
+       speed slows smoothly right down to a standstill, with no jump to
+       silence, and that continuing past it carries on smoothly in
+       reverse, from the same place in the file, with no gap or glitch. Then spin the pot past either
        physical extreme - confirm an instant speed/direction hop there
        (not a slow fold-back through the range) - that seam is the only
        place a discontinuity is expected.
-    5. Push the ratio hard (either direction) to see the ring buffer's
-       occupancy fall and underrunTicks start climbing - that onset
-       point is a real, card-dependent number (~23-25x measured
-       forward-only, before bidirectional support reserved some of the
-       buffer as standing reversal headroom - see above) worth
-       re-checking against whatever card is on the bench, in both
-       directions.
+    5. Cue a file and watch Serial: "Cache: building ... copies" then
+       "ready ... built in Nms". While it builds, speed is capped; once
+       it's ready, push the ratio hard in both directions, all the way
+       to 1024x - underrunTicks should stay at zero, and "Switched to
+       copy N" lines should appear as the speed passes each power of two.
+       Listen at those moments for anything untoward.
+       Then reboot and confirm the copies are reused ("building" doesn't
+       appear again), and delete the card's cache/ folder from a computer
+       to confirm it's rebuilt.
     6. Open web/wav-remote.html, connect, confirm LIST populates real
-       filenames from the card, PLAY: on a mono-16-bit file switches
-       cleanly, and PLAY: on anything else returns a clean ERR: instead
-       of hanging.
-    7. With the first pot parked at its pause deadband, twist the
+       filenames from the card, PLAY: on a supported file switches
+       cleanly, and PLAY: on anything else (a stereo file, say) returns a
+       clean ERR: instead of hanging. Play each of the
+       make_format_test_wavs.py files at 1x and confirm they all sound
+       the same - the same notes, at the same tempo - and that the stereo
+       ones (t2_...) are an octave lower in the right ear.
+    7. With the transport stopped (pad released), twist the
        second pot back and forth - confirm it sounds like manually
        scrubbing tape (pitch/direction tracking the twist directly,
        silent when you stop). Then set the first pot to some steady
@@ -304,6 +339,9 @@
        updates. Repeat the overwrite, rename and delete on the file that is
        playing, and cancel an upload halfway to confirm the old file
        survives. Watch the underrun count while uploading during playback.
+       Check the card's cache/ folder follows along: the renamed file's
+       folder renamed, the deleted file's gone, and the overwritten
+       file's copies rebuilt (Serial says so) the next time it's cued.
 
   This example code is in the public domain.
 */
@@ -314,13 +352,16 @@
 #include <RA6M5CapTouch.h>
 #include <FastLED.h>
 #include <codelessBLEPeripheral.h>
-#include "SDCardBlockDevice.h"
+#include <RA6M5FastSD.h>  // the core's SD driver, but reading and writing many sectors per command
 #include "FATFileSystem.h"
 #include "bsp_api.h"   // for R_DAC - the audio ISR writes it directly, same as DACAudioTest
 #include "FspTimer.h"  // for the audio-rate interrupt driving that ISR
 #include "RingBuffer.h"
 #include "Resampler.h"
 #include "WavReader.h"
+#include "MipCache.h"
+#include "Voice.h"
+#include "SincInterpolator.h"
 #include <utility>  // for std::move in loadFile()
 
 // -- Speed range and knob mapping ----------------------------------------
@@ -336,48 +377,72 @@
 // knob's own physical wrap point) - so angleToSpeedRatio() below maps
 // the angle directly, with no fold.
 
-const float MIN_RATIO = 0.1f;
-const float MAX_RATIO = 128.0f;  // magnitude at both extremes - deliberately probing well past the SD ceiling
-const float DEADBAND_T = 0.03f;  // fraction of the half-sweep that reads as a real pause - tune on the bench
+const float MAX_RATIO = 1024.0f;  // magnitude at both extremes - enough to sweep a 20Hz tone up
+                                  // past 20kHz, which the cached copies make possible (MipCache.h)
+const float NATIVE_SPEED_T = 0.27f;  // how far out from the middle 1x sits, as a fraction of
+                                     // the half-sweep - where it sat on the older curve below
+
+// The speed curve: ratio = SPEED_CURVE_R0 * (e^(SPEED_CURVE_K * t) - 1), for
+// t from 0 (the middle of the dial) to 1 (either end), mirrored for reverse.
+//
+// Exponential for most of its range - a linear version was tried and
+// confirmed live to feel too twitchy below 1x, since a linear mapping spends
+// the same rotation on every equal-sized ratio step, leaving only a sliver of
+// the knob's travel for everything under 1x. An exponential spends equal
+// rotation on equal *ratios* instead, which is what fine control at low
+// speed needs.
+//
+// But a pure exponential never reaches zero, which is why this used to need
+// a dead band in the middle: a flat "paused" stretch filling the gap between
+// -0.1x and +0.1x, with a jump from 0 straight to 0.1x at its edges. The
+// "- 1" fixes that: near t = 0 the curve flattens into a straight line
+// through zero, so the speed slows smoothly through 0.05x, 0.01x, 0.001x...
+// to exactly 0 in the middle and on into reverse, with no jump anywhere.
+// (Stopping outright is the transport's job now - release the touch pad.)
+//
+// The two constants are whatever puts MAX_RATIO at the end of the sweep and
+// 1x at NATIVE_SPEED_T - solved once at startup by initSpeedCurve(), since
+// there's no closed form. Above about 0.2x this matches the old curve
+// closely, so the knob's feel there is unchanged.
+float SPEED_CURVE_K = 1.0f;
+float SPEED_CURVE_R0 = 1.0f;
+
+void initSpeedCurve() {
+  // Find k where (e^k - 1) / (e^(k * NATIVE_SPEED_T) - 1) == MAX_RATIO, by
+  // bisection: the ratio grows steadily with k, so halving the interval
+  // forty times pins it down far past float precision.
+  float lo = 0.01f, hi = 50.0f;
+  for (int i = 0; i < 40; i++) {
+    float k = 0.5f * (lo + hi);
+    float spread = (expf(k) - 1.0f) / (expf(k * NATIVE_SPEED_T) - 1.0f);
+    if (spread < MAX_RATIO) lo = k; else hi = k;
+  }
+  SPEED_CURVE_K = 0.5f * (lo + hi);
+  SPEED_CURVE_R0 = 1.0f / (expf(SPEED_CURVE_K * NATIVE_SPEED_T) - 1.0f);
+}
 
 // Maps knobAngle()'s continuous [0,360) angle directly onto a SIGNED
-// ratio: wrapped=0 -> +MAX_RATIO, wrapped=180 -> paused, wrapped
-// approaching (but never reaching) 360 -> -MAX_RATIO. Continuous
-// everywhere a physical sweep passes through smoothly, including
-// straight through zero at the middle - the only discontinuity is
-// exactly at wrapped's own 360/0 seam, which is the knob's own
-// physical wrap point, not anything this function branches on.
-// Exponential in magnitude, same curve AudioKnobsDemo's pitch mapping
-// uses - a linear version was tried and confirmed live to feel too
-// twitchy below 100%, since a purely linear mapping spends the same
-// physical rotation on every equal-sized ratio step regardless of
-// magnitude, spreading only a small fraction of the knob's travel
-// across the whole sub-1x range. Exponential spends equal rotation on
-// equal *ratios* instead, giving much finer control at low speed.
+// ratio: wrapped=0 -> +MAX_RATIO, wrapped=180 -> 0, wrapped approaching
+// (but never reaching) 360 -> -MAX_RATIO. Continuous everywhere, straight
+// through zero in the middle included - the only discontinuity is exactly
+// at wrapped's own 360/0 seam, which is the knob's own physical wrap point,
+// not anything this function branches on.
 float angleToSpeedRatio(float wrappedAngle) {
   float t = 1.0f - (wrappedAngle / 180.0f);  // +1 .. -1 across the full sweep - the
                                               // 1.0f-(...) order (not (...)-1.0f) is
                                               // what reverses the direction sense:
                                               // confirmed live the un-reversed mapping
                                               // spun opposite the intuitive way.
-  float magT = fabsf(t);
-  if (magT < DEADBAND_T) return 0.0f;  // a real pause, not a vanishingly small nonzero speed
-  float scaledT = (magT - DEADBAND_T) / (1.0f - DEADBAND_T);
-  float magnitude = MIN_RATIO * powf(MAX_RATIO / MIN_RATIO, scaledT);
+  float magnitude = SPEED_CURVE_R0 * (expf(SPEED_CURVE_K * fabsf(t)) - 1.0f);
   return copysignf(magnitude, t);
 }
 
-// Inverse of angleToSpeedRatio(), for a nonzero ratio - used only to
-// find where "native speed" (ratio 1.0) lives on the dial, so the
-// virtual-knob tracking below can (re-)anchor itself there. Not
-// meaningful for ratio 0, which isn't a single point on the dial - it's
-// the whole deadband.
+// Inverse of angleToSpeedRatio() - used to find where a given speed lives
+// on the dial, so the virtual-knob tracking below can (re-)anchor itself
+// there: native speed on every file load, or whatever SPEED: asked for.
 float angleForRatio(float ratio) {
-  float magnitude = fabsf(ratio);
-  float scaledT = logf(magnitude / MIN_RATIO) / logf(MAX_RATIO / MIN_RATIO);
-  float magT = DEADBAND_T + scaledT * (1.0f - DEADBAND_T);
-  float t = copysignf(magT, ratio);
-  return (1.0f - t) * 180.0f;
+  float t = logf(1.0f + fabsf(ratio) / SPEED_CURVE_R0) / SPEED_CURVE_K;
+  return (1.0f - copysignf(t, ratio)) * 180.0f;
 }
 
 // Maps the same [0,360) knob angle onto a pitch ratio, one octave either
@@ -473,6 +538,10 @@ float pitchKnobDegrees = 0.0f;
 bool pitchKnobAnchored = false;
 float lastPhysicalKnobDegrees = 0.0f;
 
+// The ratio the speed knob re-anchors at the next time it finds no
+// baseline - native speed, except after a SPEED: command picks another.
+float speedAnchorRatio = 1.0f;
+
 // Doesn't touch virtualKnobDegrees directly - just clears the baseline
 // so the control-rate block (which alone knows the current
 // touch-gated turnsPerSweep) re-anchors it at native speed on its very
@@ -480,6 +549,7 @@ float lastPhysicalKnobDegrees = 0.0f;
 void resetVirtualKnobToNative() {
   // Speed only. Pitch deliberately survives a file change: it is a setting
   // the player has dialled in, not a property of the file.
+  speedAnchorRatio = 1.0f;
   speedKnobAnchored = false;
 }
 
@@ -488,10 +558,14 @@ void resetVirtualKnobToNative() {
 // reference to the block device for as long as any file on it stays
 // open, which for this sketch is the entire runtime.
 
-SDCardBlockDevice sdBlockDevice(PIN_SDHI_CLK, PIN_SDHI_CMD, PIN_SDHI_D0, PIN_SDHI_D1,
-                                PIN_SDHI_D2, PIN_SDHI_D3, PIN_SDHI_CD, PIN_SDHI_WP);
+// The faster drop-in for the core's SDCardBlockDevice - see RA6M5FastSD.h.
+// What this sketch mostly needs it for is writing the cached copies (see
+// MipCache.cpp): the core writes one sector per command, which made building
+// a file's copies take about as long as the file plays.
+FastSDCardBlockDevice sdBlockDevice(PIN_SDHI_CLK, PIN_SDHI_CMD, PIN_SDHI_D0, PIN_SDHI_D1,
+                                    PIN_SDHI_D2, PIN_SDHI_D3, PIN_SDHI_CD, PIN_SDHI_WP);
 FATFileSystem sdFs("sd");
-WavReader wav;
+MipCache cache;  // builds and tracks the current file's lower-rate copies - see MipCache.h
 
 // volatile because audioCallback() reads it - see the idle branch there.
 // Only ever written by loadFile() and unloadFile(), which both disable the
@@ -500,15 +574,49 @@ WavReader wav;
 volatile bool fileLoaded = false;
 String currentFilename = "NONE";
 float rateFactor = 1.0f;  // wav's native sample rate / 48000 - recomputed on every file load
+uint32_t nativeRate = 0;  // the WAV's own sample rate, in Hz
+uint8_t fileChannels = 1; // 1 for mono, 2 for stereo
 
-// -- Ring buffer and resampler ---------------------------------------------
+// -- Playback voices ----------------------------------------------------------
+// A voice plays one copy of the current file - the WAV itself, or one of the
+// filtered, lower-rate copies MipCache keeps on the card - through its own
+// ring buffer, at its own position. Only one ever plays. When the speed moves
+// far enough that a different copy would serve better, the idle voice is
+// opened on that copy and primed at the matching position while the active
+// one keeps playing, and then the two simply swap - see chooseLevel() and
+// startLevelChange().
+//
+// The swap is a hard cut, no crossfade. It used to be a 20ms crossfade, back
+// when each copy was read in a way that aliased just below a change and not
+// just above it, so the change was audible and needed smoothing over. Now
+// both sides of a change are filtered the same way (SincInterpolator.h), and
+// measured on the board the two copies differ by -60dB or less at the
+// moment of a change - and no artifact was audible with a hard cut on pure
+// tones, a bright sawtooth, a sine sweep or a drum loop. Dropping the fade
+// means the audio interrupt only ever renders one voice, which roughly
+// halves its worst case.
+//
+// Positions are kept per voice, in that voice's own copy's samples rather
+// than the original file's. That's not just tidiness: at 1000x, a position
+// counted in the original file's samples would overflow a 32-bit counter in
+// under a minute, but a voice only ever steps through its own copy at
+// around one sample per tick, so its counter lasts for hours.
 
-const uint32_t RING_CAPACITY = 16384;  // ~370ms total at a 44.1kHz source - loop()'s
-                                        // REVERSAL_MARGIN reserves part of this as
-                                        // standing headroom on the trailing edge always,
-                                        // so usable one-directional runway is smaller
-AudioRingBuffer<RING_CAPACITY> ring;
-Resampler resampler;
+// The Voice struct itself lives in Voice.h - only so Arduino's automatic
+// function prototypes, which land near the top of this file, can name it.
+const size_t CHUNK_FRAMES = 1024;      // frames per SD read when refilling a voice
+
+// Where each chunk lands on its way from the card into a ring buffer -
+// room for a stereo chunk. Static rather than on the stack, which a 4KB
+// buffer would strain; only loop() ever reads the card, one chunk at a time.
+alignas(4) int16_t chunkBuffer[CHUNK_FRAMES * 2];
+const int32_t REVERSAL_MARGIN = 4096;  // frames, ~93ms at 44.1kHz; must stay well under
+                                       // a ring's frameCapacity()
+
+Voice voices[2];
+
+// Which voice is playing. loop() changes it only with interrupts masked.
+volatile uint8_t activeVoice = 0;
 
 // Written by loop() at control rate, read by the audio interrupt every
 // tick - a plain float read/write is atomic on this 32-bit core, the
@@ -517,7 +625,15 @@ Resampler resampler;
 // ring buffer itself is a different, larger problem that does need
 // real atomics).
 volatile float currentStep = 1.0f;
-volatile int16_t lastGoodSample = 0;
+volatile int16_t lastGoodLeft = 0;   // the last frame played, held through an underrun
+volatile int16_t lastGoodRight = 0;
+
+// Rounds toward zero and clips to the 16-bit range.
+AUDIO_HOT inline int16_t clampToSample(float x) {
+  if (x > 32767.0f) return 32767;
+  if (x < -32768.0f) return -32768;
+  return (int16_t)x;
+}
 volatile uint32_t underrunTicks = 0;
 
 // -- Pitch shifting -------------------------------------------------------
@@ -617,40 +733,145 @@ float maxRatioSeen = -1e9f;
 
 FspTimer audioTimer;
 
-// Reads one interpolated sample at an arbitrary fractional source position.
-// Same Catmull-Rom kernel the single-tap path uses, just with the position
-// supplied rather than taken from the resampler.
-inline bool readInterpolated(float pos, float &out) {
-  int32_t idx = (int32_t)floorf(pos);
-  float frac = pos - (float)idx;
-  int16_t y[4];
-  if (!ring.peek4(idx, y)) return false;
-  out = catmullRom(y[0], y[1], y[2], y[3], frac);
-  return true;
+// The interpolation kernel's lookup table - see SincInterpolator.h.
+float sincTable[SINC_TABLE_LEN];
+
+// The fastest read the kernel stretches itself to filter properly for, in
+// samples per tick. Normal playback never reads a copy much faster than
+// LEVEL_UP_STEP (2), but for the few milliseconds after a sudden jump in
+// speed, before the right copy has faded in, it can be asked for up to
+// MAX_VOICE_RATE; past this it aliases rather than grow ever more taps
+// and run the audio interrupt out of time.
+const float MAX_KERNEL_STRETCH = 3.0f;
+
+// The fastest a voice is allowed to step through its copy - see the comment
+// where it's applied in audioCallback().
+const float MAX_VOICE_RATE = 8.0f;
+
+// The bandwidth to read at when moving through a copy at `samplesPerTick`:
+// the full band at or below one sample per tick, 1/s of it above - see
+// SincInterpolator.h for why.
+AUDIO_HOT inline float bandwidthFor(float samplesPerTick) {
+  float s = __builtin_fabsf(samplesPerTick);
+  if (s <= 1.0f) return 1.0f;
+  if (s >= MAX_KERNEL_STRETCH) return 1.0f / MAX_KERNEL_STRETCH;
+  return 1.0f / s;
+}
+
+// Reads one interpolated frame from a voice - out[0] left, out[1] right,
+// the same for mono - at whole frame idx plus fraction frac of its copy,
+// plus an offset in frames (which may be fractional or negative). Kept as a
+// whole/fraction pair rather than one float position, since a float can't
+// hold a large frame index exactly.
+AUDIO_HOT inline bool readAt(Voice &v, int32_t idx, float frac, float offset, float bandwidth,
+                             float out[2]) {
+  float rel = frac + offset;
+  float whole = __builtin_floorf(rel);
+  return readSinc(v.ring, idx + (int32_t)whole, rel - whole, bandwidth, out);
 }
 
 // Two-tap granular read - see the pitch shifting comment above for the
 // derivation. Both taps sit behind the nominal position in the direction of
 // travel; their Hann envelopes are driven by the same ramp that moves them,
-// so each tap is silent exactly where its own grain wraps.
-inline bool readGrains(float nominalPos, float step, float &out) {
+// so each tap is silent exactly where its own grain wraps. grainOffset is
+// counted in the original file's samples, so it's scaled into this voice's
+// copy - which keeps the grains in step when playback moves to another copy.
+AUDIO_HOT inline bool readGrains(Voice &v, int32_t idx, float frac, float step, float bandwidth,
+                                 float out[2]) {
   float dir = (step < 0.0f) ? -1.0f : 1.0f;
 
   float offsetA = grainOffset;
   float offsetB = offsetA + GRAIN_LENGTH_SAMPLES * 0.5f;
   if (offsetB >= GRAIN_LENGTH_SAMPLES) offsetB -= GRAIN_LENGTH_SAMPLES;
 
-  float a, b;
-  if (!readInterpolated(nominalPos - dir * offsetA, a)) return false;
-  if (!readInterpolated(nominalPos - dir * offsetB, b)) return false;
+  float a[2], b[2];
+  if (!readAt(v, idx, frac, -dir * offsetA * v.levelScale, bandwidth, a)) return false;
+  if (!readAt(v, idx, frac, -dir * offsetB * v.levelScale, bandwidth, b)) return false;
 
-  out = a * hannAt(offsetA / GRAIN_LENGTH_SAMPLES) +
-        b * hannAt(offsetB / GRAIN_LENGTH_SAMPLES);
+  float gainA = hannAt(offsetA / GRAIN_LENGTH_SAMPLES);
+  float gainB = hannAt(offsetB / GRAIN_LENGTH_SAMPLES);
+  out[0] = a[0] * gainA + b[0] * gainB;
+  out[1] = a[1] * gainA + b[1] * gainB;
   return true;
 }
 
-void audioCallback(timer_callback_args_t *args) {
-  int16_t outSample;
+// One voice's output for this tick, pitch-shifted or not.
+//
+// The pitch shifter's grain taps move through the copy at speed x pitch,
+// but they're read at full bandwidth regardless - shifting up can alias,
+// as it always has here. Band-limiting them properly would mean two
+// stretched-kernel reads a tick, each up to twice the cost of an ordinary
+// one - and the audio interrupt's budget is being kept free for other
+// processing. The shifter is a lo-fi effect with its own warble anyway.
+AUDIO_HOT inline bool renderVoice(Voice &v, float step, float pitch, bool shifting,
+                                  float out[2]) {
+  int32_t idx = v.resampler.index;
+  float frac = v.resampler.frac;
+  float rate = step * v.levelScale;  // samples of this copy per tick
+  bool ok = shifting ? readGrains(v, idx, frac, step, 1.0f, out)
+                     : readAt(v, idx, frac, 0.0f, bandwidthFor(rate), out);
+  // A tap can reach past the start of the buffer in the moments right
+  // after a rewind, when there is little history behind position 0 yet.
+  // Falling back to the unpitched read costs a brief pitch glitch there
+  // and nothing else, which beats reporting an underrun that isn't one.
+  if (!ok && shifting) ok = readAt(v, idx, frac, 0.0f, bandwidthFor(rate), out);
+  return ok;
+}
+
+// -- Audio interrupt timing (diagnostic) -------------------------------------
+// The audio interrupt should fire every 1/48000s exactly. If anything keeps
+// interrupts masked for longer than a tick, a tick is skipped outright and
+// the DAC holds one sample twice - a tiny click. The Serial status line
+// reports how many ticks have been dropped, and how much of each tick the
+// interrupt itself takes.
+//
+// Dropped ticks are found by counting: the interrupt counts every tick it
+// runs, and loop() compares that with how many there should have been by
+// now according to micros(). Timing each gap from inside the interrupt
+// doesn't work here, for two reasons found the hard way: FastLED's driver
+// for this chip zeroes the CPU's cycle counter on every LED update, and
+// micros() itself depends on a lower-priority interrupt, so read from
+// inside this one it occasionally jumps by a millisecond. (The interrupt's
+// own run time is still safe on the cycle counter - nothing can reset it
+// partway through an interrupt.)
+uint32_t cyclesPerTick = 0;          // set in setup()
+volatile uint32_t audioTicks = 0;    // every tick the interrupt has run
+uint32_t dropCountTicks = 0;         // audioTicks when counting (re)started
+uint32_t dropCountMicros = 0;        // micros() then
+uint64_t dropCountElapsed = 0;       // microseconds counted since
+uint32_t dropCountLastMicros = 0;
+// The timer's real rate is its clock divided by a whole number of counts
+// per tick - about 48008Hz rather than exactly 48000 - which is enough to
+// look like 8 ticks a second going missing, so the count uses the real one.
+uint64_t tickClockHz = 48000;        // set in setup(), from the timer itself
+uint64_t tickClockCountsPerTick = 1;
+
+// Starts counting dropped ticks afresh - after loading a file or rewinding,
+// which pause the audio on purpose and so would swamp the count.
+void restartDropCount() {
+  dropCountTicks = audioTicks;
+  dropCountMicros = dropCountLastMicros = micros();
+  dropCountElapsed = 0;
+}
+
+// Ticks that should have run since restartDropCount() but didn't.
+int32_t droppedTicks() {
+  uint32_t now = micros();
+  dropCountElapsed += (uint32_t)(now - dropCountLastMicros);
+  dropCountLastMicros = now;
+  uint32_t expected =
+      (uint32_t)(dropCountElapsed * tickClockHz / (tickClockCountsPerTick * 1000000));
+  return (int32_t)(expected - (audioTicks - dropCountTicks));
+}
+volatile uint32_t isrCyclesMax = 0;  // since the last status line
+volatile uint32_t isrCyclesSum = 0;
+volatile uint32_t isrCount = 0;
+
+AUDIO_HOT void audioCallback(timer_callback_args_t *args) {
+  uint32_t tickStart = DWT->CYCCNT;
+  audioTicks++;
+
+  int16_t outLeft, outRight;
 
   if (!fileLoaded) {
     // Nothing loaded: idle, not starved. An underrun means the producer
@@ -659,28 +880,23 @@ void audioCallback(timer_callback_args_t *args) {
     // bury the real measurement under 48000 phantom underruns per second
     // for as long as the board sat at the menu. Hold the output steady and
     // leave the resampler alone.
-    outSample = lastGoodSample;
+    outLeft = lastGoodLeft;
+    outRight = lastGoodRight;
   } else {
     float step = currentStep;
     float p = pitchRatio;
-    float nominalPos = (float)resampler.index + resampler.frac;
+    bool shifting = __builtin_fabsf(p - 1.0f) >= PITCH_BYPASS_EPSILON;
 
-    bool shifting = fabsf(p - 1.0f) >= PITCH_BYPASS_EPSILON;
+    Voice &active = voices[activeVoice];
 
-    float sample;
-    bool ok = shifting ? readGrains(nominalPos, step, sample)
-                        : readInterpolated(nominalPos, sample);
-    // A tap can reach past the start of the buffer in the moments right
-    // after a rewind, when there is no history behind position 0 yet.
-    // Falling back to the unpitched read costs a brief pitch glitch there
-    // and nothing else, which beats reporting an underrun that isn't one.
-    if (!ok && shifting) ok = readInterpolated(nominalPos, sample);
+    float frame[2];
+    bool ok = renderVoice(active, step, p, shifting, frame);
 
     if (ok) {
-      if (sample > 32767.0f) sample = 32767.0f;
-      if (sample < -32768.0f) sample = -32768.0f;
-      outSample = (int16_t)sample;
-      lastGoodSample = outSample;
+      outLeft = clampToSample(frame[0]);
+      outRight = clampToSample(frame[1]);
+      lastGoodLeft = outLeft;
+      lastGoodRight = outRight;
 
       // Ramp the grain offset by (1 - pitchRatio) * |step| and wrap it into
       // one grain - the wrap is the splice the crossfade exists to hide.
@@ -694,9 +910,22 @@ void audioCallback(timer_callback_args_t *args) {
       // anything back through the ring buffer at all - the producer
       // (loop()) decides reclaim policy itself, based on direction. See
       // RingBuffer.h's header comment and loop()'s refill logic.
-      resampler.advance(step);
+      // The voice steps through its own copy, scaled to that copy's rate -
+      // but no faster than MAX_VOICE_RATE samples of it per tick. Normally a
+      // voice reads its copy at no more than 2, but when the speed jumps -
+      // SPEED:1000 from 1x, or a fast flick of the knob - the playing voice
+      // would suddenly be asked for hundreds, and drain its ring buffer in a
+      // few ticks while loop() is still preparing the right copy. So it lags
+      // behind for those few milliseconds instead, and catches up when the
+      // right copy takes over.
+      float activeRate = step * active.levelScale;
+      if (__builtin_fabsf(activeRate) > MAX_VOICE_RATE) {
+        activeRate = __builtin_copysignf(MAX_VOICE_RATE, activeRate);
+      }
+      active.resampler.advance(activeRate);
     } else {
-      outSample = lastGoodSample;  // hold the last good sample - see header comment
+      outLeft = lastGoodLeft;  // hold the last good frame - see header comment
+      outRight = lastGoodRight;
       underrunTicks++;
     }
   }
@@ -704,10 +933,16 @@ void audioCallback(timer_callback_args_t *args) {
   // 16-bit signed -> 12-bit unsigned, same shift-based rescale used
   // throughout this pipeline for cheapness; a few LSBs of resolution
   // given up is inaudible against this DAC's own ~24-LSB absolute
-  // accuracy (RA6M5 datasheet, Table 53.48).
-  uint16_t dacValue = (uint16_t)(((int32_t)outSample + 32768) >> 4);
-  R_DAC->DADR[0] = dacValue;
-  R_DAC->DADR[1] = dacValue;
+  // accuracy (RA6M5 datasheet, Table 53.48). Left to DAC0 (A0, the jack's
+  // tip), right to DAC1 (A1, its ring) - a mono file's frames carry the
+  // same value in both.
+  R_DAC->DADR[0] = (uint16_t)(((int32_t)outLeft + 32768) >> 4);
+  R_DAC->DADR[1] = (uint16_t)(((int32_t)outRight + 32768) >> 4);
+
+  uint32_t used = DWT->CYCCNT - tickStart;
+  if (used > isrCyclesMax) isrCyclesMax = used;
+  isrCyclesSum += used;
+  isrCount++;
 }
 
 // -- File switching (BLE PLAY: command, and the boot-time default) -------
@@ -721,6 +956,201 @@ uint32_t fileOffsetFor(int32_t virtualPos, uint32_t total) {
   int32_t m = virtualPos % (int32_t)total;
   if (m < 0) m += (int32_t)total;
   return (uint32_t)m;
+}
+
+// Points a voice at one copy of the named file: level 0 is the WAV itself,
+// anything higher one of its cached copies. Leaves the voice untouched if
+// the file can't be opened.
+bool openVoice(Voice &v, const String &name, uint8_t level) {
+  WavReader reader;
+  bool ok = (level == 0)
+                ? reader.open(("/sd/" + name).c_str())
+                : reader.openRaw(MipCache::levelPath(name, level).c_str(), nativeRate >> level,
+                                 fileChannels);
+  if (!ok) return false;
+  v.reader = std::move(reader);  // closes whatever the voice had open before
+  v.ring.setChannels(v.reader.channels());
+  v.level = level;
+  v.levelScale = ldexpf(1.0f, -(int)level);
+  return true;
+}
+
+// Empties a voice's ring buffer to start at virtual position `from`, then
+// fills it forward until it holds `frames` (or is full).
+void primeVoice(Voice &v, int32_t from, uint32_t frames) {
+  v.ring.reset(from);
+  while (v.ring.usedSpace() < frames && v.ring.freeSpace() >= CHUNK_FRAMES) {
+    uint32_t offset = fileOffsetFor(v.ring.validHigh(), v.reader.totalFrames());
+    size_t got = v.reader.readFramesAt(offset, chunkBuffer, CHUNK_FRAMES);
+    if (got == 0) break;
+    v.ring.pushHigh(chunkBuffer, got);
+  }
+}
+
+// How many of the current file's cached copies are ready to play.
+uint8_t readyLevels() {
+  return (fileLoaded && cache.name() == currentFilename) ? cache.readyLevels() : 0;
+}
+
+// -- Choosing a copy ----------------------------------------------------------
+// A voice steps through its copy |step| * levelScale samples per tick. The
+// interpolator low-passes as it reads (SincInterpolator.h), so any step is
+// alias-free - but its cost grows with the step, since a read at 2 samples
+// per tick needs twice the taps of one at 1. So the aim is a step between
+// about 1 and 2, with hysteresis so that hovering right at a boundary
+// doesn't bounce between copies:
+//   - above LEVEL_UP_STEP, move to a higher (lower-rate) copy;
+//   - below LEVEL_DOWN_STEP, move to a lower one.
+// The two must be more than a factor of two apart, or a move one way would
+// immediately qualify for a move straight back. Since both sides of a
+// switch are band-limited the same way, the switch itself is inaudible
+// wherever it happens (see "Playback voices" above).
+const float LEVEL_UP_STEP = 2.0f;
+const float LEVEL_DOWN_STEP = 0.85f;
+
+uint8_t chooseLevel(float stepMagnitude, uint8_t current, uint8_t maxLevel) {
+  if (current > maxLevel) current = maxLevel;
+  float s = stepMagnitude * ldexpf(1.0f, -(int)current);
+  if (s <= LEVEL_UP_STEP && (s >= LEVEL_DOWN_STEP || current == 0)) return current;
+  // Out of range: jump straight to the copy that suits this speed, however
+  // many levels away it is - one switch, not one per level.
+  uint8_t k = 0;
+  while (k < maxLevel && stepMagnitude * ldexpf(1.0f, -(int)k) > LEVEL_UP_STEP) k++;
+  return k;
+}
+
+// Where voice `from` is right now, as a position in voice `to`'s copy.
+// Integer arithmetic for the whole-sample part, since this runs with the
+// audio interrupt masked and has to be quick - this chip has no hardware
+// double precision - and since a float can't hold a large sample position
+// exactly anyway.
+void positionInCopy(Voice &from, Voice &to, int32_t &idx, float &frac) {
+  uint64_t whole = fileOffsetFor(from.resampler.index, from.reader.totalFrames());
+  float part = from.resampler.frac;
+  int shift = (int)from.level - (int)to.level;
+  if (shift >= 0) {
+    // To a higher-rate copy: every sample of `from` spans 2^shift of `to`'s.
+    whole <<= shift;
+    part = ldexpf(part, shift);
+    float extra = floorf(part);
+    whole += (uint64_t)extra;
+    part -= extra;
+  } else {
+    // To a lower-rate copy: 2^-shift of `from`'s samples make one of `to`'s.
+    int down = -shift;
+    uint32_t remainder = (uint32_t)(whole & ((1u << down) - 1));
+    whole >>= down;
+    part = ldexpf((float)remainder + part, -down);
+  }
+  idx = (int32_t)(whole % to.reader.totalFrames());
+  frac = part;
+}
+
+// How far each side of a voice's starting position to read before it
+// plays: enough history behind it for the pitch shifter's grains (a grain's
+// length, plus the interpolator's reach) and for playing backward, and
+// enough ahead to cover how far the playing voice moves while this reads.
+const int32_t PRIME_BEHIND = (int32_t)GRAIN_LENGTH_SAMPLES + 64;
+const int32_t PRIME_AHEAD = 4096;
+
+// After a failed attempt to open a copy, don't retry on every control tick.
+unsigned long levelChangeFailedMillis = 0;
+const unsigned long LEVEL_CHANGE_RETRY_MS = 1000;
+
+// Switches playback to the idle voice, opened on copy `target`. Everything
+// slow - opening the copy, reading it from the card - happens on the idle
+// voice while the active one keeps playing; interrupts are only masked for
+// the microsecond or two it takes to hand over.
+//
+// That mask is noInterrupts(), not audioTimer.disable_overflow_irq() as
+// elsewhere in this sketch. The difference matters here: re-enabling the
+// timer's own interrupt (R_BSP_IrqEnable) also *clears* any tick that came
+// due while it was off, so even a brief mask that way loses a tick - the
+// DAC holds one sample twice, a tiny click - about one time in twenty.
+// That's fine around loadFile()'s deliberate pause, but not on every copy
+// change. noInterrupts() just delays a pending tick until interrupts()
+// lets it through.
+void startLevelChange(uint8_t target) {
+  uint8_t idle = 1 - activeVoice;
+  Voice &playing = voices[activeVoice];
+  Voice &incoming = voices[idle];
+  if (!openVoice(incoming, currentFilename, target)) {
+    levelChangeFailedMillis = millis();
+    return;
+  }
+
+  int32_t idx;
+  float frac;
+  positionInCopy(playing, incoming, idx, frac);
+  int32_t primedAt = idx;
+  primeVoice(incoming, idx - PRIME_BEHIND, PRIME_BEHIND + PRIME_AHEAD);
+
+  noInterrupts();
+  // Again, now: the playing voice moved on while the copy was being read.
+  positionInCopy(playing, incoming, idx, frac);
+  // If it crossed the end of the file meanwhile, the fresh position will
+  // have wrapped round to the start - but the ring was primed in one
+  // continuous stretch, so unwrap it back alongside where priming began.
+  int32_t len = (int32_t)incoming.reader.totalFrames();
+  if (idx < primedAt - len / 2) idx += len;
+  if (idx > primedAt + len / 2) idx -= len;
+  incoming.resampler.index = idx;
+  incoming.resampler.frac = frac;
+  activeVoice = idle;  // the old voice goes idle, ready for the next change
+  interrupts();
+
+  Serial.print("Switched to ");
+  if (target == 0) {
+    Serial.println("the original file");
+  } else {
+    Serial.print("copy ");
+    Serial.print(target);
+    Serial.print(" (1/");
+    Serial.print(1 << target);
+    Serial.println(" rate)");
+  }
+}
+
+// Tops up one voice's ring buffer by at most one chunk, in whichever
+// direction it's playing - see the refill comment in loop() for the
+// direction-aware margin this keeps.
+void refillVoice(Voice &v, float step) {
+  if (!v.reader.isOpen()) return;
+  int32_t pos = v.resampler.index;
+  uint32_t total = v.reader.totalFrames();
+
+  if (step > 0.0f) {
+    int32_t wantLow = pos - REVERSAL_MARGIN;
+    if (wantLow > v.ring.validLow()) v.ring.releaseLow(wantLow);
+    if (v.ring.freeSpace() >= CHUNK_FRAMES) {
+      size_t got = v.reader.readFramesAt(fileOffsetFor(v.ring.validHigh(), total), chunkBuffer,
+                                         CHUNK_FRAMES);
+      if (got > 0) v.ring.pushHigh(chunkBuffer, got);
+    }
+  } else if (step < 0.0f) {
+    int32_t wantHigh = pos + REVERSAL_MARGIN;
+    if (wantHigh < v.ring.validHigh()) v.ring.releaseHigh(wantHigh);
+    if (v.ring.freeSpace() >= CHUNK_FRAMES) {
+      // A "backward" chunk needs no in-memory reversal: it's an
+      // ordinary forward read starting earlier in the file, which
+      // lands in exactly the ascending order pushLow() expects.
+      int32_t startVirtual = v.ring.validLow() - (int32_t)CHUNK_FRAMES;
+      size_t got = v.reader.readFramesAt(fileOffsetFor(startVirtual, total), chunkBuffer,
+                                         CHUNK_FRAMES);
+      if (got > 0) v.ring.pushLow(chunkBuffer, got);
+    }
+  }
+  // step == 0: paused - deliberately untouched. See Resampler.h's
+  // advance() and audioCallback() above: this needs no special case
+  // here either, since the consumer's position simply stops moving.
+}
+
+// Whether the playing voice has all the data it wants for now - the cache
+// builder only runs then, so a slow SD write never comes at the expense of
+// playback.
+bool voiceToppedUp(float step) {
+  if (step == 0.0f) return true;
+  return voices[activeVoice].ring.freeSpace() < CHUNK_FRAMES;
 }
 
 // Validates and switches to a new file. On failure, errorOut is set and
@@ -743,18 +1173,29 @@ bool loadFile(const String &filename, String &errorOut) {
 
   audioTimer.disable_overflow_irq();
 
-  wav = std::move(candidate);  // closes the old file (if any), adopts the new one
-  ring.reset();
-  resampler.index = 0;
-  resampler.frac = 0.0f;
-  lastGoodSample = 0;  // don't carry a stale sample into the new file
+  // Every file starts on its original WAV, in voice 0; the other voice is
+  // closed until a copy change needs it.
+  activeVoice = 0;
+  voices[1].reader.close();
+  voices[1].ring.reset();
+  Voice &v = voices[0];
+  v.reader = std::move(candidate);  // closes the old file (if any), adopts the new one
+  v.level = 0;
+  v.levelScale = 1.0f;
+  v.resampler.index = 0;
+  v.resampler.frac = 0.0f;
+  lastGoodLeft = lastGoodRight = 0;  // don't carry a stale frame into the new file
   grainOffset = 0.0f;
   // Per-file, not cumulative: the interesting number is how badly *this*
   // file underruns at the ratio being asked for, which is not comparable
   // across files with different native sample rates anyway. Safe to write
   // bare here - the audio interrupt is disabled for this whole block.
   underrunTicks = 0;
-  rateFactor = wav.nativeSampleRate() / 48000.0f;
+  nativeRate = v.reader.nativeSampleRate();
+  fileChannels = v.reader.channels();
+  v.ring.setChannels(fileChannels);
+  voices[1].ring.setChannels(fileChannels);
+  rateFactor = nativeRate / 48000.0f;
   // Every fresh sample starts at native speed, regardless of wherever
   // the (relative, not absolute - see resetVirtualKnobToNative()'s
   // comment) speed knob currently sits: set lastKnownRatio directly
@@ -772,18 +1213,30 @@ bool loadFile(const String &filename, String &errorOut) {
   // possible for a fraction of a second until loop()'s normal backward
   // refill catches up. Same accepted trade-off as the file-switch click
   // this function already causes - see the header comment.
-  int16_t primer[1024];
-  while (ring.freeSpace() >= 1024) {
-    uint32_t offset = fileOffsetFor(ring.validHigh(), wav.totalSamples());
-    size_t got = wav.readSamplesAt(offset, primer, 1024);
-    if (got == 0) break;
-    ring.pushHigh(primer, got);
-  }
+  //
+  // Starts PRIME_BEHIND samples before the top of the file - i.e. from the
+  // end of it, since the file plays as a loop - so the interpolator has
+  // history to reach back into from the very first sample.
+  primeVoice(v, -PRIME_BEHIND, v.ring.frameCapacity());
 
   audioTimer.enable_overflow_irq();
+  restartDropCount();
 
   currentFilename = filename;
   fileLoaded = true;
+  Serial.print("Loaded ");
+  Serial.print(filename);
+  Serial.print(": ");
+  Serial.print(nativeRate);
+  Serial.print(" Hz, ");
+  Serial.print(v.reader.formatName());
+  Serial.print(fileChannels == 2 ? " stereo, " : " mono, ");
+  Serial.print(v.reader.totalFrames());
+  Serial.println(" frames");
+  // Check this file's cached copies, and build whatever's missing - in the
+  // background, a step per loop() pass. Until they're ready, high speeds are
+  // capped (see the control block in loop()).
+  cache.start(filename);
   return true;
 }
 
@@ -802,27 +1255,33 @@ bool loadFile(const String &filename, String &errorOut) {
 // acceptable here for the same reason it is in loadFile(): it happens on a
 // deliberate, occasional user action, and nothing is playing at that instant
 // anyway.
+//
+// The tape starts at whatever speed the knob is already set to, which may
+// be hundreds of times real-time - so this starts it straight on the copy
+// that speed calls for, rather than on the original WAV, which couldn't
+// be read fast enough to keep up while the change to the right copy was
+// being prepared.
 void rewindToStart() {
+  uint8_t level = chooseLevel(fabsf(lastKnownRatio * rateFactor), 0, readyLevels());
+
   audioTimer.disable_overflow_irq();
 
-  ring.reset();
-  resampler.index = 0;
-  resampler.frac = 0.0f;
-  lastGoodSample = 0;   // don't carry a stale sample across the jump
+  Voice &v = voices[activeVoice];
+  if (level != v.level && !openVoice(v, currentFilename, level)) {
+    openVoice(v, currentFilename, 0);  // copy unreadable - fall back to the WAV
+  }
+  v.resampler.index = 0;
+  v.resampler.frac = 0.0f;
+  lastGoodLeft = lastGoodRight = 0;  // don't carry a stale frame across the jump
   grainOffset = 0.0f;   // start the next grain cycle from the seam, not mid-crossfade
   // Same per-playback logic as loadFile(): the interesting figure is how
   // this pass underruns, not one accumulated across every previous pass.
   underrunTicks = 0;
 
-  int16_t primer[1024];
-  while (ring.freeSpace() >= 1024) {
-    uint32_t offset = fileOffsetFor(ring.validHigh(), wav.totalSamples());
-    size_t got = wav.readSamplesAt(offset, primer, 1024);
-    if (got == 0) break;
-    ring.pushHigh(primer, got);
-  }
+  primeVoice(v, -PRIME_BEHIND, v.ring.frameCapacity());  // see loadFile()
 
   audioTimer.enable_overflow_irq();
+  restartDropCount();
 }
 
 // Closes the current file, leaving nothing loaded. Needed before deleting,
@@ -830,12 +1289,18 @@ void rewindToStart() {
 // changing a file while it is open, and WavReader holds it open the whole
 // time it is loaded. Same interrupt masking as loadFile(), for the same
 // reason - the audio interrupt reads fileLoaded and the ring buffer.
+//
+// Also stops building its cached copies, since the builder holds the WAV
+// and the copy in progress open too.
 void unloadFile() {
   audioTimer.disable_overflow_irq();
   fileLoaded = false;
-  wav.close();
-  ring.reset();
+  for (Voice &v : voices) {
+    v.reader.close();
+    v.ring.reset();
+  }
   audioTimer.enable_overflow_irq();
+  cache.stop();
   currentFilename = "NONE";
 }
 
@@ -853,6 +1318,17 @@ bool isCurrentFile(const String &name) {
 void resetSpeedToNative() {
   lastKnownRatio = 1.0f;
   resetVirtualKnobToNative();
+}
+
+// SPEED:<ratio>, from BLE or the USB serial monitor: jumps straight to a
+// given speed - negative for backward, 0 to pause - and re-anchors the
+// knob there, so turning it carries on from that speed. Mostly a testing
+// aid: an exact, repeatable speed is hard to dial in by hand.
+void setSpeedRatio(float ratio) {
+  ratio = copysignf(fminf(fabsf(ratio), MAX_RATIO), ratio);
+  lastKnownRatio = ratio;
+  speedAnchorRatio = ratio;
+  speedKnobAnchored = false;
 }
 
 void resetPitchToUnity() {
@@ -899,7 +1375,7 @@ bool cueFirstPlayableFile() {
 // CodeLess Binary mode / DSPS bidirectional protocol - see the header
 // comment and AudioKnobsWebBLEDemo.ino, whose handshake this mirrors and
 // whose header comment documents the whole thing. Once the link is binary,
-// Serial2 is a raw pipe: ble.readOutput() for inbound lines, and a direct
+// Serial2 is a raw pipe: pumpBLEInput() for inbound lines, and a direct
 // Serial2 write for outbound (not ble.sendCommand(), which blocks waiting
 // for an OK/ERROR reply that Binary mode no longer sends).
 
@@ -956,6 +1432,19 @@ void bleWriteRaw(const String &data) {
 // Last full line of application data handed to the module, kept so the loop
 // can recognise its own words coming back at it - see handleBLELine().
 String lastLineSent = "";
+
+// How often the module advertises while nothing is connected, in ms - the
+// fastest CodeLess allows (AT+ADVSTART=<ms>, 100-3000). Its default is
+// about 690ms, and phones and laptops only listen in short windows, so at
+// that rate the board could take anywhere from an instant to 20 seconds to
+// show up in a device picker. Seven times as many announcements gives a
+// listener seven times the chances. The cost is tens of microamps on the
+// module, while nothing is connected - nothing next to the RA6M5's own
+// draw.
+const unsigned int BLE_ADV_INTERVAL_MS = 100;
+
+// The advertising command, with that interval.
+String bleAdvertiseCommand() { return "AT+ADVSTART=" + String(BLE_ADV_INTERVAL_MS); }
 
 void blePrintLine(const String &line) {
   lastLineSent = line;
@@ -1207,6 +1696,10 @@ void finishUpload() {
   if (wasCurrent) unloadFile();
   String dest = "/sd/" + uploadName;
   remove(dest.c_str());  // fails harmlessly when this is a new name
+  // Any cached copies were made from the old version. Removing them here,
+  // rather than leaving the fingerprint check to notice, means a stale cache
+  // can't outlive the file it was made from even briefly.
+  MipCache::removeFor(uploadName);
   if (rename(UPLOAD_TEMP_PATH, dest.c_str()) != 0) {
     remove(UPLOAD_TEMP_PATH);
     blePrintLine("ERR:" + uploadName + ":could not move the upload into place");
@@ -1299,6 +1792,9 @@ void renameOnCard(const String &args) {
 
   bool ok = rename(("/sd/" + from).c_str(), ("/sd/" + to).c_str()) == 0;
   if (ok) {
+    // The audio hasn't changed, so its cached copies move with it rather
+    // than being rebuilt under the new name.
+    MipCache::renameFor(from, to);
     blePrintLine("RENAMED:" + from + "/" + to);
   } else {
     blePrintLine("ERR:" + from + ":rename failed");
@@ -1332,6 +1828,7 @@ void deleteFromCard(const String &nameArg) {
   }
 
   if (remove(("/sd/" + name).c_str()) == 0) {
+    MipCache::removeFor(name);
     Serial.print("Deleted ");
     Serial.println(name);
     blePrintLine("DELETED:" + name);
@@ -1340,6 +1837,19 @@ void deleteFromCard(const String &nameArg) {
   }
 
   if (wasCurrent) recueAfterLosingFile();
+}
+
+// Whether a line is one of the commands handleBLECommand() takes - the
+// web page's words, which can only ever reach this sketch through an open
+// Binary mode pipe. See handleBLELine() for why that matters.
+bool isBoardCommand(const String &line) {
+  static const char *const COMMANDS[] = {
+    "LIST", "PLAY:", "LATCH:", "STOP", "RESET:", "PROFILE", "SPEED:", "PITCH:", "PUT:", "REN:", "DEL:"
+  };
+  for (const char *command : COMMANDS) {
+    if (line.startsWith(command)) return true;
+  }
+  return false;
 }
 
 void handleBLECommand(String line) {
@@ -1367,6 +1877,15 @@ void handleBLECommand(String line) {
     transportLatched = false;
   } else if (line == "RESET:SPEED") {
     resetSpeedToNative();
+  } else if (line == "PROFILE") {
+    printProfile();
+  } else if (line.startsWith("SPEED:")) {
+    setSpeedRatio(line.substring(6).toFloat());
+  } else if (line.startsWith("PITCH:")) {
+    // Like SPEED:, an exact pitch ratio for testing - the knob takes over
+    // again the next time it's turned in pitch mode.
+    pitchRatio = constrain(line.substring(6).toFloat(), 1.0f / 32.0f, 32.0f);
+    pitchKnobAnchored = false;
   } else if (line == "RESET:PITCH") {
     resetPitchToUnity();
   } else if (line.startsWith("PUT:")) {
@@ -1441,6 +1960,23 @@ void handleBLELine(const String &line) {
   // echo and stay put, and if it was not, the probe promotes and the link
   // recovers on its own. LINK_COMMAND would instead sit waiting for a
   // +BINREQ that Binary mode can never send.
+  // The module restarted itself. It does this every time it leaves Binary
+  // mode - i.e. after every working connection - so whatever this sketch
+  // believed a moment ago (and while the module reboots, an unanswered
+  // probe can look like an open pipe), it's now in command mode with nobody
+  // connected. It also comes back advertising at its own default interval,
+  // so restart advertising at ours: stop first, since starting while
+  // already advertising is an error.
+  if (line == "+READY") {
+    Serial.println("Module restarted - advertising again.");
+    linkMode = LINK_COMMAND;
+    awaitingProbeEcho = false;
+    lastLineSent = "";
+    bleWriteRaw("AT+ADVSTOP\r");
+    bleWriteRaw(bleAdvertiseCommand() + "\r");
+    return;
+  }
+
   if (line == "+++") {
     Serial.println("Module requested Binary mode exit - acknowledging.");
     bleWriteRaw("AT\r");
@@ -1460,9 +1996,9 @@ void handleBLELine(const String &line) {
     Serial.println("BLE central disconnected. Advertising again.");
     // Direct write, not bleCommand(): that blocks for its full timeout
     // waiting for a reply - fine at boot, a real problem here, where it
-    // would stall loop() and therefore ble.available() itself for a second
+    // would stall loop() and therefore the BLE input itself for a second
     // or more right as a new connection might already be starting up.
-    bleWriteRaw("AT+ADVSTART\r");
+    bleWriteRaw(bleAdvertiseCommand() + "\r");
   } else if (line.indexOf("+CONNECTED") != -1) {
     // A fresh +CONNECTED always means a fresh handshake is starting, even if
     // the link was still believed binary from a previous session -
@@ -1475,7 +2011,29 @@ void handleBLELine(const String &line) {
     awaitingProbeEcho = false;
     lastLineSent = "";
   } else if (linkMode != LINK_BINARY) {
-    if (line.indexOf("+BINREQ") != -1) {
+    // An exact match, not indexOf(): in command mode the module echoes back
+    // everything this sketch sends it, and the echo of our own reply,
+    // "AT+BINREQACK", contains "+BINREQ" too. Matching that would answer
+    // the echo, which gets echoed, which gets answered... The old blocking
+    // reader's 20ms wait per line hid this by slowing the loop to a crawl
+    // until the module stopped echoing; reading lines as fast as they come
+    // turned it into a runaway.
+    // A command from the page while still waiting to find out whether the
+    // pipe is open: it can only have come through the pipe, so it is. The
+    // probe below would work that out too, but up to 2.3 seconds later -
+    // and the page now reconnects straight into a fresh pipe and starts
+    // sending at once (see establishLink() in wav-remote.html), so a
+    // command often gets here first. Dropping it, as this branch used to,
+    // lost the page's first command after nearly every connect.
+    if (linkMode == LINK_PENDING && isBoardCommand(line)) {
+      Serial.println("A command came through the pipe - Binary mode is live.");
+      linkMode = LINK_BINARY;
+      awaitingProbeEcho = false;
+      handleBLECommand(line);
+      return;
+    }
+
+    if (line == "+BINREQ") {
       // Direct write again, and this one matters even more: it sits in the
       // path of a handshake the client is actively waiting on, and blocking
       // here risks swallowing whatever the client sends immediately after
@@ -1495,6 +2053,57 @@ void handleBLELine(const String &line) {
     // here and ignored.
   } else {
     handleBLECommand(line);
+  }
+}
+
+// Reads whatever has arrived on Serial2 and, once the module has gone quiet,
+// hands each line of it to handleBLELine() - without ever waiting.
+//
+// This used to be ble.readOutput(), which is Serial2.readString(): it reads
+// until the link has been quiet for its timeout (20ms here), so every
+// arrival - a command, a status line, a probe echo - stalled loop() for at
+// least 20ms, knobs and all. This keeps exactly the same rule, but checks
+// it each pass instead of waiting for it: bytes collect in a buffer across
+// loop() passes, and once BLE_QUIET_MS go by with nothing more, the whole
+// burst is split into lines and handled, just as before.
+//
+// Why keep the 20ms of quiet at all, rather than acting on each line the
+// moment its newline arrives? Two reasons. The web page sends commands with
+// no newline, so a gap is the only sign one is over. And the module seems
+// to need it: replying the instant a status line ends - while the module
+// may still be mid-burst - was tried, and the Binary mode handshake stopped
+// working, and the module stopped coming back to advertise after a
+// disconnect. Answering only once it has finished talking had always
+// worked.
+const unsigned long BLE_QUIET_MS = 20;
+const unsigned int BLE_BURST_MAX = 1024;  // a runaway burst is cut here rather than growing forever
+String bleBurst;
+unsigned long bleBurstLastByteMillis = 0;
+
+void pumpBLEInput() {
+  while (Serial2.available()) {
+    char c = (char)Serial2.read();
+    bleBurstLastByteMillis = millis();
+    if (bleBurst.length() < BLE_BURST_MAX) bleBurst += c;
+  }
+  if (bleBurst.length() == 0 || millis() - bleBurstLastByteMillis < BLE_QUIET_MS) return;
+
+  String burst = bleBurst;
+  bleBurst = "";
+  bleTrace("mod  ->", burst);
+
+  // A burst is routinely several \r\n-terminated status lines at once
+  // ("+CONNECTED\r\n+BINREQ\r\n"), and each must be handled - acting on
+  // only the first match once silently lost the +BINREQ and stalled the
+  // handshake.
+  int start = 0;
+  while (start < (int)burst.length()) {
+    int end = start;
+    while (end < (int)burst.length() && burst[end] != '\r' && burst[end] != '\n') end++;
+    String line = burst.substring(start, end);
+    start = end + 1;
+    line.trim();
+    if (line.length() > 0) handleBLELine(line);
   }
 }
 
@@ -1567,8 +2176,8 @@ RV112FF pot2(A4, A5, 0.02f, 0.15f, 0.02f);
 //
 // 1/15 gives four seconds per turn, so the cancellation point drops to
 // roughly a quarter turn per second and an ordinary half-turn flick moves a
-// couple of seconds of speech. Still a tuned-by-ear number, same as
-// DEADBAND_T - raise it for coarser scrubbing, lower it for finer. Note it
+// couple of seconds of speech. Still a tuned-by-ear number - raise it for
+// coarser scrubbing, lower it for finer. Note it
 // scales the wow/flutter warble mode by the same factor, since that is the
 // same sum with knob1 left running.
 //
@@ -1583,6 +2192,82 @@ unsigned long previousControlMillis = 0;
 
 const unsigned long STATUS_INTERVAL = 500;  // ms
 unsigned long previousStatusMillis = 0;
+
+// -- loop() profiling -----------------------------------------------------
+// loop() isn't one job but about ten, each on its own schedule. The PROFILE
+// command (USB serial or BLE) prints how often each one actually did work
+// since the last PROFILE, how long it took when it did, and its share of
+// the CPU - timed with the same cycle counter the audio interrupt uses, so
+// no debugger is needed. Times include any audio interrupts that landed
+// mid-stage, since the interrupt pre-empts loop() wherever it is - up to
+// ~17us each, which is why a stage only counts as "busy" (as having done
+// real work rather than just checked whether it had any) past 30us.
+//
+// One catch: FastLED zeroes the cycle counter on every LED update (see
+// "Audio interrupt timing"), so the LED stage is timed with micros()
+// instead, and any measurement spanning a reset is thrown away.
+enum LoopStage : uint8_t {
+  STAGE_BLE, STAGE_USB, STAGE_FILE_LIST, STAGE_REFILL, STAGE_CACHE,
+  STAGE_TOUCH, STAGE_CONTROL, STAGE_COPY_CHANGE, STAGE_LED, STAGE_STATUS, STAGE_COUNT
+};
+const char *const STAGE_NAMES[STAGE_COUNT] = {
+  "BLE input", "USB input", "file list", "SD refill", "cache build",
+  "touch scan", "knobs+transport", "copy change", "LED", "status lines"
+};
+struct StageStats {
+  uint32_t busyPasses = 0;  // passes where it took long enough to count as work
+  uint64_t busyCycles = 0;  // ...and the time those took
+  uint64_t cycles = 0;      // total, busy or not
+  uint32_t maxCycles = 0;
+};
+StageStats stageStats[STAGE_COUNT];
+uint32_t profilePasses = 0;
+uint32_t profileMaxPassCycles = 0;
+unsigned long profileStartMillis = 0;
+const uint32_t STAGE_BUSY_CYCLES = 6000;   // 30us at 200MHz
+const uint32_t STAGE_BOGUS_CYCLES = 1u << 30;  // ~5s: only a counter reset looks like this
+
+// Takes the stage as a plain uint8_t rather than a LoopStage only because
+// Arduino's generated prototypes land above the enum's definition.
+inline void stageTook(uint8_t stage, uint32_t used) {
+  if (used >= STAGE_BOGUS_CYCLES) return;
+  StageStats &st = stageStats[stage];
+  st.cycles += used;
+  if (used > st.maxCycles) st.maxCycles = used;
+  if (used >= STAGE_BUSY_CYCLES) {
+    st.busyPasses++;
+    st.busyCycles += used;
+  }
+}
+
+inline void stageDone(uint8_t stage, uint32_t startCycles) {
+  stageTook(stage, DWT->CYCCNT - startCycles);
+}
+
+void printProfile() {
+  unsigned long elapsed = millis() - profileStartMillis;
+  if (elapsed == 0) elapsed = 1;
+  float cyclesPerUs = SystemCoreClock / 1e6f;
+  char line[120];
+  snprintf(line, sizeof(line), "loop(): %lu passes in %lums (%lu/s), longest pass %lu us",
+           (unsigned long)profilePasses, elapsed, (unsigned long)(profilePasses * 1000UL / elapsed),
+           (unsigned long)(profileMaxPassCycles / cyclesPerUs));
+  Serial.println(line);
+  Serial.println("  stage              busy/s   avg us when busy   max us   CPU %");
+  for (int i = 0; i < STAGE_COUNT; i++) {
+    const StageStats &st = stageStats[i];
+    float busyPerSec = st.busyPasses * 1000.0f / elapsed;
+    float avgUs = st.busyPasses ? (st.busyCycles / cyclesPerUs) / st.busyPasses : 0.0f;
+    float cpu = 100.0f * (st.cycles / cyclesPerUs) / (elapsed * 1000.0f);
+    snprintf(line, sizeof(line), "  %-17s %8.1f %13.0f %13.0f %7.1f", STAGE_NAMES[i], busyPerSec,
+             avgUs, st.maxCycles / cyclesPerUs, cpu);
+    Serial.println(line);
+    stageStats[i] = StageStats();
+  }
+  profilePasses = 0;
+  profileMaxPassCycles = 0;
+  profileStartMillis = millis();
+}
 
 void setup() {
   Serial.begin(115200);
@@ -1623,6 +2308,17 @@ void setup() {
   for (uint16_t i = 0; i < HANN_LUT_SIZE; i++) {
     hannLut[i] = 0.5f * (1.0f - cosf(2.0f * PI * (float)i / (float)HANN_LUT_SIZE));
   }
+  initSincTable();
+  initSpeedCurve();
+
+  // ---- RA6M5-specific ----
+  // Start the Cortex-M33's cycle counter, which the audio interrupt uses to
+  // time itself - see "Audio interrupt timing" above.
+  CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+  DWT->CYCCNT = 0;
+  DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+  cyclesPerTick = SystemCoreClock / 48000;
+  // ---- end RA6M5-specific ----
 
   FastLED.addLeds<WS2812B, RGB_LED_PIN, GRB>(leds, NUM_LEDS);
   leds[0] = CRGB::Black;
@@ -1633,11 +2329,15 @@ void setup() {
     while (1) {}
   }
 
+  // Clear out cached copies of files that are gone - deleted or renamed
+  // from a computer, say, rather than through the web page.
+  MipCache::removeOrphans();
+
   // Cue the first file the demo can actually play, so the board is usable
   // standing on its own - hold the transport pad and it makes a sound, with
   // no phone, no browser and no BLE connection needed. Skipping files that
-  // fail to load matters on a real card: a sample library is full of stereo,
-  // 24-bit, float and WAVE_FORMAT_EXTENSIBLE files this demo cannot open, and
+  // fail to load matters on a real card: a sample library is full of stereo
+  // and compressed files this demo cannot open, and
   // stopping at the first *name* rather than the first playable file would
   // leave it silent for no visible reason.
   //
@@ -1672,12 +2372,12 @@ void setup() {
   // when one fails there is nothing to see.
   bleCommand("ATR");
   bleCommand("AT+ADVSTOP");
-  bleCommand("AT+ADVSTART");
+  bleCommand(bleAdvertiseCommand());
 
   // A hardware timer fires at a fixed 48000Hz; the speed knob changes
   // how far the resampler steps through the source each tick, not this
   // timer's own rate - see the header comment on why. It starts even
-  // with nothing loaded yet - audioCallback() just holds lastGoodSample
+  // with nothing loaded yet - audioCallback() just holds lastGoodLeft/Right
   // (0, i.e. silence) until a file is loaded.
   uint8_t timerType;
   int8_t timerIndex = FspTimer::get_available_timer(timerType);
@@ -1686,39 +2386,49 @@ void setup() {
   audioTimer.setup_overflow_irq(1);  // high priority: audio timing is jitter-sensitive
   audioTimer.open();
   audioTimer.start();
+  tickClockHz = audioTimer.get_freq_hz();
+  tickClockCountsPerTick = audioTimer.get_period_raw();
+  restartDropCount();
 }
 
 void loop() {
+  uint32_t passStart = DWT->CYCCNT;
+  uint32_t t = passStart;
+
   // Checked unconditionally every pass, not gated to CONTROL_INTERVAL -
   // a PLAY: request shouldn't wait up to 10ms for no reason, and this
   // is a cheap check when nothing's waiting (see AudioKnobsWebBLEDemo
   // for the same reasoning). During an upload Serial2 carries raw file data
   // rather than lines, and pumpUpload() reads it instead.
+  //
   if (uploadInProgress()) {
     pumpUpload();
-  } else if (ble.available()) {
-    String burst = ble.readOutput();
-    bleTrace("mod  ->", burst);
+  } else {
+    pumpBLEInput();
+  }
+  stageDone(STAGE_BLE, t);
+  t = DWT->CYCCNT;
 
-    // readOutput() is Serial2.readString(): it returns everything that
-    // arrived in one burst, which at 57600 baud is routinely several
-    // \r\n-terminated status lines at once. Running indexOf() over the whole
-    // burst and acting on the first match silently discards the rest, so a
-    // "+CONNECTED\r\n+BINREQ\r\n" pair loses the +BINREQ entirely and the
-    // handshake stalls with nothing logged. Split first, dispatch each line.
-    int start = 0;
-    while (start < (int)burst.length()) {
-      int end = start;
-      while (end < (int)burst.length() && burst[end] != '\r' && burst[end] != '\n') end++;
-      String line = burst.substring(start, end);
-      start = end + 1;
-      line.trim();
-      if (line.length() > 0) handleBLELine(line);
+  // The same commands also work typed into the USB serial monitor, one per
+  // line - handy for testing without a phone (e.g. LATCH:AUDIO.WAV, then
+  // SPEED:500). Replies still go out over BLE; the status lines here show
+  // the effect.
+  static String usbLine;
+  while (Serial.available()) {
+    char c = (char)Serial.read();
+    if (c == '\n' || c == '\r') {
+      if (usbLine.length() > 0) handleBLECommand(usbLine);
+      usbLine = "";
+    } else if (usbLine.length() < 80) {
+      usbLine += c;
     }
   }
+  stageDone(STAGE_USB, t);
 
   // Emits the next file-list line if one is due - see pumpFileList().
+  t = DWT->CYCCNT;
   pumpFileList();
+  stageDone(STAGE_FILE_LIST, t);
 
   // A probe that was never echoed means the module stopped echoing, i.e. the
   // pipe is finally open. Checked every pass so the promotion is prompt.
@@ -1729,65 +2439,41 @@ void loop() {
     Serial.println("Probe went unechoed - Binary mode is live.");
   }
 
-  // Greedy, unthrottled SD refill: the whole point of this demo is to
-  // let the SD card's real sustained read throughput be the limiting
-  // factor once the speed ratio is cranked high enough, so this isn't
-  // paced against anything - it just tops the buffer up as fast as
-  // loop() can cycle. Direction-aware: maintains a standing margin
-  // (REVERSAL_MARGIN) on whichever edge is currently *trailing* the
-  // consumer, continuously - not just reactively after a reversal -
-  // since an ordinary zero-crossing during real-time knob turning must
-  // never produce an audible gap, and there's no way to detect a
-  // reversal in advance. Only a margin that already exists before the
-  // reversal happens can guarantee that. This costs REVERSAL_MARGIN
-  // samples of one-directional lookahead capacity (RING_CAPACITY minus
-  // that margin is the real forward runway now), which likely lowers
-  // the previously-measured ~23-25x forward underrun ceiling somewhat -
-  // worth re-benchmarking, not a regression to avoid; click-free
-  // reversal matters more here.
-  const size_t CHUNK_SAMPLES = 1024;
-  const int32_t REVERSAL_MARGIN = 4096;  // ~93ms at 44.1kHz; must stay < RING_CAPACITY
+  // SD refill, for whichever voices are playing. Direction-aware: each
+  // keeps a standing margin (REVERSAL_MARGIN) on whichever edge is
+  // currently *trailing* its position, continuously - not just reactively
+  // after a reversal - since an ordinary zero-crossing during real-time
+  // knob turning must never produce an audible gap, and there's no way to
+  // detect a reversal in advance. Only a margin that already exists before
+  // the reversal happens can guarantee that. See refillVoice().
+  //
+  // This used to be where the demo hit its wall: reading the original WAV
+  // at 20x meant reading 20 seconds of audio a second, and the card ran
+  // out of bandwidth there. With the cached copies, a voice never reads
+  // its copy much faster than real time, whatever the speed.
   if (fileLoaded) {
-    float step = currentStep;      // snapshot once per pass
-    int32_t pos = resampler.index;
+    float step = currentStep;  // snapshot once per pass
+    t = DWT->CYCCNT;
+    refillVoice(voices[activeVoice], step);
+    stageDone(STAGE_REFILL, t);
 
-    if (step > 0.0f) {
-      int32_t wantLow = pos - REVERSAL_MARGIN;
-      if (wantLow > ring.validLow()) ring.releaseLow(wantLow);
-      if (ring.freeSpace() >= CHUNK_SAMPLES) {
-        int16_t chunk[CHUNK_SAMPLES];
-        uint32_t offset = fileOffsetFor(ring.validHigh(), wav.totalSamples());
-        size_t got = wav.readSamplesAt(offset, chunk, CHUNK_SAMPLES);
-        if (got > 0) ring.pushHigh(chunk, got);
-      }
-    } else if (step < 0.0f) {
-      int32_t wantHigh = pos + REVERSAL_MARGIN;
-      if (wantHigh < ring.validHigh()) ring.releaseHigh(wantHigh);
-      if (ring.freeSpace() >= CHUNK_SAMPLES) {
-        int16_t chunk[CHUNK_SAMPLES];
-        // A "backward" chunk needs no in-memory reversal: it's an
-        // ordinary forward read starting earlier in the file, which
-        // lands in exactly the ascending order pushLow() expects.
-        int32_t startVirtual = ring.validLow() - (int32_t)CHUNK_SAMPLES;
-        uint32_t offset = fileOffsetFor(startVirtual, wav.totalSamples());
-        size_t got = wav.readSamplesAt(offset, chunk, CHUNK_SAMPLES);
-        if (got > 0) ring.pushLow(chunk, got);
-      }
-    }
-    // step == 0: paused - deliberately untouched. See Resampler.h's
-    // advance() and audioCallback() above: this needs no special case
-    // here either, since the consumer's position simply stops moving.
+    // Build cached copies in the gaps: only when the playing voices are
+    // topped up, and never during an upload, whose flow control needs
+    // loop() to keep answering promptly. Each step is a few milliseconds.
+    t = DWT->CYCCNT;
+    if (cache.building() && !uploadInProgress() && voiceToppedUp(step)) cache.step();
+    stageDone(STAGE_CACHE, t);
   }
 
   unsigned long currentMillis = millis();
 
   if (currentMillis - previousControlMillis >= CONTROL_INTERVAL) {
     previousControlMillis = currentMillis;
+    t = DWT->CYCCNT;
     CapTouch::scan();
+    stageDone(STAGE_TOUCH, t);
 
-
-
-
+    t = DWT->CYCCNT;
     float physicalNow = knob1.read();
     if (physicalNow != -1.0f) {
       // Whichever mode is active drives its own accumulator; the other
@@ -1826,7 +2512,7 @@ void loop() {
           // here, ignoring physicalNow's absolute position entirely - the
           // whole point of relative control is that wherever the real
           // knob happens to be sitting doesn't matter.
-          speedKnobDegrees = angleForRatio(1.0f) * TURNS_PER_SWEEP * 2.0f;
+          speedKnobDegrees = angleForRatio(speedAnchorRatio) * TURNS_PER_SWEEP * 2.0f;
           speedKnobAnchored = true;
         } else {
           speedKnobDegrees += delta;
@@ -1847,7 +2533,7 @@ void loop() {
 
     // Tape-scrub: pot2's rotational velocity adds directly onto
     // whatever knob1 already requests, rather than replacing it -
-    // with knob1 parked at its pause deadband (ratio 0) this alone
+    // with the transport stopped (or knob1 at zero) this alone
     // drives playback, sounding like manually scrubbing a reel of
     // tape; layered on top of ordinary forward/backward playback it
     // adds a wow/flutter-style warble instead; sitting still, rpm() is
@@ -1897,8 +2583,8 @@ void loop() {
     // too, since both sides of the sum scale together.
     //
     // The floor at 1x is what stops this scaling *down*, and it is not
-    // optional: the primary tape-scrub case parks knob1 in its pause
-    // deadband, where the ratio is 0 - a bare multiply would there
+    // optional: the primary tape-scrub case is the transport stopped,
+    // where the ratio is 0 - a bare multiply would there
     // multiply the scrub by zero and disable the feature precisely where
     // it matters most. Below 1x the scrub keeps its absolute feel.
     // Transport: touch pad 2 held means running, released means stopped.
@@ -1912,10 +2598,7 @@ void loop() {
     // So stopping is just declining to add knob1's contribution to the sum.
     //
     // Scrub deliberately survives, because it is a separate term: a stopped
-    // tape still moves when you turn the reel by hand. This is the same
-    // "knob1 parked at its pause deadband" case the scrub was designed
-    // around, now reachable with a finger instead of by hunting for the
-    // deadband.
+    // tape still moves when you turn the reel by hand.
     // Transport, with a latch.
     //
     //   touch2 held                -> running, for as long as it is held
@@ -1969,7 +2652,38 @@ void loop() {
     float speedMagnitude = fabsf(transportRatio);
     float scrubGain = (speedMagnitude > 1.0f) ? speedMagnitude : 1.0f;
 
-    currentStep = transportRatio * rateFactor + scrub * scrubGain;
+    float step = transportRatio * rateFactor + scrub * scrubGain;
+
+    // Until the cached copies are built, high speeds are capped at
+    // MAX_STEP_UNCACHED samples per tick through the highest ready copy (or
+    // the WAV itself). Not because the card couldn't keep up with more on
+    // its own - it's the building: a build step occasionally stalls loop()
+    // for 30ms+ while the card finishes a write, and the ring buffer has to
+    // ride that out. At 2 samples per tick it holds ~130ms of runway; 8 was
+    // tried, and underran.
+    const float MAX_STEP_UNCACHED = 2.0f;
+    uint8_t ready = readyLevels();
+    if (ready < cache.levelCount()) {
+      // ...but never below native speed: a 192kHz file needs 4 samples per
+      // tick just to play at 1x, and capping that at 2 would play it at
+      // half speed until its copies were built.
+      float cap = fmaxf(ldexpf(MAX_STEP_UNCACHED, ready), rateFactor);
+      if (fabsf(step) > cap) step = copysignf(cap, step);
+    }
+    currentStep = step;
+    stageDone(STAGE_CONTROL, t);
+
+    // Move to a different copy if this speed calls for one. Not while
+    // paused - there's nothing to hear, and the tape will most likely
+    // start again at the speed it stopped at.
+    if (fileLoaded && step != 0.0f &&
+        millis() - levelChangeFailedMillis >= LEVEL_CHANGE_RETRY_MS) {
+      uint8_t current = voices[activeVoice].level;
+      uint8_t target = chooseLevel(fabsf(step), current, ready);
+      t = DWT->CYCCNT;
+      if (target != current) startLevelChange(target);
+      stageDone(STAGE_COPY_CHANGE, t);
+    }
 
     // Transport indicator: steady at full level when latched, blinking at
     // half level when running from a held finger, dark when stopped.
@@ -1979,6 +2693,7 @@ void loop() {
     // straddle a 48kHz audio tick. So it is called only when the colour
     // actually changes, which during a blink is a handful of times a second
     // rather than a hundred.
+    uint32_t ledStartMicros = micros();  // see "loop() profiling" on why not the cycle counter
     bool blinking = transportRunning && !transportLatched;
     if (blinking && !wasBlinking) blinkPhaseStartMillis = currentMillis;
     wasBlinking = blinking;
@@ -2003,18 +2718,26 @@ void loop() {
       leds[0] = wanted;
       FastLED.show();
     }
+    stageTook(STAGE_LED, (micros() - ledStartMicros) * (SystemCoreClock / 1000000));
   }
 
   // Deliberately short and infrequent: Serial here is native USB CDC
   // (see CLAUDE.md), and a blocking print sitting in a hot loop would
   // itself steal cycles from the SD refill above, manufacturing the
   // very underrun this demo is trying to measure honestly.
+  t = DWT->CYCCNT;
   if (currentMillis - previousStatusMillis >= STATUS_INTERVAL) {
     previousStatusMillis = currentMillis;
     float ratio = currentStep / rateFactor;
-    float fillPercent = 100.0f * ring.usedSpace() / RING_CAPACITY;
+    float fillPercent = 100.0f * voices[activeVoice].ring.usedSpace() /
+                        voices[activeVoice].ring.frameCapacity();
+    uint8_t level = fileLoaded ? voices[activeVoice].level : 0;
+    int cachePercent = (cache.name() == currentFilename) ? cache.percentDone() : 0;
+    // Four decimals below 1x, since the knob now slows smoothly right down
+    // to zero and two would show anything under 0.005x as "0.00x".
+    int speedDecimals = fabsf(ratio) < 1.0f ? 4 : 2;
     Serial.print("speed ");
-    Serial.print(ratio, 2);
+    Serial.print(ratio, speedDecimals);
     Serial.print("x (range ");
     if (minRatioSeen <= maxRatioSeen) {
       Serial.print(minRatioSeen, 3);
@@ -2026,7 +2749,21 @@ void loop() {
     Serial.print(")  buffer ");
     Serial.print(fillPercent, 0);
     Serial.print("%  underruns ");
-    Serial.println(underrunTicks);
+    Serial.print(underrunTicks);
+    Serial.print("  copy ");
+    Serial.print(level);
+    Serial.print("  cache ");
+    Serial.print(cachePercent);
+    Serial.print("%  isr avg ");
+    uint32_t count = isrCount;
+    Serial.print(count ? 100 * (isrCyclesSum / count) / cyclesPerTick : 0);
+    Serial.print("% max ");
+    Serial.print(100 * isrCyclesMax / cyclesPerTick);
+    Serial.print("%  dropped ");
+    Serial.println(droppedTicks());
+    isrCyclesMax = 0;
+    isrCyclesSum = 0;
+    isrCount = 0;
 
     // Deliberately short and fixed-shape, unlike the Serial line above
     // (FILE is covered separately by the PLAYING: line sent on connect
@@ -2060,12 +2797,13 @@ void loop() {
       // Lets a client display the speed the transport would run at if
       // started, rather than losing the setting whenever the tape is
       // stopped.
-      String stat = "SPD:" + String(ratio, 2) +
-                     ",REQ:" + String(lastKnownRatio, 2) +
+      String stat = "SPD:" + String(ratio, speedDecimals) +
+                     ",REQ:" + String(lastKnownRatio, fabsf(lastKnownRatio) < 1.0f ? 4 : 2) +
                      ",PIT:" + String(pitchRatio, 3) +
                      ",BUF:" + String((int)fillPercent) + ",UND:" + String(underrunTicks) +
                      ",RUN:" + String(transportRunning ? 1 : 0) +
-                     ",LAT:" + String(transportLatched ? 1 : 0);
+                     ",LAT:" + String(transportLatched ? 1 : 0) +
+                     ",LVL:" + String(level) + ",CACHE:" + String(cachePercent);
       if (probing) {
         probeSentMillis = millis();
         awaitingProbeEcho = true;
@@ -2076,4 +2814,11 @@ void loop() {
     minRatioSeen = 1e9f;
     maxRatioSeen = -1e9f;
   }
+  stageDone(STAGE_STATUS, t);
+
+  uint32_t passCycles = DWT->CYCCNT - passStart;
+  if (passCycles < STAGE_BOGUS_CYCLES && passCycles > profileMaxPassCycles) {
+    profileMaxPassCycles = passCycles;
+  }
+  profilePasses++;
 }

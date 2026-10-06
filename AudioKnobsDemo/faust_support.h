@@ -10,7 +10,7 @@
 
   This is a trimmed, combined copy of Faust's own architecture headers
   (faust/dsp/dsp.h, faust/gui/UI.h, faust/gui/meta.h - installed
-  alongside the `faust` compiler at /opt/faust/include/faust/ on this
+  alongside the `faust` compiler, at /opt/homebrew/include/faust/ on this
   Mac), simplified for a single embedded target rather than a shared
   library: FAUST_API is just dropped rather than conditionally defined
   for DLL export, and unused pieces (dsp_factory, dsp_memory_manager,

@@ -11,8 +11,12 @@
 //
 // Every measurement is a parameter: open this file in OpenSCAD and use
 // Window > Customizer to adjust them with sliders and watch the preview
-// update. Export a print with e.g.
-//   openscad --render -o scrub_knob.stl scrub_knob.scad
+// update. The Customizer saves tweaked values to scrub_knob.json, not to
+// this file, so the defaults below are only a starting point - export
+// with that saved parameter set (`make knob` from the repo root does this):
+//   openscad --render -p scrub_knob.json -P "design default values" -o scrub_knob.stl scrub_knob.scad
+// A single value can also be overridden on the command line with
+// -D 'name=value', which wins over both the file and the .json.
 //
 // Prints as modeled, flat bottom down, with no supports: the knurling
 // flutes run vertically, the center knob only narrows going up, the

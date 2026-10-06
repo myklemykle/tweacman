@@ -9,6 +9,7 @@
 #   make run             upload, then immediately open the monitor
 #   make ble-test        watch the board's Bluetooth LE output (Ctrl-C to quit)
 #   make faust           regenerate a Faust-based sketch's synth.h from its .dsp source
+#   make knob            export hardware/scrub_knob.stl from its .scad model and .json presets
 #   make clean           delete build output
 #   make ports           show connected boards
 #   make help            list every target
@@ -61,8 +62,14 @@ BLE_PYTHON ?= $(BLE_VENV)/bin/python3
 
 FAUST ?= faust
 
+# OpenSCAD isn't on PATH by default on macOS - point at the app bundle's
+# own binary. KNOB_PRESET names the parameter set in scrub_knob.json to
+# render with (the name OpenSCAD's Customizer saved it under).
+OPENSCAD ?= /Applications/OpenSCAD.app/Contents/MacOS/OpenSCAD
+KNOB_PRESET ?= design default values
+
 .DEFAULT_GOAL := build
-.PHONY: build upload monitor run clean ports boards info help require-port ble-venv ble-test ble-binary-test ble-card-test faust
+.PHONY: build upload monitor run clean ports boards info help require-port ble-venv ble-test ble-binary-test ble-card-test faust knob
 
 # ---------------------------------------------------------------------------
 
@@ -132,6 +139,14 @@ ble-card-test: ble-venv
 faust:
 	$(FAUST) -cn KnobSynth AudioKnobsDemo/synth.dsp -o AudioKnobsDemo/synth.h
 
+# Exports the scrub knob's printable STL, using the tweaked parameter set
+# saved in scrub_knob.json rather than the .scad file's own defaults. Only
+# re-renders (takes a couple of minutes) when the model or presets change.
+knob: hardware/scrub_knob.stl
+
+hardware/scrub_knob.stl: hardware/scrub_knob.scad hardware/scrub_knob.json
+	"$(OPENSCAD)" --render --export-format binstl -p hardware/scrub_knob.json -P "$(KNOB_PRESET)" -o $@ hardware/scrub_knob.scad
+
 clean:
 	rm -rf build
 
@@ -158,11 +173,12 @@ help:
 	@echo "  ble-binary-test  drive the CodeLess Binary mode handshake from here, with a full trace"
 	@echo "  ble-card-test  test SDResampleDemo's upload/rename/delete over BLE"
 	@echo "  faust     regenerate AudioKnobsDemo/synth.h from synth.dsp (needs faust on PATH)"
+	@echo "  knob      export hardware/scrub_knob.stl using the presets in scrub_knob.json"
 	@echo "  clean     remove build output"
 	@echo "  ports     list connected boards"
 	@echo "  boards    list installed Renesas board names"
 	@echo "  info      show the current settings"
 	@echo
-	@echo "Variables: SKETCH, FQBN, PORT, BAUD, LIBRARIES"
+	@echo "Variables: SKETCH, FQBN, PORT, BAUD, LIBRARIES, OPENSCAD, KNOB_PRESET"
 	@echo "Example:   make run SKETCH=HelloWorld"
 	@echo "Example:   make run SKETCH=RV112FF/examples/SerialPlotterDemo"

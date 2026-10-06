@@ -12,11 +12,16 @@ With --sine HZ, a steady tone instead - e.g. --sine 20 makes SINE20.WAV, a
 20Hz tone that sweeps right up through the audible range as the demo's
 speed knob goes from 1x to 1000x. The length is rounded to a whole number
 of cycles, so the file loops seamlessly: at 1000x a 10-second file loops
-100 times a second, and any seam would be loud.
+100 times a second, and any seam would be loud. --saw makes a sawtooth
+instead - bright, with harmonics up to Nyquist - and --exact cuts a tone at
+exactly --seconds, mid-cycle if need be: the worst case for SDResampleDemo's
+cached copies, whose loop points only line up exactly when the file's length
+divides evenly.
 
 Usage:
     python3 make_test_wav.py [output_path]
-    python3 make_test_wav.py --sine HZ [output_path]
+    python3 make_test_wav.py --sine HZ [--seconds S] [--exact] [output_path]
+    python3 make_test_wav.py --saw HZ [--seconds S] [--exact] [output_path]
 
 Copy the resulting file to the SD card's root.
 """
@@ -45,25 +50,51 @@ def sweep_samples():
         yield AMPLITUDE * math.sin(phase)
 
 
-def sine_samples(hz):
-    # A whole number of cycles, as close to DURATION_S as possible, so the
-    # last sample leads straight back into the first.
-    cycles = max(1, round(DURATION_S * hz))
-    n_samples = round(cycles * SAMPLE_RATE / hz)
+def tone_samples(hz, seconds, wave_fn, exact=False):
+    # Normally a whole number of cycles, as close to `seconds` as possible,
+    # so the last sample leads straight back into the first. With exact,
+    # precisely `seconds` long instead, wherever in a cycle that ends - a
+    # deliberately broken loop point.
+    if exact:
+        n_samples = round(seconds * SAMPLE_RATE)
+        step = hz / SAMPLE_RATE
+    else:
+        cycles = max(1, round(seconds * hz))
+        n_samples = round(cycles * SAMPLE_RATE / hz)
+        step = cycles / n_samples
     for i in range(n_samples):
-        yield AMPLITUDE * math.sin(2 * math.pi * cycles * i / n_samples)
+        yield AMPLITUDE * wave_fn((i * step) % 1.0)
+
+
+def sine(phase):
+    return math.sin(2 * math.pi * phase)
+
+
+def saw(phase):
+    # Rising ramp - every harmonic, at full strength right up to Nyquist.
+    return 2.0 * phase - 1.0
 
 
 def main():
     parser = argparse.ArgumentParser(description="Make a test WAV for SDResampleDemo.")
     parser.add_argument("--sine", type=float, metavar="HZ",
                         help="a steady tone at HZ instead of the default sweep")
+    parser.add_argument("--saw", type=float, metavar="HZ",
+                        help="a sawtooth at HZ - bright, with harmonics all the way up")
+    parser.add_argument("--seconds", type=float, default=DURATION_S,
+                        help=f"length of a --sine/--saw tone (default {DURATION_S:g}) - shorter "
+                             "uploads faster over BLE, and loops just as seamlessly")
+    parser.add_argument("--exact", action="store_true",
+                        help="make a tone exactly --seconds long rather than a whole number "
+                             "of cycles, so its loop point jumps")
     parser.add_argument("output_path", nargs="?")
     args = parser.parse_args()
 
-    if args.sine:
-        out_path = args.output_path or f"SINE{args.sine:g}.WAV"
-        samples = list(sine_samples(args.sine))
+    if args.sine or args.saw:
+        hz = args.sine or args.saw
+        name = "SINE" if args.sine else "SAW"
+        out_path = args.output_path or f"{name}{hz:g}{'X' if args.exact else ''}.WAV"
+        samples = list(tone_samples(hz, args.seconds, sine if args.sine else saw, args.exact))
     else:
         out_path = args.output_path or "AUDIO.WAV"
         samples = list(sweep_samples())

@@ -2,7 +2,7 @@
   Voice - one playback stream in SDResampleDemo: a copy of the current file
   (the WAV itself, or one of MipCache's filtered lower-rate copies), the ring
   buffer it's read into, and a position within it. See the "Playback
-  voices" section of SDResampleDemo.ino for how two of these crossfade.
+  voices" section of SDResampleDemo.ino for how two of these take turns.
 
   In a header of its own only because Arduino generates prototypes for the
   sketch's functions near the top of the .ino, ahead of anything declared

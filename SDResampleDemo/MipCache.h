@@ -33,7 +33,8 @@
 
   The filter is a 63-tap windowed-sinc half-band (Blackman window), applied
   centred on each output sample, so copies line up in time with each other
-  and the original - which is what lets the sketch crossfade between them.
+  and the original - which is what lets the sketch switch between them
+  mid-playback without a jump.
   It also treats each file as a loop (the first block reaches back around to
   the end of the file), matching how the sketch plays it.
 */

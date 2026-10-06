@@ -11,6 +11,7 @@ tools/venv/
 # regenerate it, don't commit it.
 /AUDIO.WAV
 /SINE*.WAV
+/SAW*.WAV
 
 # Symlink to a locally-downloaded Renesas reference manual - not ours to
 # redistribute, and the target path is machine-specific anyway.

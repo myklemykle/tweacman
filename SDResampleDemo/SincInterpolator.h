@@ -28,8 +28,8 @@
   s <= 1, 26 at s = 2), cutoff at 0.45 of the sample rate, Kaiser beta 5.
   That's flat to about 15kHz at 48kHz output, rolling off above, and what
   little does alias lands above 20kHz. More reach would sharpen that, at
-  proportionally more CPU in the audio interrupt - 8 was tried, and a
-  crossfade (two voices at once) then took nearly the whole of a tick.
+  proportionally more CPU in the audio interrupt, whose budget is being
+  kept free for other processing.
 */
 
 #pragma once
@@ -37,8 +37,8 @@
 #include <cmath>
 #include <cstdint>
 
-// Speed matters here - this runs for every output sample, sometimes four
-// times over (two voices crossfading, each with two pitch-shifter taps).
+// Speed matters here - this runs for every output sample, twice over when
+// the pitch shifter is on (one read per grain tap).
 // Two things this core's build settings would otherwise undo:
 //   - It compiles with -fno-builtin, which turns fabsf() and floorf() into
 //     real library calls rather than single FPU instructions - one per tap

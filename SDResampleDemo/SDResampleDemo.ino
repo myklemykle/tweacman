@@ -65,24 +65,24 @@
   At any speed, playback reads whichever copy keeps it stepping through
   about one sample per output sample (see chooseLevel()), so the card is
   never asked for much more than real time, whatever the speed, and
-  aliasing stays out of the way. Changing copies is a 20ms crossfade
-  between two playback voices (see "Playback voices" below, and
-  startLevelChange()). Copies are built in the background the first time
+  aliasing stays out of the way. Changing copies is a straight swap
+  between two playback voices, one playing while the other is readied
+  (see "Playback voices" below, and startLevelChange()). Copies are built in the background the first time
   a file is cued - a few seconds for a short sample - and until they're
   ready the fastest speeds are capped; the Serial status and the BLE
   CACHE: field show progress. The copies live as long as their WAV and
   are rebuilt if it changes - see "BLE control" below for what happens to
   them when the web page uploads, renames or deletes a file.
 
-  The copies alone don't make the crossfades smooth, though. Each copy is
-  free of aliasing only up to one sample per tick, so reading one any
-  faster - which happens just below every switch - used to alias, and the
-  switch made it suddenly vanish. What fixes that is the interpolator: it
+  The copies alone don't make changing between them seamless, though.
+  Each copy is free of aliasing only up to one sample per tick, so reading
+  one any faster - which happens just below every switch - used to alias,
+  and the switch made it suddenly vanish. What fixes that is the interpolator: it
   low-passes as it reads (SincInterpolator.h), so every copy is band-
   limited the same way on both sides of a switch. That costs CPU in the
   audio interrupt - the Serial status line reports how much ("isr avg/max",
-  roughly 20-45% normally, up to ~80% mid-crossfade with the pitch shifter
-  on), along with "dropped", a count of audio ticks that never ran because
+  roughly 20-30% normally, up to about 45% with the pitch shifter on), along
+  with "dropped", a count of audio ticks that never ran because
   something held interrupts off for longer than a tick (it restarts at
   each file load and transport start, which pause the audio on purpose).
   It should stay at zero; if it climbs, something is blocking too long.
@@ -299,9 +299,9 @@
     5. Cue a file and watch Serial: "Cache: building ... copies" then
        "ready ... built in Nms". While it builds, speed is capped; once
        it's ready, push the ratio hard in both directions, all the way
-       to 1024x - underrunTicks should stay at zero, and "Crossfading to
+       to 1024x - underrunTicks should stay at zero, and "Switched to
        copy N" lines should appear as the speed passes each power of two.
-       Listen at those moments for anything untoward in the crossfade.
+       Listen at those moments for anything untoward.
        Then reboot and confirm the copies are reused ("building" doesn't
        appear again), and delete the card's cache/ folder from a computer
        to confirm it's rebuilt.
@@ -575,11 +575,21 @@ uint32_t nativeRate = 0;  // the WAV's own sample rate, in Hz
 // -- Playback voices ----------------------------------------------------------
 // A voice plays one copy of the current file - the WAV itself, or one of the
 // filtered, lower-rate copies MipCache keeps on the card - through its own
-// ring buffer, at its own position. Normally one voice plays alone. When the
-// speed moves far enough that a different copy would serve better, the idle
-// voice is opened on that copy, primed at the matching position, and
-// crossfaded in over FADE_TICKS while both play; then it becomes the active
-// voice and the old one goes idle. See chooseLevel() and startLevelChange().
+// ring buffer, at its own position. Only one ever plays. When the speed moves
+// far enough that a different copy would serve better, the idle voice is
+// opened on that copy and primed at the matching position while the active
+// one keeps playing, and then the two simply swap - see chooseLevel() and
+// startLevelChange().
+//
+// The swap is a hard cut, no crossfade. It used to be a 20ms crossfade, back
+// when each copy was read in a way that aliased just below a change and not
+// just above it, so the change was audible and needed smoothing over. Now
+// both sides of a change are filtered the same way (SincInterpolator.h), and
+// measured on the board the two copies differ by -60dB or less at the
+// moment of a change - and no artifact was audible with a hard cut on pure
+// tones, a bright sawtooth, a sine sweep or a drum loop. Dropping the fade
+// means the audio interrupt only ever renders one voice, which roughly
+// halves its worst case.
 //
 // Positions are kept per voice, in that voice's own copy's samples rather
 // than the original file's. That's not just tidiness: at 1000x, a position
@@ -594,13 +604,8 @@ const int32_t REVERSAL_MARGIN = 4096;  // ~93ms at 44.1kHz; must stay < RING_CAP
 
 Voice voices[2];
 
-// Which voice is playing, and which (if either) is fading in over it. loop()
-// changes these only with the audio interrupt masked; the interrupt itself
-// promotes the fading voice to active when its crossfade completes.
+// Which voice is playing. loop() changes it only with interrupts masked.
 volatile uint8_t activeVoice = 0;
-volatile int8_t fadingVoice = -1;    // -1: no crossfade in progress
-volatile uint32_t fadeTicks = 0;     // ticks into the current crossfade
-const uint32_t FADE_TICKS = 960;      // 20ms at 48kHz
 
 // Written by loop() at control rate, read by the audio interrupt every
 // tick - a plain float read/write is atomic on this 32-bit core, the
@@ -720,8 +725,8 @@ float sincTable[SINC_TABLE_LEN];
 // and run the audio interrupt out of time.
 const float MAX_KERNEL_STRETCH = 3.0f;
 
-// The fastest a voice is allowed to step through its copy outside a
-// crossfade - see the comment where it's applied in audioCallback().
+// The fastest a voice is allowed to step through its copy - see the comment
+// where it's applied in audioCallback().
 const float MAX_VOICE_RATE = 8.0f;
 
 // The bandwidth to read at when moving through a copy at `samplesPerTick`:
@@ -750,7 +755,7 @@ AUDIO_HOT inline bool readAt(Voice &v, int32_t idx, float frac, float offset, fl
 // travel; their Hann envelopes are driven by the same ramp that moves them,
 // so each tap is silent exactly where its own grain wraps. grainOffset is
 // counted in the original file's samples, so it's scaled into this voice's
-// copy - which keeps both voices' grains in step through a crossfade.
+// copy - which keeps the grains in step when playback moves to another copy.
 AUDIO_HOT inline bool readGrains(Voice &v, int32_t idx, float frac, float step, float bandwidth,
                        float &out) {
   float dir = (step < 0.0f) ? -1.0f : 1.0f;
@@ -772,10 +777,10 @@ AUDIO_HOT inline bool readGrains(Voice &v, int32_t idx, float frac, float step, 
 //
 // The pitch shifter's grain taps move through the copy at speed x pitch,
 // but they're read at full bandwidth regardless - shifting up can alias,
-// as it always has here. Band-limiting them properly would mean up to four
-// stretched-kernel reads a tick during a crossfade (two voices, two taps
-// each), and that measured well over the whole of a tick. The shifter is a
-// lo-fi effect with its own warble anyway.
+// as it always has here. Band-limiting them properly would mean two
+// stretched-kernel reads a tick, each up to twice the cost of an ordinary
+// one - and the audio interrupt's budget is being kept free for other
+// processing. The shifter is a lo-fi effect with its own warble anyway.
 AUDIO_HOT inline bool renderVoice(Voice &v, float step, float pitch, bool shifting,
                                   float &out) {
   int32_t idx = v.resampler.index;
@@ -860,26 +865,9 @@ AUDIO_HOT void audioCallback(timer_callback_args_t *args) {
     bool shifting = __builtin_fabsf(p - 1.0f) >= PITCH_BYPASS_EPSILON;
 
     Voice &active = voices[activeVoice];
-    int8_t fading = fadingVoice;
 
     float sample;
     bool ok = renderVoice(active, step, p, shifting, sample);
-
-    // Crossfading to another copy: mix the incoming voice in, rising
-    // linearly over FADE_TICKS. Linear (equal-gain) rather than equal-power,
-    // because the two voices are playing the same audio at the same instant -
-    // filtered versions of one signal, lined up in time - so they add
-    // coherently, and an equal-gain fade keeps the level steady.
-    if (fading >= 0) {
-      float incoming;
-      bool okIn = renderVoice(voices[fading], step, p, shifting, incoming);
-      if (ok && okIn) {
-        sample += ((float)fadeTicks / (float)FADE_TICKS) * (incoming - sample);
-      } else if (okIn) {
-        sample = incoming;
-        ok = true;
-      }
-    }
 
     if (ok) {
       if (sample > 32767.0f) sample = 32767.0f;
@@ -899,29 +887,19 @@ AUDIO_HOT void audioCallback(timer_callback_args_t *args) {
       // anything back through the ring buffer at all - the producer
       // (loop()) decides reclaim policy itself, based on direction. See
       // RingBuffer.h's header comment and loop()'s refill logic.
-      // Each voice steps through its own copy, scaled to that copy's rate.
-      //
-      // Outside a crossfade, no faster than MAX_VOICE_RATE samples of its
-      // copy per tick. Normally a voice reads its copy at no more than 2,
-      // but when the speed jumps - SPEED:1000 from 1x, or a fast flick of
-      // the knob - the playing voice would suddenly be asked for hundreds,
-      // and drain its ring buffer in a few ticks while loop() is still
-      // preparing the right copy. So it lags behind for those few
-      // milliseconds instead, and the crossfade catches up. (During the
-      // crossfade itself both voices run at the true speed, so they stay
-      // in step - if the outgoing one runs dry, the incoming one covers.)
+      // The voice steps through its own copy, scaled to that copy's rate -
+      // but no faster than MAX_VOICE_RATE samples of it per tick. Normally a
+      // voice reads its copy at no more than 2, but when the speed jumps -
+      // SPEED:1000 from 1x, or a fast flick of the knob - the playing voice
+      // would suddenly be asked for hundreds, and drain its ring buffer in a
+      // few ticks while loop() is still preparing the right copy. So it lags
+      // behind for those few milliseconds instead, and catches up when the
+      // right copy takes over.
       float activeRate = step * active.levelScale;
-      if (fading < 0 && __builtin_fabsf(activeRate) > MAX_VOICE_RATE) {
+      if (__builtin_fabsf(activeRate) > MAX_VOICE_RATE) {
         activeRate = __builtin_copysignf(MAX_VOICE_RATE, activeRate);
       }
       active.resampler.advance(activeRate);
-      if (fading >= 0) {
-        voices[fading].resampler.advance(step * voices[fading].levelScale);
-        if (++fadeTicks >= FADE_TICKS) {
-          activeVoice = (uint8_t)fading;  // the old voice goes idle
-          fadingVoice = -1;
-        }
-      }
     } else {
       outSample = lastGoodSample;  // hold the last good sample - see header comment
       underrunTicks++;
@@ -999,8 +977,8 @@ uint8_t readyLevels() {
 //   - below LEVEL_DOWN_STEP, move to a lower one.
 // The two must be more than a factor of two apart, or a move one way would
 // immediately qualify for a move straight back. Since both sides of a
-// switch are band-limited the same way, the crossfade between them should
-// be close to inaudible wherever the switch happens.
+// switch are band-limited the same way, the switch itself is inaudible
+// wherever it happens (see "Playback voices" above).
 const float LEVEL_UP_STEP = 2.0f;
 const float LEVEL_DOWN_STEP = 0.85f;
 
@@ -1009,7 +987,7 @@ uint8_t chooseLevel(float stepMagnitude, uint8_t current, uint8_t maxLevel) {
   float s = stepMagnitude * ldexpf(1.0f, -(int)current);
   if (s <= LEVEL_UP_STEP && (s >= LEVEL_DOWN_STEP || current == 0)) return current;
   // Out of range: jump straight to the copy that suits this speed, however
-  // many levels away it is - one crossfade, not one per level.
+  // many levels away it is - one switch, not one per level.
   uint8_t k = 0;
   while (k < maxLevel && stepMagnitude * ldexpf(1.0f, -(int)k) > LEVEL_UP_STEP) k++;
   return k;
@@ -1053,10 +1031,10 @@ const int32_t PRIME_AHEAD = 4096;
 unsigned long levelChangeFailedMillis = 0;
 const unsigned long LEVEL_CHANGE_RETRY_MS = 1000;
 
-// Crossfades from the playing voice to the idle one, opened on copy
-// `target`. Everything slow - opening the copy, reading it from the card -
-// happens on the idle voice while the active one keeps playing; interrupts
-// are only masked for the microsecond or two it takes to hand over.
+// Switches playback to the idle voice, opened on copy `target`. Everything
+// slow - opening the copy, reading it from the card - happens on the idle
+// voice while the active one keeps playing; interrupts are only masked for
+// the microsecond or two it takes to hand over.
 //
 // That mask is noInterrupts(), not audioTimer.disable_overflow_irq() as
 // elsewhere in this sketch. The difference matters here: re-enabling the
@@ -1092,11 +1070,10 @@ void startLevelChange(uint8_t target) {
   if (idx > primedAt + len / 2) idx -= len;
   incoming.resampler.index = idx;
   incoming.resampler.frac = frac;
-  fadeTicks = 0;
-  fadingVoice = (int8_t)idle;
+  activeVoice = idle;  // the old voice goes idle, ready for the next change
   interrupts();
 
-  Serial.print("Crossfading to ");
+  Serial.print("Switched to ");
   if (target == 0) {
     Serial.println("the original file");
   } else {
@@ -1144,14 +1121,12 @@ void refillVoice(Voice &v, float step) {
   // here either, since the consumer's position simply stops moving.
 }
 
-// Whether the playing voices have all the data they want for now - the
-// cache builder only runs then, so a slow SD write never comes at the
-// expense of playback.
-bool voicesToppedUp(float step) {
+// Whether the playing voice has all the data it wants for now - the cache
+// builder only runs then, so a slow SD write never comes at the expense of
+// playback.
+bool voiceToppedUp(float step) {
   if (step == 0.0f) return true;
-  if (voices[activeVoice].ring.freeSpace() >= CHUNK_SAMPLES) return false;
-  int8_t fading = fadingVoice;
-  return fading < 0 || voices[fading].ring.freeSpace() < CHUNK_SAMPLES;
+  return voices[activeVoice].ring.freeSpace() < CHUNK_SAMPLES;
 }
 
 // Validates and switches to a new file. On failure, errorOut is set and
@@ -1174,9 +1149,8 @@ bool loadFile(const String &filename, String &errorOut) {
 
   audioTimer.disable_overflow_irq();
 
-  // Every file starts on its original WAV, in voice 0, with no crossfade
-  // under way; the other voice is closed until a copy change needs it.
-  fadingVoice = -1;
+  // Every file starts on its original WAV, in voice 0; the other voice is
+  // closed until a copy change needs it.
   activeVoice = 0;
   voices[1].reader.close();
   voices[1].ring.reset();
@@ -1258,13 +1232,13 @@ bool loadFile(const String &filename, String &errorOut) {
 // The tape starts at whatever speed the knob is already set to, which may
 // be hundreds of times real-time - so this starts it straight on the copy
 // that speed calls for, rather than on the original WAV, which couldn't
-// be read fast enough to keep up while a crossfade got going.
+// be read fast enough to keep up while the change to the right copy was
+// being prepared.
 void rewindToStart() {
   uint8_t level = chooseLevel(fabsf(lastKnownRatio * rateFactor), 0, readyLevels());
 
   audioTimer.disable_overflow_irq();
 
-  fadingVoice = -1;  // abandon any crossfade - both voices' positions are moot now
   Voice &v = voices[activeVoice];
   if (level != v.level && !openVoice(v, currentFilename, level)) {
     openVoice(v, currentFilename, 0);  // copy unreadable - fall back to the WAV
@@ -1294,7 +1268,6 @@ void rewindToStart() {
 void unloadFile() {
   audioTimer.disable_overflow_irq();
   fileLoaded = false;
-  fadingVoice = -1;
   for (Voice &v : voices) {
     v.reader.close();
     v.ring.reset();
@@ -2455,15 +2428,13 @@ void loop() {
     float step = currentStep;  // snapshot once per pass
     t = DWT->CYCCNT;
     refillVoice(voices[activeVoice], step);
-    int8_t fading = fadingVoice;
-    if (fading >= 0) refillVoice(voices[fading], step);
     stageDone(STAGE_REFILL, t);
 
     // Build cached copies in the gaps: only when the playing voices are
     // topped up, and never during an upload, whose flow control needs
     // loop() to keep answering promptly. Each step is a few milliseconds.
     t = DWT->CYCCNT;
-    if (cache.building() && !uploadInProgress() && voicesToppedUp(step)) cache.step();
+    if (cache.building() && !uploadInProgress() && voiceToppedUp(step)) cache.step();
     stageDone(STAGE_CACHE, t);
   }
 
@@ -2677,9 +2648,8 @@ void loop() {
 
     // Move to a different copy if this speed calls for one. Not while
     // paused - there's nothing to hear, and the tape will most likely
-    // start again at the speed it stopped at - and not while a crossfade
-    // is already under way.
-    if (fileLoaded && fadingVoice < 0 && step != 0.0f &&
+    // start again at the speed it stopped at.
+    if (fileLoaded && step != 0.0f &&
         millis() - levelChangeFailedMillis >= LEVEL_CHANGE_RETRY_MS) {
       uint8_t current = voices[activeVoice].level;
       uint8_t target = chooseLevel(fabsf(step), current, ready);

@@ -126,9 +126,13 @@ per-file settings and the web UI's mode display both build on it.
 - **Rev 2 (maybe):** the I2S mic and OLED, preserved as designed on
   `feature/pcb-mic-oled`.
 - **Before publishing the board:** fab notes (ENIG preferred, for the exposed
-  touch pads and edge plating), credits (SparkFun KiCad libraries CC BY 4.0,
-  Kycon drawing), a `datasheets/` README with URLs instead of the PDFs, and a
-  build README.
+  touch pads and edge plating), a `datasheets/` README with URLs instead of
+  the PDFs, and a build README. (Licensing and the SparkFun credit are done -
+  see `LICENSE`.)
+- **Next board revision: put a source location on the silkscreen.**
+  CERN-OHL-S-2.0 asks for a "Source Location" on the product - the repo's
+  URL - and the license name would fit next to the existing "this hardware
+  is open source" text on the back.
 
 ## Arduino libraries - publishing to the Library Manager
 
@@ -188,21 +192,5 @@ per-file settings and the web UI's mode display both build on it.
 
 ## Documentation
 
-- **Apply the chosen licenses, and mark authorship in the source.**
-  Chosen 2026-10-09 (Renesas has no requirement beyond open source; the
-  goal is that changes stay open):
-  - Libraries (`RV112FF`, `RA6M5CapTouch`, `MultiTurnKnob`,
-    `RA6M5AnalogTuning`, `RA6M5FastSD`): LGPL-3.0 - changes to a library
-    must be shared, sketches that merely use one don't.
-  - Demo sketches, `tools/`, web pages, Makefile: GPL-3.0.
-  - Hardware (`pcb/`, `hardware/` knob model): CERN-OHL-S-2.0.
-  - Docs and the tutorial: CC BY-SA 4.0.
-  Still to do: add the license texts (a top-level `LICENSE` explaining the
-  split, plus one in each library folder for the Library Manager), add a
-  short SPDX license line and authorship (Mykle Hansen and claude.ai) to
-  each source file, and set `license=`-style metadata where a format has
-  it. Leave vendored and generated code under its own terms (the trimmed
-  Faust architecture headers, `synth.h`), and credit SparkFun's CC BY 4.0
-  KiCad libraries the board's footprints derive from.
 - **The tutorial.** The long-term goal: a hobbyist tutorial built from these
   demos.

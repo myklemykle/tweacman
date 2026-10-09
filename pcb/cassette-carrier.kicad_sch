@@ -8,6 +8,8 @@
     (title "Cassette carrier")
     (rev "A")
     (comment 1 "Thing Plus RA6M5, knobs, touch and audio out")
+    (comment 2 "(C) 2026 Mykle Hansen. Specified by Mykle Hansen, implemented by Claude (Anthropic).")
+    (comment 3 "License: CERN-OHL-S-2.0. Footprints derived from SparkFun KiCad libraries (CC BY 4.0).")
   )
 
   (lib_symbols

@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mykle Hansen
+// Specified by Mykle Hansen, implemented by Claude (Anthropic).
+
 /*
   WavReader - opens a mono or stereo WAV file on the mounted SD card and
   reads frames (one sample per channel, for one instant - interleaved

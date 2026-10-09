@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: CERN-OHL-S-2.0
+// Copyright (C) 2026 Mykle Hansen
+// Specified by Mykle Hansen, implemented by Claude (Anthropic).
+
 // Scrub knob for the RV112FF-40 endless pots (see ../CLAUDE.md), made for
 // smoothly scrubbing audio in SDResampleDemo rather than for setting a
 // value once and leaving it.

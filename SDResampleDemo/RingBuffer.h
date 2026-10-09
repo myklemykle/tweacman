@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mykle Hansen
+// Specified by Mykle Hansen, implemented by Claude (Anthropic).
+
 /*
   RingBuffer - a fixed-capacity, lock-free single-producer/single-consumer
   circular buffer of 16-bit PCM frames (mono or stereo) that can slide in

@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mykle Hansen
+// Specified by Mykle Hansen, implemented by Claude (Anthropic).
+
 /*
   MipCache - builds and maintains filtered, lower-rate copies of a WAV file
   on the SD card, so SDResampleDemo can play it at very high speeds.

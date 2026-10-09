@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Copyright (C) 2026 Mykle Hansen
+// Specified by Mykle Hansen, implemented by Claude (Anthropic).
+
 /*
   RA6M5CapTouch.h - capacitive touch sensing on the RA6M5's built-in CTSU
 
@@ -36,8 +40,8 @@
   peripheral (R4_Touch by delta-G) and was useful to know about while
   planning this - its README's capacitor recommendation, and confirming a
   from-scratch approach was even feasible, both saved real time - but it's
-  GPLv3-licensed, and this project intends to stay public domain, so
-  nothing here is derived from its code.
+  GPLv3-licensed, and this library is LGPL so that sketches using it
+  needn't be GPL themselves - so nothing here is derived from its code.
 
   API style matches this project's other libraries (see RV112FF): the
   constructor only stores the pin (safe to call from a global's static

@@ -191,8 +191,8 @@ per-file settings and the web UI's mode display both build on it.
 - **Choose an open-source license, and mark authorship in the source.**
   Pick a license for the repo and add a license notice plus authorship
   (Mykle Hansen and claude.ai) to the source files. Things to weigh:
-  - The Renesas partners' license compatibility hasn't been confirmed yet -
-    the reason GPLv3 code was kept out of this repo so far.
+  - Renesas has no requirement beyond it being open source (confirmed
+    2026-10-09).
   - Hardware (the KiCad board, the knob model) may want a hardware license,
     such as CERN-OHL, separate from the code's. The board's footprints
     derive from SparkFun's CC BY 4.0 libraries, which needs crediting.

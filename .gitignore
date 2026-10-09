@@ -30,3 +30,11 @@ r01uh0891ej0150-ra6m5.pdf
 # folder - other people's PDFs, so not committed until we decide how to
 # credit them (see OPEN_ITEMS.md, PCB "before publishing").
 /datasheets/
+
+# Symlink to the Bela project this one ported RV112FF from (see CLAUDE.md) -
+# a separate repo, machine-specific path.
+/gemtest.git
+
+# Mouser order exports from pcb/tools/gen_bom.py --order N - live prices
+# that go stale, regenerate rather than commit.
+/pcb/*-mouser-order-*.csv

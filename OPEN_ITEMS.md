@@ -186,10 +186,7 @@ per-file settings and the web UI's mode display both build on it.
   and `wav-remote.html` are self-hosted on mykle.com; the phone only sees a
   change once it's redeployed. Up to date as of 2026-10-09.
 
-## Housekeeping
+## Documentation
 
-- **Delete `feature/sd-read-bench`?** Unmerged and probably obsolete:
-  `RA6M5FastSD` reached main through `feature/sd-mip-cache`, and this
-  branch's copy still has the misaligned-DMA bug.
 - **The tutorial.** The long-term goal: a hobbyist tutorial built from these
   demos.

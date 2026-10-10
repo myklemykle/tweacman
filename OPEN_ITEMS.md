@@ -11,23 +11,22 @@ and touch noise fixes is in `NOISE_DEBUGGING.md`.
 
 ## SDResampleDemo - planned features
 
-Captured 2026-10-09, not designed yet. Several depend on each other: the
-general modes framework comes before modes 3-5 and the time-stretch knob, and
-the web UI's mode display builds on it. Per-file settings exist (speed and
-pitch, see `FileSettings.h`); each new mode's parameters should be added
-to them.
+Captured 2026-10-09. Several depend on each other: the general modes
+framework comes before modes 3-5, and the web UI's mode display builds on
+it. Two modes exist so far, toggled by touch1: speed mode (knob1 speed,
+knob2 scrub) and pitch mode (knob1 pitch, knob2 time-stretch). Per-file
+settings exist too (speed and pitch, see `FileSettings.h`); each new mode's
+parameters should be added to them.
 
 ### Modes
 
-- **Generalize knob "modes".** Today touch1 toggles knob1 between speed and
-  pitch. Make this a general set of modes - possibly up to six - each
+- **Generalize knob "modes".** Today touch1 toggles between speed mode and
+  pitch mode. Make this a general set of modes - possibly up to six - each
   mapping both knobs to different audio parameters, each with its own LED
   colour.
 - **Mode selection by knob.** Pressing touch1 (the left pad) advances to the
   next mode, as now. Also: while touch1 is held and touch2 is not, turning
   either knob steps forward or back through the modes.
-- **Mode 2 (pitch on knob1): knob2 time-stretches** (speed change without
-  pitch change) instead of scrubbing.
 - **Mode 3: sample start and end points.**
 - **Mode 4: digital feedback echo** - delay time and feedback/volume.
 - **Mode 5: filter on the output** - low/band/high-pass, with cutoff(s) and
@@ -43,13 +42,25 @@ to them.
   log, buffer and cache info). Phone-first.
 - **Show the current mode.** Probably two tiles per mode showing its
   parameters, with the current mode highlighted.
-- **One Reset button** for all knob tweaks on the current file, replacing
-  today's separate speed and pitch resets - i.e. back to the defaults, and
-  saved that way in its per-file settings.
+- **One "reset tweaks" button** for all knob tweaks on the current file,
+  replacing today's separate speed and pitch resets - back to the defaults,
+  and saved that way in its per-file settings. It's also the way back to
+  the file's own pitch, now that the pitch knob is relative with no
+  click-stop at unity.
+- **Pitch tile shows the shift, not the pitch you hear.** `PIT:` reports
+  `pitchRatio`, the shift on top of the speed. In pitch mode the knob sets
+  the pitch you hear (shift times speed), so at 2x unshifted-sounding audio
+  reads 0.5. Report and show the heard pitch when the page shows modes.
 - **Normalize and compress recordings.** Audio recorded on the phone comes
   out too quiet.
 
 ## SDResampleDemo - known issues
+
+- **Other pot sketches relearn calibration every boot.** Since 2026-10-09
+  `RV112FF` reports nothing until a pot's calibration is complete (about two
+  turns). SDResampleDemo saves it; AudioKnobsDemo, AudioKnobsWebBLEDemo,
+  NoiseMeter and the library examples don't, so their knobs need two turns
+  after every power-on. Each could save it the same way if wanted.
 
 - **Cache-build stalls.** While `MipCache` is building, a single build step
   can stall `loop()` for up to ~35ms on an SD write - over this project's

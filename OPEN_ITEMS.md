@@ -17,13 +17,11 @@ per-file settings and the web UI's mode display both build on it.
 
 ### Knobs and scrub
 
-- **Halve the scrub magnitude.** It's too sensitive. (`SCRUB_SCALE`, plus
-  the gain items below.)
 - **Experiment: auto-tune scrub magnitude per file.** At load time, choose
   the scrub scale so one full rotation covers a power-of-two fraction or
   multiple of the file's length - e.g. 8, 4, 2, 1, 1/2, 1/4... of the file
   per turn, so a short sample might pass 4x per rotation and a long one take
-  4+ rotations. After the halving above.
+  4+ rotations.
 
 ### Modes
 

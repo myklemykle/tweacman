@@ -22,9 +22,10 @@
   tools/make_test_wav.py to generate a simple one, a slow sine sweep
   that makes speed changes and any resampling artifacts obvious by ear.
   Otherwise same as DACAudioTest (3.5mm jack on A0/A1/GND) plus two pots
-  (RV112FF wipers on A2/A3 for speed, A4/A5 for tape scrub, both pots'
-  track ends on 3.3V/GND) and two CapTouch pads (D20 toggles knob1 between
-  speed and pitch, and chorded with D21 latches the transport;
+  (RV112FF wipers on A2/A3 for speed or pitch, A4/A5 for tape scrub or
+  time-stretch, both pots' track ends on 3.3V/GND) and two CapTouch pads
+  (D20 switches between speed mode and pitch mode, and chorded with D21
+  latches the transport;
   D21 is the transport itself - hold it to run, release to stop; both
   share the TSCAP capacitor on D6 - see RA6M5CapTouch.h). The onboard WS2812
   on D13 is used as the transport indicator - no extra wiring. The DA14531MOD Bluetooth
@@ -219,17 +220,29 @@
   speed of zero.
 
   Pitch: pressing D20 on its own (not chorded with D21, which latches)
-  toggles knob1 between setting speed and setting pitch. Each mode keeps its
-  own virtual knob position, so switching back and forth leaves both settings
-  where they were, and pitch survives a file change since it is a setting the
-  player dialled in rather than a property of the file. Range is
-  PITCH_OCTAVE_RANGE octaves either way, and the pitch dial parks at its
-  extremes rather than wrapping round to the opposite one - unlike the speed
-  dial, which wraps deliberately. Speed and pitch are genuinely independent: the nominal playback
-  position still advances at the speed ratio alone - which is what the SD
-  refill is built around - while a two-tap granular shifter reads around it
-  at speed * pitch. See the pitch shifting comment further down for how that
-  works and what it costs.
+  switches between two modes. In speed mode knob1 sets the speed, tape-style
+  (any pitch shift stays a ratio on top), and knob2 scrubs. In pitch mode
+  knob1 sets the pitch you hear and knob2 stretches time - see below.
+  Switching never changes the sound by itself. Pitch is saved per file, like
+  speed (see "Per-file settings"). Range is PITCH_OCTAVE_RANGE octaves either
+  way, and the pitch dial parks at its extremes rather than wrapping round to
+  the opposite one - unlike the speed dial, which wraps deliberately. Speed
+  and pitch are genuinely independent: the nominal playback position still
+  advances at the speed ratio alone - which is what the SD refill is built
+  around - while a two-tap granular shifter reads around it at speed * pitch.
+  See the pitch shifting comment further down for how that works and what
+  it costs.
+
+  Time-stretch: in pitch mode, knob2 turns the same speed dial knob1 does in
+  speed mode - the full range, through zero and backward - while the pitch
+  you hear stays where knob1 set it. The pitch shifter's grains read at that
+  pitch whatever the speed (see grainTapRate), which also works at a speed of
+  zero: the grains keep playing in place, a granular freeze. To keep the
+  treble, the cached copy is chosen by the grains' read rate rather than the
+  speed (see the copy change in loop()), which keeps full quality up to about
+  8x; beyond that the copies take over and the treble drops away. Expect a
+  sound rather than a studio stretcher: clean around 0.5x-2x, more grainy
+  further out.
 
   The onboard WS2812 on D13 shows both: dark when stopped, blinking at half
   brightness while running from a held finger, steady at full brightness when
@@ -370,6 +383,11 @@
        the same file is cued, with the same settings. In pitch mode, turn
        knob 1 and confirm pitch carries on from the restored value rather
        than jumping back to unshifted.
+    13. Time-stretch: play a file, switch to pitch mode (D20), and turn
+       knob 2 - the tempo changes and the pitch doesn't. Through zero it
+       freezes into a granular drone, and past it plays backward, still at
+       the same pitch. Turn knob 1 meanwhile: pitch moves, tempo doesn't.
+       Switch back to speed mode: nothing changes until a knob is turned.
 */
 
 #include <RV112FF.h>
@@ -577,9 +595,11 @@ float speedKnobDegrees = 0.0f;
 bool speedKnobAnchored = false;
 float pitchKnobDegrees = 0.0f;
 bool pitchKnobAnchored = false;
-// The pitch the pitch knob re-anchors at - unity, except after a PITCH:
-// command or a file's saved settings pick another.
-float pitchAnchorRatio = 1.0f;
+// In pitch mode, the pitch you hear (relative to the file's own), which
+// knob1 sets and knob2's time-stretch holds steady - see "Time-stretch" in
+// the header comment. Kept in step with pitchRatio and the speed by
+// holdPitch() and syncHeldPitch().
+float heldPitch = 1.0f;
 float lastPhysicalKnobDegrees = 0.0f;
 
 // knob1's position after a small backlash - see the control-rate block.
@@ -740,6 +760,12 @@ const float GRAIN_LENGTH_SAMPLES = 2048.0f;
 const float PITCH_BYPASS_EPSILON = 0.001f;
 
 volatile float pitchRatio = 1.0f;   // written by loop(), read by the audio ISR
+
+// For time-stretch: when zero or more, the grains read at exactly this many
+// source samples per tick - a fixed pitch - whatever the step is, instead
+// of at pitchRatio times the step. -1 when not time-stretching. Written by
+// loop() each control tick.
+volatile float grainTapRate = -1.0f;
 volatile float grainOffset = 0.0f;  // ISR-owned; source samples behind nominal
 
 // Hann window, precomputed. At 50% overlap two Hann windows sum to exactly
@@ -968,7 +994,12 @@ AUDIO_HOT void audioCallback(timer_callback_args_t *args) {
       currentStep = step;
     }
     float p = pitchRatio;
-    bool shifting = __builtin_fabsf(p - 1.0f) >= PITCH_BYPASS_EPSILON;
+    float tapRate = grainTapRate;
+    bool stretching = tapRate >= 0.0f;
+    float stepSize = __builtin_fabsf(step);
+    bool shifting = stretching
+        ? __builtin_fabsf(tapRate - stepSize) >= PITCH_BYPASS_EPSILON * tapRate
+        : __builtin_fabsf(p - 1.0f) >= PITCH_BYPASS_EPSILON;
 
     Voice &active = voices[activeVoice];
 
@@ -981,10 +1012,14 @@ AUDIO_HOT void audioCallback(timer_callback_args_t *args) {
       lastGoodLeft = outLeft;
       lastGoodRight = outRight;
 
-      // Ramp the grain offset by (1 - pitchRatio) * |step| and wrap it into
-      // one grain - the wrap is the splice the crossfade exists to hide.
+      // Ramp the grain offset and wrap it into one grain - the wrap is the
+      // splice the crossfade exists to hide. The grains trail the cursor by
+      // the offset, so they read at |step| minus its rate of growth: at
+      // pitchRatio times the step, or at a fixed rate when time-stretching -
+      // which works even at a step of zero, where the grains keep playing in
+      // place (a freeze).
       if (shifting) {
-        float o = grainOffset + (1.0f - p) * fabsf(step);
+        float o = grainOffset + (stretching ? stepSize - tapRate : (1.0f - p) * stepSize);
         if (o >= GRAIN_LENGTH_SAMPLES) o -= GRAIN_LENGTH_SAMPLES;
         else if (o < 0.0f) o += GRAIN_LENGTH_SAMPLES;
         grainOffset = o;
@@ -1452,6 +1487,29 @@ bool isCurrentFile(const String &name) {
   return fileLoaded && name.equalsIgnoreCase(currentFilename);
 }
 
+// Turns the virtual speed dial by `delta` degrees and sets the speed from
+// it - knob1 in speed mode, knob2 (time-stretch) in pitch mode. The first
+// call after anything clears the anchor (a new file, SPEED:) anchors the
+// dial at speedAnchorRatio instead, ignoring the knob's absolute position
+// entirely - the whole point of relative control is that wherever the
+// real knob happens to be sitting doesn't matter.
+void turnSpeedDial(float delta) {
+  if (!speedKnobAnchored) {
+    speedKnobDegrees = angleForRatio(speedAnchorRatio) * TURNS_PER_SWEEP * 2.0f;
+    speedKnobAnchored = true;
+  } else {
+    speedKnobDegrees += delta;
+  }
+
+  float angle = knobAngle(speedKnobDegrees, TURNS_PER_SWEEP);
+  if (angle >= 0) {
+    float ratio = angleToSpeedRatio(angle);
+    lastKnownRatio = ratio;
+    if (ratio < minRatioSeen) minRatioSeen = ratio;
+    if (ratio > maxRatioSeen) maxRatioSeen = ratio;
+  }
+}
+
 // Speed and pitch back to their defaults, from the BLE RESET: command.
 // Each sets the live value directly, so it takes effect on the very next
 // audio tick, and also drops its virtual knob's anchor, so the control
@@ -1472,19 +1530,42 @@ void setSpeedRatio(float ratio) {
   lastKnownRatio = ratio;
   speedAnchorRatio = ratio;
   speedKnobAnchored = false;
+  if (pitchMode) holdPitch();  // as knob2's time-stretch does
+}
+
+// Below this speed the pitch you hear can't be worked out from the shift
+// (it's the shift times the speed), so the shift is left alone there.
+const float STRETCH_MIN_SPEED = 0.001f;
+
+// The pitch you hear, relative to the file's own: the shift times the speed.
+float perceivedPitch() {
+  float speed = fabsf(lastKnownRatio);
+  return (speed >= STRETCH_MIN_SPEED) ? pitchRatio * speed : pitchRatio;
+}
+
+// Makes heldPitch match the current speed and shift again, and the pitch
+// knob re-anchor there - after anything sets one of them directly.
+void syncHeldPitch() {
+  heldPitch = perceivedPitch();
+  pitchKnobAnchored = false;
+}
+
+// The other way round, for pitch mode: sets the shift so that the current
+// speed sounds at heldPitch.
+void holdPitch() {
+  float speed = fabsf(lastKnownRatio);
+  if (speed >= STRETCH_MIN_SPEED) pitchRatio = heldPitch / speed;
 }
 
 void resetPitchToUnity() {
   pitchRatio = 1.0f;
-  pitchAnchorRatio = 1.0f;
-  pitchKnobAnchored = false;
+  syncHeldPitch();
 }
 
-// PITCH:<ratio> - an exact pitch, re-anchoring the knob there.
+// PITCH:<ratio> - an exact pitch shift, re-anchoring the knob there.
 void setPitchRatio(float ratio) {
   pitchRatio = constrain(ratio, 1.0f / 32.0f, 32.0f);
-  pitchAnchorRatio = pitchRatio;
-  pitchKnobAnchored = false;
+  syncHeldPitch();
 }
 
 // Loads the first file on the card this demo can actually play. Returns
@@ -2457,12 +2538,14 @@ void endScrub() {
 // built, a moment's lag in a copy change), so the cursor always ends up
 // exactly where the knob says - N turns covers the same stretch of the
 // file every time.
-bool scrubControl(float &step) {
+// Reads knob2, and returns how far it has turned since the last call,
+// after the backlash - 0 at rest, and until it's calibrated. Used both for
+// scrubbing and, in pitch mode, for time-stretch.
+float readKnob2() {
   float angle = pot2.read();
-  if (angle < 0.0f || !fileLoaded) {
+  if (angle < 0.0f) {
     scrubPrevAngle = -1.0f;
-    if (scrubbing) endScrub();
-    return false;
+    return 0.0f;
   }
 
   if (scrubPrevAngle < 0.0f) {
@@ -2470,7 +2553,7 @@ bool scrubControl(float &step) {
     // at rest there.
     scrubPrevAngle = angle;
     endScrub();
-    return false;
+    return 0.0f;
   }
 
   // The short way round, across the 0/360 seam.
@@ -2481,10 +2564,21 @@ bool scrubControl(float &step) {
   scrubPhysicalDegrees += delta;
 
   float slack = scrubPhysicalDegrees - scrubKnobDegrees;
+  float moved = 0.0f;
   if (slack > SCRUB_BACKLASH_DEGREES) {
-    scrubKnobDegrees += slack - SCRUB_BACKLASH_DEGREES;
+    moved = slack - SCRUB_BACKLASH_DEGREES;
   } else if (slack < -SCRUB_BACKLASH_DEGREES) {
-    scrubKnobDegrees += slack + SCRUB_BACKLASH_DEGREES;
+    moved = slack + SCRUB_BACKLASH_DEGREES;
+  }
+  scrubKnobDegrees += moved;
+  return moved;
+}
+
+bool scrubControl(float &step) {
+  readKnob2();
+  if (scrubPrevAngle < 0.0f || !fileLoaded) {
+    if (scrubbing) endScrub();
+    return false;
   }
 
   // Movement is measured in clear steps from a resting point that's moved
@@ -3006,9 +3100,13 @@ void loop() {
       lastPhysicalKnobDegrees = knob1Degrees;
 
       if (pitchMode) {
+        // The knob sets the pitch you hear. It's only recomputed when the
+        // knob actually moves, so anchoring it somewhere its dial can't
+        // reach (5 octaves either way) doesn't change the sound by itself.
         if (!pitchKnobAnchored) {
-          pitchKnobDegrees = pitchKnobDegreesFor(pitchAnchorRatio);
+          pitchKnobDegrees = pitchKnobDegreesFor(heldPitch);
           pitchKnobAnchored = true;
+          delta = 0.0f;
         } else {
           pitchKnobDegrees += delta;
         }
@@ -3025,28 +3123,12 @@ void loop() {
           pitchKnobDegrees = PITCH_KNOB_SPAN_DEGREES;
         }
 
-        pitchRatio = angleToPitchRatio(
-            (pitchKnobDegrees / PITCH_KNOB_SPAN_DEGREES) * 360.0f);
+        if (delta != 0.0f) {
+          heldPitch = angleToPitchRatio((pitchKnobDegrees / PITCH_KNOB_SPAN_DEGREES) * 360.0f);
+          holdPitch();
+        }
       } else {
-        if (!speedKnobAnchored) {
-          // First calibration, or a reset just requested one (new file
-          // loaded): anchor the virtual knob at native (1.0x) speed right
-          // here, ignoring physicalNow's absolute position entirely - the
-          // whole point of relative control is that wherever the real
-          // knob happens to be sitting doesn't matter.
-          speedKnobDegrees = angleForRatio(speedAnchorRatio) * TURNS_PER_SWEEP * 2.0f;
-          speedKnobAnchored = true;
-        } else {
-          speedKnobDegrees += delta;
-        }
-
-        float angle = knobAngle(speedKnobDegrees, TURNS_PER_SWEEP);
-        if (angle >= 0) {
-          float ratio = angleToSpeedRatio(angle);
-          lastKnownRatio = ratio;
-          if (ratio < minRatioSeen) minRatioSeen = ratio;
-          if (ratio > maxRatioSeen) maxRatioSeen = ratio;
-        }
+        turnSpeedDial(delta);
       }
     }
     // else: pot not yet calibrated - lastKnownRatio keeps whatever it
@@ -3091,8 +3173,10 @@ void loop() {
         transportLatched = true;
       } else {
         pitchMode = !pitchMode;
-        Serial.print("Knob 1 now adjusts ");
-        Serial.println(pitchMode ? "PITCH" : "SPEED");
+        endScrub();
+        if (pitchMode) syncHeldPitch();
+        Serial.println(pitchMode ? "Knob 1 now sets PITCH, knob 2 stretches TIME (pitch held)"
+                                 : "Knob 1 now sets SPEED, knob 2 SCRUBS");
       }
     }
     if (touch2Now && !touch2WasTouched && transportLatched) transportLatched = false;
@@ -3115,8 +3199,24 @@ void loop() {
     // hand on the reel, and the transport waits underneath - when the knob
     // comes to rest, playback carries on from wherever it left the tape.
     float step;
-    bool scrubDriven = scrubControl(step);
+    bool scrubDriven = false;
+    if (pitchMode) {
+      // Time-stretch: knob2 turns the same speed dial knob1 does in speed
+      // mode, and the pitch you hear is held where knob1 set it.
+      float turned = readKnob2();
+      if (turned != 0.0f) {
+        turnSpeedDial(turned);
+        holdPitch();
+        transportRatio = transportRunning ? lastKnownRatio : 0.0f;
+      }
+    } else {
+      scrubDriven = scrubControl(step);
+    }
     if (!scrubDriven) step = transportRatio * rateFactor;
+
+    // While time-stretching, the grains read at the held pitch whatever the
+    // speed - see grainTapRate. Only while running: stopped is silent.
+    grainTapRate = (pitchMode && transportRunning) ? heldPitch * rateFactor : -1.0f;
 
     // Until the cached copies are built, high speeds are capped at
     // MAX_STEP_UNCACHED samples per tick through the highest ready copy (or
@@ -3149,7 +3249,15 @@ void loop() {
     if (fileLoaded && step != 0.0f &&
         millis() - levelChangeFailedMillis >= LEVEL_CHANGE_RETRY_MS) {
       uint8_t current = voices[activeVoice].level;
-      uint8_t target = chooseLevel(fabsf(step), current, ready);
+      // Time-stretching, the grains read at the held pitch while the cursor
+      // moves at the speed. A copy filtered for the speed would lose the
+      // treble once the pitch is brought back down, so choose by the grains'
+      // rate instead - as long as the cursor stays within the voice's
+      // MAX_VOICE_RATE through it (the level choice keeps a step of up to
+      // LEVEL_UP_STEP, so a quarter of the step keeps it within 4x that).
+      float levelRate = fabsf(step);
+      if (grainTapRate >= 0.0f) levelRate = fmaxf(grainTapRate, levelRate / 4.0f);
+      uint8_t target = chooseLevel(levelRate, current, ready);
       t = DWT->CYCCNT;
       if (target != current) startLevelChange(target);
       stageDone(STAGE_COPY_CHANGE, t);

@@ -15,14 +15,6 @@ Captured 2026-10-09, not designed yet. Several depend on each other: the
 general modes framework comes before modes 3-5 and the time-stretch knob, and
 per-file settings and the web UI's mode display both build on it.
 
-### Knobs and scrub
-
-- **Experiment: auto-tune scrub magnitude per file.** At load time, choose
-  the scrub scale so one full rotation covers a power-of-two fraction or
-  multiple of the file's length - e.g. 8, 4, 2, 1, 1/2, 1/4... of the file
-  per turn, so a short sample might pass 4x per rotation and a long one take
-  4+ rotations.
-
 ### Modes
 
 - **Generalize knob "modes".** Today touch1 toggles knob1 between speed and
@@ -58,15 +50,6 @@ per-file settings and the web UI's mode display both build on it.
 
 ## SDResampleDemo - known issues
 
-- **Scrub: override instead of add.** Scrub is currently summed onto knob1's
-  ratio, so forward playback partially cancels a backward scrub. Raising
-  `SCRUB_SCALE` outran the cancellation but did not remove it. Overriding
-  knob1 while `|scrub|` is above a threshold would remove it properly, and
-  would make the pause-deadband parking trick unnecessary.
-- **Scrub gain cap.** `scrubGain` is `max(1, |effective ratio|)` with no upper
-  limit, so at high speeds a small hand movement is a huge cursor jump. Left
-  uncapped deliberately rather than guessing a limit; revisit if it feels
-  unmanageable up there.
 - **Cache-build stalls.** While `MipCache` is building, a single build step
   can stall `loop()` for up to ~35ms on an SD write - over this project's
   10ms limit for control latency, so the knobs and pads feel it during a

@@ -550,6 +550,10 @@ float pitchKnobDegrees = 0.0f;
 bool pitchKnobAnchored = false;
 float lastPhysicalKnobDegrees = 0.0f;
 
+// knob1's position after a small backlash - see the control-rate block.
+float knob1Degrees = 0.0f;
+const float KNOB1_BACKLASH_DEGREES = 0.3f;
+
 // The ratio the speed knob re-anchors at the next time it finds no
 // baseline - native speed, except after a SPEED: command picks another.
 float speedAnchorRatio = 1.0f;
@@ -1301,7 +1305,11 @@ bool loadFile(const String &filename, String &errorOut) {
   // rather than waiting for the next control-rate tick to catch up, so
   // there's no gap where a stale ratio from the previous file applies.
   lastKnownRatio = 1.0f;
-  setStepNow(lastKnownRatio * rateFactor);
+  // Only moving if the transport is running. Starting at 1x regardless
+  // played a fragment of every file picked while stopped: the audio comes
+  // back on below, and cache.start() can take tens of milliseconds before
+  // the next control tick notices the transport is stopped.
+  setStepNow(transportRunning ? lastKnownRatio * rateFactor : 0.0f);
   resetVirtualKnobToNative();
 
   // Prime the buffer before resuming, same as the original boot-time
@@ -2463,7 +2471,7 @@ bool calStored[2] = {false, false};
 // instead of being diffed against the last one from before - otherwise
 // the knob's position when it finishes recalibrating would register as
 // one sudden turn, and jump the speed.
-bool knob1NeedsBaseline = false;
+bool knob1NeedsBaseline = true;  // and at boot, before knob1's first reading
 
 void loadKnobCalibration() {
   for (int i = 0; i < 2; i++) {
@@ -2842,16 +2850,27 @@ void loop() {
     t = DWT->CYCCNT;
     float physicalNow = knob1.read();
     if (physicalNow != -1.0f && knob1NeedsBaseline) {
+      knob1Degrees = physicalNow;
       lastPhysicalKnobDegrees = physicalNow;
       knob1NeedsBaseline = false;
     }
     if (physicalNow != -1.0f) {
+      // A small backlash, as on the scrub knob (see SCRUB_BACKLASH_DEGREES):
+      // the knob's reading jitters by a fraction of a degree at rest, which
+      // made the speed flicker between 1.00x and 0.9999x on the web page.
+      float slack = physicalNow - knob1Degrees;
+      if (slack > KNOB1_BACKLASH_DEGREES) {
+        knob1Degrees = physicalNow - KNOB1_BACKLASH_DEGREES;
+      } else if (slack < -KNOB1_BACKLASH_DEGREES) {
+        knob1Degrees = physicalNow + KNOB1_BACKLASH_DEGREES;
+      }
+
       // Whichever mode is active drives its own accumulator; the other
       // simply holds its value until selected again. lastPhysicalKnobDegrees
       // is shared and updated every tick either way, which is what makes a
       // mode switch seamless instead of jumpy.
-      float delta = physicalNow - lastPhysicalKnobDegrees;
-      lastPhysicalKnobDegrees = physicalNow;
+      float delta = knob1Degrees - lastPhysicalKnobDegrees;
+      lastPhysicalKnobDegrees = knob1Degrees;
 
       if (pitchMode) {
         if (!pitchKnobAnchored) {

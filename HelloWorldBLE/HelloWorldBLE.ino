@@ -54,8 +54,6 @@
     /dev when you reset it and comes back a moment later.
   - If an upload fails, double-tap the RST button to force the bootloader
     (DFU mode). The STAT LED fades slowly in and out to show it's waiting.
-
-  This example code is in the public domain.
 */
 
 #include <codelessBLEPeripheral.h>

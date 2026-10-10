@@ -124,8 +124,6 @@
       wrappers - they were never AT-aware themselves; only the module's
       own firmware parses AT syntax, and Binary mode is precisely what
       turns that parsing off).
-
-  This example code is in the public domain.
 */
 
 #include <RV112FF.h>

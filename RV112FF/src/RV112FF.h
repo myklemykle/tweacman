@@ -59,8 +59,6 @@
   actively being calibrated. Call getCalibration() and save its result
   deliberately - once calibration completes, on a button press, rate-
   limited - not on every read() or every time isCalibrated() is true.
-
-  This example code is in the public domain.
 */
 
 #ifndef RV112FF_h

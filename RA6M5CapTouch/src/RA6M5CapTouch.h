@@ -78,8 +78,6 @@
   conductive object left wired up looks like - scan() assumes the
   baseline itself has genuinely changed and force-recalibrates around
   the current reading instead of reporting touched forever.
-
-  This example code is in the public domain.
 */
 
 #ifndef RA6M5CapTouch_h

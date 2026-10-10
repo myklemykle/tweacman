@@ -16,8 +16,6 @@
 
   On any board other than an RA6M5, begin() does nothing, and this sketch
   still builds and runs - it just says so.
-
-  This example code is in the public domain.
 */
 
 #include <RA6M5AnalogTuning.h>

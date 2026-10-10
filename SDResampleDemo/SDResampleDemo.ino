@@ -346,8 +346,6 @@
        Check the card's cache/ folder follows along: the renamed file's
        folder renamed, the deleted file's gone, and the overwritten
        file's copies rebuilt (Serial says so) the next time it's cued.
-
-  This example code is in the public domain.
 */
 
 #include <RV112FF.h>

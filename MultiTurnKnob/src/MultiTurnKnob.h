@@ -38,8 +38,6 @@
   once there's an accumulated position rather than just a physical
   reading, "what does the current position mean" becomes an arbitrary
   choice again - same as resetting an Encoder's count.
-
-  This example code is in the public domain.
 */
 
 #ifndef MultiTurnKnob_h

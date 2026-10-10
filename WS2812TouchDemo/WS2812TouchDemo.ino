@@ -19,8 +19,6 @@
   see RA6M5CapTouch.h), D20 (touch1) and D21 (touch2) each to their own wire
   or touch pad - same as CapTouch's own SerialPlotterDemo. The RGB LED
   itself needs no wiring; it's onboard.
-
-  This example code is in the public domain.
 */
 
 #include <FastLED.h>

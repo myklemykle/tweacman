@@ -11,8 +11,8 @@
   either direction) genuinely interpolates new sample values rather than
   just repeating or stepping through existing ones. The pot sweeps from
   -MAX_RATIO smoothly through zero at the middle up to +MAX_RATIO;
-  negative plays the file backward. A second pot adds a tape-scrub
-  effect on top - see "Tape scrub" below. A phone/browser can also pick
+  negative plays the file backward. A second pot scrubs, like a hand
+  on the reel - see "Tape scrub" below. A phone/browser can also pick
   which file plays and watch the same live stats over BLE - see "BLE
   control" below.
 
@@ -91,21 +91,19 @@
   each file load and transport start, which pause the audio on purpose).
   It should stay at zero; if it climbs, something is blocking too long.
 
-  Tape scrub: the second pot's ROTATIONAL VELOCITY (not its position)
-  adds directly onto whatever the first pot already requests, rather
-  than replacing it - RV112FF already computes this itself as rpm(),
-  driven by each read() (see that library's header), so this needed no
-  new velocity-tracking code of its own. With the transport stopped (or
-  the first pot turned to zero), this alone drives playback, sounding like
-  manually scrubbing a reel of tape back and forth; layered on top of
-  ordinary forward/backward playback it adds a wow/flutter-style warble
-  instead; sitting still, rpm() reads 0 and it contributes nothing at
-  all - all three cases fall out of one plain sum (see the control-rate
-  block in loop()), no special-casing needed. SCRUB_SCALE (how much
-  speed-ratio contribution one RPM is worth) is tuned by ear - see its
-  own comment for the seconds-of-audio-per-turn
-  arithmetic, and for why scrubbing against ordinary forward playback
-  partly cancels itself.
+  Tape scrub: turning the second pot takes over the playback cursor
+  outright, like grabbing the reel - the transport waits underneath, and
+  when the knob has been still for SCRUB_RELEASE_MS (150ms) playback
+  carries on from wherever the knob left the tape. It works the same
+  whether the transport runs or not. The knob's change in angle, not its
+  speed, sets where the cursor should be, and the cursor is steered onto
+  that target - so the knob's position maps exactly onto the file, and a
+  small backlash (SCRUB_BACKLASH_DEGREES) keeps a resting knob silent
+  without losing any of a long turn. How much of the file a turn covers
+  is fitted to each file as it loads: about one second of audio, moved
+  to the nearest power-of-two fraction or multiple of the file's length,
+  so whole turns line up with the file's loop - see
+  SCRUB_SECONDS_PER_TURN and scrubControl().
 
   Relative speed control: the first pot is RELATIVE (like a DJ jog wheel
   or a DAW's jog control), not ABSOLUTE (like a normal volume knob, where
@@ -154,7 +152,7 @@
   file is a normal, reported failure, not a hang. The periodic stats line
   carries `RUN:0|1` alongside `SPD:`/`BUF:`/`UND:`, so a client can show
   whether the transport is running. `SPD:` is the effective ratio, so it
-  reads 0.00 while stopped and follows scrub while running; `REQ:` is the
+  reads 0.00 while stopped and follows the scrub knob while it's turning; `REQ:` is the
   speed knob's requested ratio, which survives being stopped, so a client
   can show what the transport *would* run at; `PIT:` is the pitch ratio,
   1.000 meaning unshifted; `LAT:0|1` is whether the transport is latched;
@@ -323,14 +321,15 @@
        make_format_test_wavs.py files at 1x and confirm they all sound
        the same - the same notes, at the same tempo - and that the stereo
        ones (t2_...) are an octave lower in the right ear.
-    7. With the transport stopped (pad released), twist the
-       second pot back and forth - confirm it sounds like manually
-       scrubbing tape (pitch/direction tracking the twist directly,
-       silent when you stop). Then set the first pot to some steady
-       forward or backward speed and twist the second pot again -
-       confirm it adds a warble on top rather than taking over
-       entirely, and that leaving it alone (not touching it) adds
-       nothing audible.
+    7. With the transport stopped (pad released), twist the second pot
+       back and forth - confirm it sounds like manually scrubbing tape
+       (pitch and direction tracking the twist, silent when you stop), and
+       that a knob left alone makes no sound at all. Serial says how much
+       of the file one turn covers ("Scrub: one turn = ..."); turn that
+       many turns and confirm you land back on the same sound. Then play
+       at some steady speed and twist it again: it takes over completely,
+       and playback carries on from where you left the tape once the knob
+       has been still for a moment.
     8. Confirm relative control: with the first pot sitting anywhere at
        all, load a file (power-on, or a fresh PLAY: over BLE) and
        confirm playback always starts at native (1.0x) speed regardless
@@ -587,6 +586,7 @@ MipCache cache;  // builds and tracks the current file's lower-rate copies - see
 volatile bool fileLoaded = false;
 String currentFilename = "NONE";
 float rateFactor = 1.0f;  // wav's native sample rate / 48000 - recomputed on every file load
+uint32_t fileFrames = 1;  // the WAV's length in frames, at its own rate - set on every file load
 uint32_t nativeRate = 0;  // the WAV's own sample rate, in Hz
 uint8_t fileChannels = 1; // 1 for mono, 2 for stereo
 
@@ -1197,6 +1197,7 @@ bool loadFile(const String &filename, String &errorOut) {
   v.levelScale = 1.0f;
   v.resampler.index = 0;
   v.resampler.frac = 0.0f;
+  endScrub();
   lastGoodLeft = lastGoodRight = 0;  // don't carry a stale frame into the new file
   grainOffset = 0.0f;
   // Per-file, not cumulative: the interesting number is how badly *this*
@@ -1209,6 +1210,8 @@ bool loadFile(const String &filename, String &errorOut) {
   v.ring.setChannels(fileChannels);
   voices[1].ring.setChannels(fileChannels);
   rateFactor = nativeRate / 48000.0f;
+  fileFrames = v.reader.totalFrames();
+  fitScrubToFile();
   // Every fresh sample starts at native speed, regardless of wherever
   // the (relative, not absolute - see resetVirtualKnobToNative()'s
   // comment) speed knob currently sits: set lastKnownRatio directly
@@ -1285,6 +1288,7 @@ void rewindToStart() {
   }
   v.resampler.index = 0;
   v.resampler.frac = 0.0f;
+  endScrub();
   lastGoodLeft = lastGoodRight = 0;  // don't carry a stale frame across the jump
   grainOffset = 0.0f;   // start the next grain cycle from the seam, not mid-crossfade
   // Same per-playback logic as loadFile(): the interesting figure is how
@@ -2162,54 +2166,196 @@ inline uint8_t rgbLevel(uint8_t percent) { return (uint8_t)((255 * percent) / 10
 unsigned long blinkPhaseStartMillis = 0;
 bool wasBlinking = false;
 
-// The second pot: a tape-scrub control, not a position control - no
-// MultiTurnKnob wrapper needed, since scrubbing only cares about how
-// fast the shaft is currently turning, not its accumulated position.
-// RV112FF already computes this itself (rpm(), driven by each read()
-// call) - see the control-rate block below for how it's used. The
-// default rpmSmoothTau (0.15s, tuned for rpm() as a secondary signal
-// behind a position control) read as sluggish "momentum" here, where
-// rpm() drives audio directly and in real time - confirmed live and
-// cut to a much snappier 0.02s, matching the position filter's own
-// smoothTau below it - going much lower risks audible at-rest jitter,
-// since a derivative can't be more trustworthy than the signal (here,
-// smoothed at that same 0.02s) it's derived from.
-RV112FF pot2(A4, A5, 0.02f, 0.15f, 0.02f);
+// The second pot: tape scrub. While it's being turned it takes over the
+// playback cursor outright, like a hand on the reel - see "Tape scrub" in
+// the header comment, and scrubControl() below.
+RV112FF pot2(A4, A5);
 
-// Maps pot2's RPM onto an equivalent contribution to currentStep.
+// -- Tape scrub -------------------------------------------------------------
+// How much of the file one turn of the scrub knob covers, before it's
+// fitted to the file: one second of audio. fitScrubToFile() then moves it
+// to the nearest power-of-two fraction or multiple of the file's length,
+// so that a whole number of turns - or of files per turn - lines up with
+// the file's loop. Nearest in the log domain, so that's never more than a
+// factor of the square root of 2 away from this: a 3-second file gets a
+// quarter of the file per turn (0.75s), a 1.4-second one the whole file,
+// a 3-minute one 1/128th of it (1.4s).
+const float SCRUB_SECONDS_PER_TURN = 1.0f;
+
+// How far the knob has to move from where it last came to rest to start a
+// scrub. A resting knob's reading jitters by a fraction of a degree, and
+// a scrub pauses the transport - so a threshold any tighter turns that
+// jitter into random dropouts in playback (found on the bench: a 0.3-degree
+// threshold, measured from wherever the last turn left off, triggered
+// constantly). The degree that starts a scrub still moves the cursor, so
+// nothing is lost; at one second per turn it's about 3ms of audio.
+const float SCRUB_START_DEGREES = 1.0f;
+
+// Once scrubbing, the cursor follows the knob through a much smaller
+// backlash, like the slack in a gear: it only moves once the knob has moved
+// this far past where it last turned round. That keeps the jitter of a
+// hand resting on the knob from nudging the cursor back and forth, heard
+// as "crumbs" of audio. Unlike a deadband on speed it loses nothing over a
+// long turn: four turns still moves the cursor four turns' worth, less one
+// backlash at each change of direction.
+const float SCRUB_BACKLASH_DEGREES = 0.3f;
+
+// How long the knob has to sit still before scrubbing hands the cursor
+// back to the transport. A real scrub pauses briefly at every change of
+// direction, so too short and playback lurches forward at each reversal;
+// too long and it's slow to resume. A starting point to tune by feel.
+const unsigned long SCRUB_RELEASE_MS = 150;
+
+// The cursor chases the knob with this time constant, in output ticks
+// (960 = 20ms) - the same smoothing the speed-based scrub this replaced
+// used. The knob's position arrives 100 times a second, in steps, and
+// following it any tighter is heard as a buzz at that rate.
+const float SCRUB_FOLLOW_TICKS = 960.0f;
+
+float scrubFramesPerDegree = 48000.0f / 360.0f;  // set per file by fitScrubToFile()
+bool scrubbing = false;             // whether the scrub knob owns the cursor right now
+float scrubPhysicalDegrees = 0.0f;  // pot2's position, accumulated across turns
+float scrubKnobDegrees = 0.0f;      // the same, after the backlash
+float scrubRestDegrees = 0.0f;      // where pot2 last came to rest (physical)
+float scrubAnchorDegrees = 0.0f;    // scrubKnobDegrees when it did
+double scrubAnchorFrames = 0.0;     // where the cursor was when a scrub started
+float scrubPrevAngle = -1.0f;       // pot2's last reading, or -1 if it had none
+unsigned long scrubLastMoveMillis = 0;
+
+// Set to 1 to print when each scrub starts and ends - handy for tuning
+// SCRUB_BACKLASH_DEGREES (a resting knob should never start one) and
+// SCRUB_RELEASE_MS.
+#define SCRUB_TRACE 0
+
+// Fits the scrub to a newly loaded file - see SCRUB_SECONDS_PER_TURN.
+void fitScrubToFile() {
+  float defaultFrames = SCRUB_SECONDS_PER_TURN * nativeRate;
+  int k = (int)lroundf(log2f((float)fileFrames / defaultFrames));
+  float framesPerTurn = ldexpf((float)fileFrames, -k);
+  scrubFramesPerDegree = framesPerTurn / 360.0f;
+
+  Serial.print("Scrub: one turn = ");
+  if (k >= 0) {
+    Serial.print("1/");
+    Serial.print(1L << k);
+    Serial.print(" of the file");
+  } else {
+    Serial.print(1L << -k);
+    Serial.print(" times through it");
+  }
+  Serial.print(" (");
+  Serial.print(framesPerTurn / nativeRate, 2);
+  Serial.println("s of audio).");
+}
+
+// Wraps a position in frames of the WAV into [0, fileFrames).
+double wrapToFile(double frames) {
+  double wrapped = fmod(frames, (double)fileFrames);
+  return (wrapped < 0.0) ? wrapped + fileFrames : wrapped;
+}
+
+// The playback cursor, in frames of the WAV, within [0, fileFrames). The
+// voice's own position is in its copy's units, so it's scaled back up.
+double cursorFrames() {
+  noInterrupts();
+  Voice &v = voices[activeVoice];
+  int32_t index = v.resampler.index;
+  float frac = v.resampler.frac;
+  uint8_t level = v.level;
+  uint32_t total = v.reader.totalFrames();
+  interrupts();
+  return wrapToFile(ldexp((double)fileOffsetFor(index, total) + frac, level));
+}
+
+// Hands the cursor back to the transport - also used when something else
+// moves the cursor (a rewind, a new file), so a scrub in progress doesn't
+// drag it back to where the knob had it. The knob's position now becomes
+// its resting point, which the next scrub has to move clearly away from.
+void endScrub() {
+#if SCRUB_TRACE
+  if (scrubbing) Serial.println("Scrub: released");
+#endif
+  scrubbing = false;
+  scrubRestDegrees = scrubPhysicalDegrees;
+  scrubAnchorDegrees = scrubKnobDegrees;
+}
+
+// Reads the scrub knob. Returns true while it owns the cursor, with the
+// step that moves the cursor toward where the knob has put it in `step`.
 //
-// The useful way to think about this is in seconds of audio per turn.
-// Position advances by `step` every output tick at 48000 ticks/s, and the
-// scrub contribution to step is rpm * SCRUB_SCALE, so one full revolution
-// displaces the cursor by 48000 * 60 * SCRUB_SCALE source samples - i.e.
-// 60 * SCRUB_SCALE seconds of a 48kHz file.
-//
-// The original 1/60 therefore bought exactly one second of audio per turn,
-// which is why scrubbing felt like it went nowhere: knob1 keeps playing
-// forward underneath (this is a sum, not an override), so at 1x on a
-// 44.1kHz file the forward motion eats 44100 samples/s while a turn only
-// yields 48000. The two cancel at about 0.92 turns per second, and any
-// gesture slower than that still drifts *forward* while sounding like it is
-// going backward.
-//
-// 1/15 gives four seconds per turn, so the cancellation point drops to
-// roughly a quarter turn per second and an ordinary half-turn flick moves a
-// couple of seconds of speech. Still a tuned-by-ear number - raise it for
-// coarser scrubbing, lower it for finer. Note it
-// scales the wow/flutter warble mode by the same factor, since that is the
-// same sum with knob1 left running.
-//
-// Since halved to 1/30 - two seconds per turn - once the knob's ADC noise
-// was fixed (see NOISE_DEBUGGING.md) and scrubbing became precise enough to
-// want finer control. The trade-off: the cancellation point against 1x
-// forward playback rises back to roughly half a turn per second.
-//
-// Halved again to 1/60 - one second per turn - since even 1/30 felt too
-// sensitive in use. That's back to the original value, so its old
-// complaint returns too: against 1x forward playback the cancellation
-// point is about one turn per second again. Overriding knob1 while
-// scrubbing, rather than adding to it, would remove that (an open item).
-const float SCRUB_SCALE = 1.0f / 60.0f;
+// The knob sets a target position in the file and the cursor is steered
+// onto it, rather than the knob setting a speed: steering corrects for
+// anything that holds the cursor back (the speed cap while copies are
+// built, a moment's lag in a copy change), so the cursor always ends up
+// exactly where the knob says - N turns covers the same stretch of the
+// file every time.
+bool scrubControl(float &step) {
+  float angle = pot2.read();
+  if (angle < 0.0f || !fileLoaded) {
+    scrubPrevAngle = -1.0f;
+    if (scrubbing) endScrub();
+    return false;
+  }
+
+  if (scrubPrevAngle < 0.0f) {
+    // First reading (at boot, or after RECAL): wherever the knob is, it's
+    // at rest there.
+    scrubPrevAngle = angle;
+    endScrub();
+    return false;
+  }
+
+  // The short way round, across the 0/360 seam.
+  float delta = angle - scrubPrevAngle;
+  if (delta > 180.0f) delta -= 360.0f;
+  if (delta < -180.0f) delta += 360.0f;
+  scrubPrevAngle = angle;
+  scrubPhysicalDegrees += delta;
+
+  float slack = scrubPhysicalDegrees - scrubKnobDegrees;
+  if (slack > SCRUB_BACKLASH_DEGREES) {
+    scrubKnobDegrees += slack - SCRUB_BACKLASH_DEGREES;
+  } else if (slack < -SCRUB_BACKLASH_DEGREES) {
+    scrubKnobDegrees += slack + SCRUB_BACKLASH_DEGREES;
+  }
+
+  // Movement is measured in clear steps from a resting point that's moved
+  // up each time, so the release timer below only restarts for real motion
+  // and not for jitter.
+  unsigned long now = millis();
+  if (fabsf(scrubPhysicalDegrees - scrubRestDegrees) > SCRUB_START_DEGREES) {
+    scrubRestDegrees = scrubPhysicalDegrees;
+    scrubLastMoveMillis = now;
+    if (!scrubbing) {
+      // A hand on the reel: start from wherever the tape is now.
+      scrubbing = true;
+      scrubAnchorFrames = cursorFrames();
+#if SCRUB_TRACE
+      Serial.println("Scrub: started");
+#endif
+    }
+  }
+  if (!scrubbing) return false;
+
+  if (now - scrubLastMoveMillis >= SCRUB_RELEASE_MS) {
+    endScrub();
+    return false;
+  }
+
+  // Where the knob has moved the tape to since the scrub started. Negated:
+  // confirmed live the un-reversed mapping scrubbed opposite the intuitive
+  // direction, same as knob1 originally did.
+  double scrubTarget = wrapToFile(
+      scrubAnchorFrames - (scrubKnobDegrees - scrubAnchorDegrees) * scrubFramesPerDegree);
+
+  // The short way round to the target, in case it lies across the loop
+  // point from the cursor.
+  double error = scrubTarget - cursorFrames();
+  if (error > fileFrames / 2.0) error -= fileFrames;
+  if (error < -(fileFrames / 2.0)) error += fileFrames;
+  step = (float)error / SCRUB_FOLLOW_TICKS;
+  return true;
+}
 
 // -- Knob calibration -----------------------------------------------------
 // RV112FF learns each pot's range by watching it turn, and reports nothing
@@ -2671,62 +2817,6 @@ void loop() {
     // already had (the native-speed passthrough default from setup()/
     // loadFile(), until pot1 calibrates for the first time).
 
-    // Tape-scrub: pot2's rotational velocity adds directly onto
-    // whatever knob1 already requests, rather than replacing it -
-    // with the transport stopped (or knob1 at zero) this alone
-    // drives playback, sounding like manually scrubbing a reel of
-    // tape; layered on top of ordinary forward/backward playback it
-    // adds a wow/flutter-style warble instead; sitting still, rpm() is
-    // 0 and it contributes nothing at all - no special-casing needed
-    // for any of those three cases, they all fall out of one sum.
-    pot2.read();  // drives pot2's own rpm() computation - see RV112FF.h
-    // Negated: confirmed live the un-reversed mapping scrubbed opposite
-    // the intuitive direction, same as knob1 originally did.
-    // Deadband, in RPM, below which the pot is considered to be at rest.
-    //
-    // pot2 runs a 0.02s rpmSmoothTau (see its declaration) so that scrubbing
-    // feels immediate, and the cost of that short a derivative window is
-    // at-rest jitter - exactly what that comment predicted. Measured on the
-    // bench with both pots calibrated and untouched, pot2's rpm() wandered
-    // up to +/-0.36, which is a step of +/-0.024 and creeps the cursor at
-    // roughly 1-2% of real-time speed: audible as very slow scrubbing while
-    // supposedly stopped.
-    //
-    // NOTE: this figure is sized to the ADC jitter as it stands today. If
-    // that jitter is ever reduced at its source (better filtering, settling
-    // time between channels, hardware changes), come back and re-tune this
-    // down - a deadband wider than the noise it exists to reject is pure
-    // lost sensitivity.
-    //
-    // 0.5 costs almost nothing in responsiveness: a gentle scrub of a
-    // quarter-turn per second is 15 RPM, so this is about 3% of an ordinary
-    // gesture, and the smallest deliberate movement is far above it.
-    //
-    // Subtracted rather than gated, so crossing the threshold ramps up from
-    // zero instead of jumping straight to full deadband width - a hard gate
-    // would make the quietest real scrub start with an audible lurch.
-    const float SCRUB_DEADBAND_RPM = 0.5f;
-
-    float rawRpm = pot2.isCalibrated() ? pot2.rpm() : 0.0f;
-    float scrubRpm = fabsf(rawRpm) - SCRUB_DEADBAND_RPM;
-    if (scrubRpm < 0.0f) scrubRpm = 0.0f;
-    float scrub = -copysignf(scrubRpm, rawRpm) * SCRUB_SCALE;
-
-    // Scale the scrub with playback speed, but never below 1x.
-    //
-    // A fixed scrub contribution is a shrinking fraction of the motion
-    // already happening: at 20x, a scrub worth +/-1 step perturbs the
-    // cursor by five percent and is essentially inaudible. Multiplying by
-    // the speed magnitude keeps it a constant *proportion* of whatever is
-    // playing, so the gesture feels the same at any speed - and it makes
-    // the turn rate needed to overcome forward playback speed-independent
-    // too, since both sides of the sum scale together.
-    //
-    // The floor at 1x is what stops this scaling *down*, and it is not
-    // optional: the primary tape-scrub case is the transport stopped,
-    // where the ratio is 0 - a bare multiply would there
-    // multiply the scrub by zero and disable the feature precisely where
-    // it matters most. Below 1x the scrub keeps its absolute feel.
     // Transport: touch pad 2 held means running, released means stopped.
     //
     // "Stopped" is implemented as a speed of zero rather than as a mode,
@@ -2737,8 +2827,8 @@ void loop() {
     // has an explicit "step == 0: paused - deliberately untouched" branch.
     // So stopping is just declining to add knob1's contribution to the sum.
     //
-    // Scrub deliberately survives, because it is a separate term: a stopped
-    // tape still moves when you turn the reel by hand.
+    // Scrub works whether the transport runs or not: a stopped tape still
+    // moves when you turn the reel by hand.
     // Transport, with a latch.
     //
     //   touch2 held                -> running, for as long as it is held
@@ -2785,16 +2875,11 @@ void loop() {
 
     float transportRatio = transportRunning ? lastKnownRatio : 0.0f;
 
-    // Scrub gain follows the *effective* ratio, not the knob's. Stopped with
-    // the knob parked at 20x would otherwise give 20x scrub sensitivity
-    // while nothing is playing, which is both twitchy and wrong for the
-    // metaphor - a hand on a stationary reel should feel the same whatever
-    // speed the deck would run at. Floored at 1x, so stopping never makes
-    // scrubbing less effective than it already was.
-    float speedMagnitude = fabsf(transportRatio);
-    float scrubGain = (speedMagnitude > 1.0f) ? speedMagnitude : 1.0f;
-
-    float step = transportRatio * rateFactor + scrub * scrubGain;
+    // While the scrub knob is moving it owns the cursor outright, like a
+    // hand on the reel, and the transport waits underneath - when the knob
+    // comes to rest, playback carries on from wherever it left the tape.
+    float step;
+    if (!scrubControl(step)) step = transportRatio * rateFactor;
 
     // Until the cached copies are built, high speeds are capped at
     // MAX_STEP_UNCACHED samples per tick through the highest ready copy (or

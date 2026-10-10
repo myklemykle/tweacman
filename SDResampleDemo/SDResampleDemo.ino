@@ -506,10 +506,12 @@ const float PITCH_OCTAVES_PER_TURN = 2.0f;
 // own - as far as the speed dial goes (1024x is 10 octaves). Nothing in the
 // signal path limits it: both grain taps trail the cursor by at most a
 // grain, whatever the pitch, so the buffer, the card and the CPU don't care.
-// What changes is the character: shifting far up reads fast and aliases,
-// and as the shift grows the grains splice faster, until the crossfade
-// seam is audible and it behaves like a ring modulator. That's a musical
-// effect rather than a malfunction, so the limit is taste.
+// What changes is the character: shifting far up moves most of the sound
+// above hearing (the copy is chosen to suit the grains' rate, so it's
+// filtered out rather than aliased - see levelRateFor()), and as the shift
+// grows the grains splice faster, until the crossfade seam is audible and
+// it behaves like a ring modulator. That's a musical effect rather than a
+// malfunction, so the limit is taste.
 const float PITCH_OCTAVE_LIMIT = 10.0f;
 
 // Retained from when touch1 gated a fast/slow sweep; touch1 is the mode
@@ -839,11 +841,12 @@ AUDIO_HOT inline bool readGrains(Voice &v, int32_t idx, float frac, float step, 
 // One voice's output for this tick, pitch-shifted or not.
 //
 // The pitch shifter's grain taps move through the copy at speed x pitch,
-// but they're read at full bandwidth regardless - shifting up can alias,
-// as it always has here. Band-limiting them properly would mean two
-// stretched-kernel reads a tick, each up to twice the cost of an ordinary
-// one - and the audio interrupt's budget is being kept free for other
-// processing. The shifter is a lo-fi effect with its own warble anyway.
+// but they're read at full bandwidth regardless. The copy is chosen to keep
+// that rate under about 2 samples per tick (see levelRateFor()), so only
+// the top octave can alias, between 1 and 2. Band-limiting them properly
+// would mean two stretched-kernel reads a tick, each up to twice the cost of
+// an ordinary one - and the audio interrupt's budget is being kept free for
+// other processing. The shifter is a lo-fi effect with its own warble anyway.
 AUDIO_HOT inline bool renderVoice(Voice &v, float step, float pitch, bool shifting,
                                   float out[2]) {
   int32_t idx = v.resampler.index;
@@ -1093,6 +1096,26 @@ uint8_t chooseLevel(float stepMagnitude, uint8_t current, uint8_t maxLevel) {
   uint8_t k = 0;
   while (k < maxLevel && stepMagnitude * ldexpf(1.0f, -(int)k) > LEVEL_UP_STEP) k++;
   return k;
+}
+
+// The rate to choose a copy by, for a step through the original file.
+//
+// Unshifted, that's just the step. But the pitch shifter's grains read at
+// their own rate - the step times pitchRatio, or grainTapRate when
+// time-stretching - and readGrains() doesn't low-pass them, so it's the copy
+// that has to: one filtered for the step alone would alias when the pitch is
+// shifted far up, and lose its treble when it's shifted far down. So choose
+// by the grains' rate instead - as long as the cursor stays within the
+// voice's MAX_VOICE_RATE through it (the level choice keeps a step of up to
+// LEVEL_UP_STEP, so a quarter of the step keeps it within 4x that).
+//
+// The same rule in both knob modes, so the same speed and pitch sound the
+// same in either: it used to apply only while time-stretching, and
+// switching modes at a large shift switched the aliasing on and off.
+float levelRateFor(float step) {
+  float s = fabsf(step);
+  float grains = (grainTapRate >= 0.0f) ? grainTapRate : s * pitchRatio;
+  return fmaxf(grains, s / 4.0f);
 }
 
 // Where voice `from` is right now, as a position in voice `to`'s copy.
@@ -1396,7 +1419,7 @@ bool loadFile(const String &filename, String &errorOut) {
 // be read fast enough to keep up while the change to the right copy was
 // being prepared.
 void rewindToStart() {
-  uint8_t level = chooseLevel(fabsf(lastKnownRatio * rateFactor), 0, readyLevels());
+  uint8_t level = chooseLevel(levelRateFor(lastKnownRatio * rateFactor), 0, readyLevels());
 
   audioTimer.disable_overflow_irq();
 
@@ -3188,15 +3211,8 @@ void loop() {
     if (fileLoaded && step != 0.0f &&
         millis() - levelChangeFailedMillis >= LEVEL_CHANGE_RETRY_MS) {
       uint8_t current = voices[activeVoice].level;
-      // Time-stretching, the grains read at the held pitch while the cursor
-      // moves at the speed. A copy filtered for the speed would lose the
-      // treble once the pitch is brought back down, so choose by the grains'
-      // rate instead - as long as the cursor stays within the voice's
-      // MAX_VOICE_RATE through it (the level choice keeps a step of up to
-      // LEVEL_UP_STEP, so a quarter of the step keeps it within 4x that).
-      float levelRate = fabsf(step);
-      if (grainTapRate >= 0.0f) levelRate = fmaxf(grainTapRate, levelRate / 4.0f);
-      uint8_t target = chooseLevel(levelRate, current, ready);
+      // By the grains' rate when the pitch is shifted - see levelRateFor().
+      uint8_t target = chooseLevel(levelRateFor(step), current, ready);
       t = DWT->CYCCNT;
       if (target != current) startLevelChange(target);
       stageDone(STAGE_COPY_CHANGE, t);

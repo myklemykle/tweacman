@@ -631,13 +631,21 @@ Voice voices[2];
 // Which voice is playing. loop() changes it only with interrupts masked.
 volatile uint8_t activeVoice = 0;
 
-// Written by loop() at control rate, read by the audio interrupt every
-// tick - a plain float read/write is atomic on this 32-bit core, the
-// same "no lock needed for a single scalar" case AudioKnobsDemo's
-// freq/gain pointers rely on (see RingBuffer.h's comment for why the
-// ring buffer itself is a different, larger problem that does need
-// real atomics).
+// The step the audio interrupt is using right now, in samples of the
+// original file per output tick. loop() works out a new step 100 times a
+// second, at control rate. While the scrub knob is driving, the interrupt
+// glides to each new step in a straight line over the next control
+// interval rather than jumping: targetStep is where it's headed and
+// stepSlope how far it moves each tick. Jumping made a scrub a staircase of
+// tiny pitch steps a hundred times a second, heard as a warble. The glide
+// costs at most one control interval (10ms, about 5ms on average) before a
+// change fully arrives - noticeable as lag on the speed knob, which didn't
+// warble to begin with, so its steps still jump. Set through rampStepTo()
+// or setStepNow(), never directly, so the three always agree.
 volatile float currentStep = 1.0f;
+volatile float targetStep = 1.0f;
+volatile float stepSlope = 0.0f;
+const float STEP_RAMP_TICKS = 480.0f;  // one control interval, CONTROL_INTERVAL, at 48kHz
 volatile int16_t lastGoodLeft = 0;   // the last frame played, held through an underrun
 volatile int16_t lastGoodRight = 0;
 
@@ -880,6 +888,25 @@ volatile uint32_t isrCyclesMax = 0;  // since the last status line
 volatile uint32_t isrCyclesSum = 0;
 volatile uint32_t isrCount = 0;
 
+// Starts the audio interrupt gliding from its current step to `target`
+// over the next control interval - see currentStep.
+void rampStepTo(float target) {
+  noInterrupts();
+  targetStep = target;
+  stepSlope = (target - currentStep) / STEP_RAMP_TICKS;
+  if (stepSlope == 0.0f) currentStep = target;  // no glide would ever get there
+  interrupts();
+}
+
+// Jumps straight to a step, with no glide - for the speed knob, and for a
+// new file, where there's nothing to glide from.
+void setStepNow(float step) {
+  noInterrupts();
+  currentStep = targetStep = step;
+  stepSlope = 0.0f;
+  interrupts();
+}
+
 AUDIO_HOT void audioCallback(timer_callback_args_t *args) {
   uint32_t tickStart = DWT->CYCCNT;
   audioTicks++;
@@ -896,7 +923,14 @@ AUDIO_HOT void audioCallback(timer_callback_args_t *args) {
     outLeft = lastGoodLeft;
     outRight = lastGoodRight;
   } else {
+    // Glide toward loop()'s latest step - see currentStep.
     float step = currentStep;
+    float target = targetStep;
+    if (step != target) {
+      step += stepSlope;
+      if ((stepSlope > 0.0f) ? (step > target) : (step < target)) step = target;
+      currentStep = step;
+    }
     float p = pitchRatio;
     bool shifting = __builtin_fabsf(p - 1.0f) >= PITCH_BYPASS_EPSILON;
 
@@ -1092,6 +1126,17 @@ void startLevelChange(uint8_t target) {
     return;
   }
 
+  // Arrive at the new step now rather than gliding to it (see currentStep),
+  // before priming: the new copy is primed only so far around where the
+  // cursor will be, which assumes the cursor moves at the speed the copy
+  // was chosen for while it's read. Gliding down from 200x instead carried
+  // it through several more loops of a short file meanwhile, far from the
+  // primed stretch, and playback never recovered.
+  noInterrupts();
+  currentStep = targetStep;
+  stepSlope = 0.0f;
+  interrupts();
+
   int32_t idx;
   float frac;
   positionInCopy(playing, incoming, idx, frac);
@@ -1218,7 +1263,7 @@ bool loadFile(const String &filename, String &errorOut) {
   // rather than waiting for the next control-rate tick to catch up, so
   // there's no gap where a stale ratio from the previous file applies.
   lastKnownRatio = 1.0f;
-  currentStep = lastKnownRatio * rateFactor;
+  setStepNow(lastKnownRatio * rateFactor);
   resetVirtualKnobToNative();
 
   // Prime the buffer before resuming, same as the original boot-time
@@ -2879,7 +2924,8 @@ void loop() {
     // hand on the reel, and the transport waits underneath - when the knob
     // comes to rest, playback carries on from wherever it left the tape.
     float step;
-    if (!scrubControl(step)) step = transportRatio * rateFactor;
+    bool scrubDriven = scrubControl(step);
+    if (!scrubDriven) step = transportRatio * rateFactor;
 
     // Until the cached copies are built, high speeds are capped at
     // MAX_STEP_UNCACHED samples per tick through the highest ready copy (or
@@ -2897,7 +2943,12 @@ void loop() {
       float cap = fmaxf(ldexpf(MAX_STEP_UNCACHED, ready), rateFactor);
       if (fabsf(step) > cap) step = copysignf(cap, step);
     }
-    currentStep = step;
+    // Glide only the scrub's steps - see currentStep.
+    if (scrubDriven) {
+      rampStepTo(step);
+    } else {
+      setStepNow(step);
+    }
     stageDone(STAGE_CONTROL, t);
 
     // Move to a different copy if this speed calls for one. Not while

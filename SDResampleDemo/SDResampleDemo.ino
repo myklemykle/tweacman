@@ -107,21 +107,30 @@
 
   Relative speed control: the first pot is RELATIVE (like a DJ jog wheel
   or a DAW's jog control), not ABSOLUTE (like a normal volume knob, where
-  a given shaft position always means the same value). Playback speed
-  always starts at native (1.0x) on boot and on every file switch,
-  regardless of wherever the physical pot happens to be sitting - only
-  turning the pot moves speed away from 1.0x, and by however much you
-  turn it, not to wherever the pot's absolute position would otherwise
-  map. This matters because the pot has no mechanical center detent or
-  home position (see RV112FF.h - it's an endless-rotation part with no
-  absolute "zero" a hobbyist could return it to), so an absolute mapping
-  would make "start every file at native speed" impossible to hit
-  reliably by hand. See angleForRatio()/resetVirtualKnobToNative() and
+  a given shaft position always means the same value). Each file starts
+  at its own saved speed - native (1.0x) for a file played for the first
+  time, see "Per-file settings" below - regardless of wherever the
+  physical pot happens to be sitting; only turning the pot moves speed
+  from there, and by however much you turn it, not to wherever the pot's
+  absolute position would otherwise map. This matters because the pot
+  has no mechanical center detent or home position (see RV112FF.h - it's
+  an endless-rotation part with no absolute "zero" a hobbyist could
+  return it to), so an absolute mapping would make "start every file at
+  native speed" impossible to hit reliably by hand. See angleForRatio()/resetVirtualKnobToNative() and
   the control-rate block in loop() for the implementation - a small
   virtual position that starts anchored at native speed and accumulates
   the pot's own physical deltas from then on, the same idea as a
   relative/incremental encoder even though the underlying sensor is an
   absolute one.
+
+  Per-file settings: each WAV keeps its own speed and pitch, in a small
+  text file under the card's settings/ folder (see FileSettings.h), so
+  picking it again - or rebooting - brings them back. They're saved two
+  seconds after the last change, and at once when another file is picked.
+  The same folder remembers which file was cued, and the board cues it
+  again at boot instead of the first file on the card. Settings follow a
+  file when it's renamed, go when it's deleted, and survive uploading a
+  new version of it.
 
   Underrun policy: if the ring buffer can't supply what the resampler
   needs, the DAC ISR holds the last good sample rather than dropping to
@@ -331,9 +340,9 @@
        and playback carries on from where you left the tape once the knob
        has been still for a moment.
     8. Confirm relative control: with the first pot sitting anywhere at
-       all, load a file (power-on, or a fresh PLAY: over BLE) and
-       confirm playback always starts at native (1.0x) speed regardless
-       of the pot's physical position. Then turn the pot a small amount
+       all, load a file that has never been played and confirm playback
+       starts at native (1.0x) speed regardless of the pot's physical
+       position. Then turn the pot a small amount
        and confirm speed changes by a correspondingly small amount from
        wherever it just was - not by jumping to whatever an absolute
        mapping of the pot's new position would imply.
@@ -355,6 +364,12 @@
        then play and stop - Serial reports each calibration saved. Reset
        again: Serial says both were loaded, and the knobs respond at once.
        CAL shows the saved ranges alongside the live ones.
+    12. Per-file settings: set a file's speed and pitch with the knobs,
+       wait two seconds (Serial says "Settings saved"), pick another file
+       and then the first again - its speed and pitch come back. Reboot:
+       the same file is cued, with the same settings. In pitch mode, turn
+       knob 1 and confirm pitch carries on from the restored value rather
+       than jumping back to unshifted.
 */
 
 #include <RV112FF.h>
@@ -372,6 +387,7 @@
 #include "Resampler.h"
 #include "WavReader.h"
 #include "MipCache.h"
+#include "FileSettings.h"
 #include "Voice.h"
 #include "SincInterpolator.h"
 #include <utility>  // for std::move in loadFile()
@@ -505,6 +521,19 @@ float angleToPitchRatio(float dialAngle) {
   return powf(2.0f, copysignf(scaledT * PITCH_OCTAVE_RANGE, t));
 }
 
+// Inverse of angleToPitchRatio(), in the pitch knob's accumulated degrees
+// along its whole dial - where the knob has to sit for a given pitch, so it
+// can re-anchor there. Unity is the middle of the dial.
+float pitchKnobDegreesFor(float ratio) {
+  float octaves = log2f(ratio);
+  float scaledT = fminf(fabsf(octaves) / PITCH_OCTAVE_RANGE, 1.0f);
+  float t = (octaves == 0.0f)
+                ? 0.0f
+                : copysignf(PITCH_DEADBAND_T + scaledT * (1.0f - PITCH_DEADBAND_T), octaves);
+  float dialAngle = (1.0f - t) * 180.0f;
+  return dialAngle / 360.0f * PITCH_KNOB_SPAN_DEGREES;
+}
+
 // Retained from when touch1 gated a fast/slow sweep; touch1 is the mode
 // button now, so one rate serves both modes.
 const float TURNS_PER_SWEEP = 2.0f;
@@ -548,6 +577,9 @@ float speedKnobDegrees = 0.0f;
 bool speedKnobAnchored = false;
 float pitchKnobDegrees = 0.0f;
 bool pitchKnobAnchored = false;
+// The pitch the pitch knob re-anchors at - unity, except after a PITCH:
+// command or a file's saved settings pick another.
+float pitchAnchorRatio = 1.0f;
 float lastPhysicalKnobDegrees = 0.0f;
 
 // knob1's position after a small backlash - see the control-rate block.
@@ -1271,6 +1303,8 @@ bool loadFile(const String &filename, String &errorOut) {
     return false;
   }
 
+  flushSettings();  // the outgoing file's, before it's replaced
+
   audioTimer.disable_overflow_irq();
 
   // Every file starts on its original WAV, in voice 0; the other voice is
@@ -1299,18 +1333,17 @@ bool loadFile(const String &filename, String &errorOut) {
   rateFactor = nativeRate / 48000.0f;
   fileFrames = v.reader.totalFrames();
   fitScrubToFile();
-  // Every fresh sample starts at native speed, regardless of wherever
-  // the (relative, not absolute - see resetVirtualKnobToNative()'s
-  // comment) speed knob currently sits: set lastKnownRatio directly
-  // rather than waiting for the next control-rate tick to catch up, so
-  // there's no gap where a stale ratio from the previous file applies.
-  lastKnownRatio = 1.0f;
+  // Each file starts at its own saved speed and pitch (native speed and
+  // unshifted if it has none), regardless of wherever the (relative, not
+  // absolute - see resetVirtualKnobToNative()'s comment) knobs currently
+  // sit: set directly rather than waiting for the next control-rate tick to
+  // catch up, so there's no gap where the previous file's settings apply.
+  applySettings(FileSettings::load(filename));
   // Only moving if the transport is running. Starting at 1x regardless
   // played a fragment of every file picked while stopped: the audio comes
   // back on below, and cache.start() can take tens of milliseconds before
   // the next control tick notices the transport is stopped.
   setStepNow(transportRunning ? lastKnownRatio * rateFactor : 0.0f);
-  resetVirtualKnobToNative();
 
   // Prime the buffer before resuming, same as the original boot-time
   // pre-fill, so playback doesn't wake into an instant underrun. Always
@@ -1331,6 +1364,7 @@ bool loadFile(const String &filename, String &errorOut) {
 
   currentFilename = filename;
   fileLoaded = true;
+  rememberCurrentFile();
   Serial.print("Loaded ");
   Serial.print(filename);
   Serial.print(": ");
@@ -1401,6 +1435,7 @@ void rewindToStart() {
 // Also stops building its cached copies, since the builder holds the WAV
 // and the copy in progress open too.
 void unloadFile() {
+  flushSettings();
   audioTimer.disable_overflow_irq();
   fileLoaded = false;
   for (Voice &v : voices) {
@@ -1441,11 +1476,49 @@ void setSpeedRatio(float ratio) {
 
 void resetPitchToUnity() {
   pitchRatio = 1.0f;
+  pitchAnchorRatio = 1.0f;
+  pitchKnobAnchored = false;
+}
+
+// PITCH:<ratio> - an exact pitch, re-anchoring the knob there.
+void setPitchRatio(float ratio) {
+  pitchRatio = constrain(ratio, 1.0f / 32.0f, 32.0f);
+  pitchAnchorRatio = pitchRatio;
   pitchKnobAnchored = false;
 }
 
 // Loads the first file on the card this demo can actually play. Returns
 // whether anything was cued. See the call site in setup() for why.
+// Remembers which file is cued, so a reboot comes back to it (see
+// cueRememberedFile()). Written only when it changes.
+String rememberedFile;
+
+void rememberCurrentFile() {
+  if (currentFilename == rememberedFile) return;
+  FileSettings::saveCurrentName(currentFilename);
+  rememberedFile = currentFilename;
+}
+
+// At boot: cues the file that was cued last time, if it's still on the
+// card and plays - otherwise the first playable one, as before.
+bool cueRememberedFile() {
+  rememberedFile = FileSettings::loadCurrentName();
+  if (rememberedFile.length() > 0) {
+    String err;
+    if (loadFile(rememberedFile, err)) {
+      Serial.print("Cued ");
+      Serial.print(rememberedFile);
+      Serial.println(", the file cued last time");
+      return true;
+    }
+    Serial.print("Couldn't cue ");
+    Serial.print(rememberedFile);
+    Serial.print(", the file cued last time - ");
+    Serial.println(err);
+  }
+  return cueFirstPlayableFile();
+}
+
 bool cueFirstPlayableFile() {
   DIR *dir = opendir("/sd");
   if (!dir) {
@@ -1804,6 +1877,9 @@ void finishUpload() {
   if (wasCurrent) unloadFile();
   String dest = "/sd/" + uploadName;
   remove(dest.c_str());  // fails harmlessly when this is a new name
+  // Its saved settings are kept, though: a new version of the same file is
+  // most likely the same sample, re-edited.
+  //
   // Any cached copies were made from the old version. Removing them here,
   // rather than leaving the fingerprint check to notice, means a stale cache
   // can't outlive the file it was made from even briefly.
@@ -1903,6 +1979,7 @@ void renameOnCard(const String &args) {
     // The audio hasn't changed, so its cached copies move with it rather
     // than being rebuilt under the new name.
     MipCache::renameFor(from, to);
+    FileSettings::renameFor(from, to);
     blePrintLine("RENAMED:" + from + "/" + to);
   } else {
     blePrintLine("ERR:" + from + ":rename failed");
@@ -1937,6 +2014,7 @@ void deleteFromCard(const String &nameArg) {
 
   if (remove(("/sd/" + name).c_str()) == 0) {
     MipCache::removeFor(name);
+    FileSettings::removeFor(name);
     Serial.print("Deleted ");
     Serial.println(name);
     blePrintLine("DELETED:" + name);
@@ -1991,10 +2069,9 @@ void handleBLECommand(String line) {
   } else if (line.startsWith("SPEED:")) {
     setSpeedRatio(line.substring(6).toFloat());
   } else if (line.startsWith("PITCH:")) {
-    // Like SPEED:, an exact pitch ratio for testing - the knob takes over
-    // again the next time it's turned in pitch mode.
-    pitchRatio = constrain(line.substring(6).toFloat(), 1.0f / 32.0f, 32.0f);
-    pitchKnobAnchored = false;
+    // Like SPEED:, an exact pitch ratio for testing - the knob carries on
+    // from there the next time it's turned in pitch mode.
+    setPitchRatio(line.substring(6).toFloat());
   } else if (line == "RESET:PITCH") {
     resetPitchToUnity();
   } else if (line.startsWith("PUT:")) {
@@ -2547,6 +2624,61 @@ void printKnobCalibration() {
   }
 }
 
+// -- Per-file settings -------------------------------------------------------
+// Each WAV keeps its own speed and pitch on the card (see FileSettings.h):
+// picking a file again, or rebooting, brings them back. They're saved a
+// couple of seconds after the last change rather than on every tick of a
+// knob - an SD write can pause loop() for tens of milliseconds - and at
+// once when the file is switched away from.
+const unsigned long SETTINGS_SAVE_DELAY_MS = 2000;
+FileSettings savedSettings;  // what's on the card for the current file
+FileSettings seenSettings;   // the settings as of the last change
+unsigned long settingsChangedMillis = 0;
+
+FileSettings currentSettings() {
+  FileSettings s;
+  s.speed = lastKnownRatio;
+  s.pitch = pitchRatio;
+  return s;
+}
+
+// Makes a file's settings the live ones. Both knobs carry on from them the
+// next time they're turned, the way they do after SPEED: and PITCH:.
+void applySettings(const FileSettings &s) {
+  lastKnownRatio = copysignf(fminf(fabsf(s.speed), MAX_RATIO), s.speed);
+  speedAnchorRatio = lastKnownRatio;
+  speedKnobAnchored = false;
+  setPitchRatio(s.pitch);
+  savedSettings = seenSettings = currentSettings();
+}
+
+// Writes the current file's settings now, if they've changed since the
+// last save. Called before the file goes away, and by trackSettings().
+void flushSettings() {
+  if (!fileLoaded) return;
+  FileSettings now = currentSettings();
+  if (now == savedSettings) return;
+  if (now.save(currentFilename)) {
+    savedSettings = seenSettings = now;
+    Serial.print("Settings saved for ");
+    Serial.println(currentFilename);
+  }
+}
+
+// Called each control tick: saves once the settings have sat unchanged
+// for SETTINGS_SAVE_DELAY_MS. Not during an upload, whose flow control
+// needs loop() to keep answering promptly - it just waits until after.
+void trackSettings() {
+  FileSettings now = currentSettings();
+  if (now != seenSettings) {
+    seenSettings = now;
+    settingsChangedMillis = millis();
+  } else if (now != savedSettings && !uploadInProgress() &&
+             millis() - settingsChangedMillis >= SETTINGS_SAVE_DELAY_MS) {
+    flushSettings();
+  }
+}
+
 void forgetKnobCalibration() {
   RV112FFCalibration blank = {};  // magic 0, which setCalibration() refuses
   for (int i = 0; i < 2; i++) {
@@ -2705,6 +2837,7 @@ void setup() {
   // Clear out cached copies of files that are gone - deleted or renamed
   // from a computer, say, rather than through the web page.
   MipCache::removeOrphans();
+  FileSettings::removeOrphans();
 
   // Cue the first file the demo can actually play, so the board is usable
   // standing on its own - hold the transport pad and it makes a sound, with
@@ -2718,7 +2851,7 @@ void setup() {
   // the transport stopped, step is 0 and loop()'s refill takes its explicit
   // paused branch, so nothing touches the card until playback actually
   // starts. And it all happens long before any BLE connection exists.
-  cueFirstPlayableFile();
+  cueRememberedFile();
 
   // Open and start both DAC channels through the normal Arduino path
   // once, then let the audio interrupt write the data register
@@ -2874,7 +3007,7 @@ void loop() {
 
       if (pitchMode) {
         if (!pitchKnobAnchored) {
-          pitchKnobDegrees = PITCH_KNOB_SPAN_DEGREES * 0.5f;  // unity, mid-dial
+          pitchKnobDegrees = pitchKnobDegreesFor(pitchAnchorRatio);
           pitchKnobAnchored = true;
         } else {
           pitchKnobDegrees += delta;
@@ -3007,6 +3140,7 @@ void loop() {
     } else {
       setStepNow(step);
     }
+    trackSettings();
     stageDone(STAGE_CONTROL, t);
 
     // Move to a different copy if this speed calls for one. Not while
@@ -3082,7 +3216,9 @@ void loop() {
     } else {
       Serial.print("n/a");  // pot wasn't calibrated during this window
     }
-    Serial.print(")  buffer ");
+    Serial.print(")  pitch ");
+    Serial.print(pitchRatio, 3);
+    Serial.print("  buffer ");
     Serial.print(fillPercent, 0);
     Serial.print("%  underruns ");
     Serial.print(underrunTicks);

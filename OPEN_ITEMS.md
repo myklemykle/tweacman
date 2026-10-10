@@ -13,7 +13,9 @@ and touch noise fixes is in `NOISE_DEBUGGING.md`.
 
 Captured 2026-10-09, not designed yet. Several depend on each other: the
 general modes framework comes before modes 3-5 and the time-stretch knob, and
-per-file settings and the web UI's mode display both build on it.
+the web UI's mode display builds on it. Per-file settings exist (speed and
+pitch, see `FileSettings.h`); each new mode's parameters should be added
+to them.
 
 ### Modes
 
@@ -30,8 +32,6 @@ per-file settings and the web UI's mode display both build on it.
 - **Mode 4: digital feedback echo** - delay time and feedback/volume.
 - **Mode 5: filter on the output** - low/band/high-pass, with cutoff(s) and
   width/Q.
-- **Per-file settings.** Save every audio setting specific to a file on the
-  card, so they come back when the file is reloaded and after a reboot.
 
 ### Web UI (`web/wav-remote.html`)
 
@@ -44,7 +44,8 @@ per-file settings and the web UI's mode display both build on it.
 - **Show the current mode.** Probably two tiles per mode showing its
   parameters, with the current mode highlighted.
 - **One Reset button** for all knob tweaks on the current file, replacing
-  today's separate speed and pitch resets. Pairs with per-file settings.
+  today's separate speed and pitch resets - i.e. back to the defaults, and
+  saved that way in its per-file settings.
 - **Normalize and compress recordings.** Audio recorded on the phone comes
   out too quiet.
 

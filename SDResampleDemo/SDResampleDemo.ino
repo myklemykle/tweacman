@@ -224,9 +224,9 @@
   (any pitch shift stays a ratio on top), and knob2 scrubs. In pitch mode
   knob1 sets the pitch you hear and knob2 stretches time - see below.
   Switching never changes the sound by itself. Pitch is saved per file, like
-  speed (see "Per-file settings"). Range is PITCH_OCTAVE_RANGE octaves either
-  way, and the pitch dial parks at its extremes rather than wrapping round to
-  the opposite one - unlike the speed dial, which wraps deliberately. Speed
+  speed (see "Per-file settings"). The pitch knob is relative, at
+  PITCH_OCTAVES_PER_TURN octaves per turn from wherever the pitch is, out to
+  PITCH_OCTAVE_LIMIT octaves either way, where it stops. Speed
   and pitch are genuinely independent: the nominal playback position still
   advances at the speed ratio alone - which is what the SD refill is built
   around - while a two-tap granular shifter reads around it at speed * pitch.
@@ -386,7 +386,9 @@
     13. Time-stretch: play a file, switch to pitch mode (D20), and turn
        knob 2 - the tempo changes and the pitch doesn't. Through zero it
        freezes into a granular drone, and past it plays backward, still at
-       the same pitch. Turn knob 1 meanwhile: pitch moves, tempo doesn't.
+       the same pitch. Turn knob 1 meanwhile: pitch moves, tempo doesn't,
+       at two octaves per turn from wherever it is - even at hundreds of
+       times real speed, where the pitch you hear starts octaves up.
        Switch back to speed mode: nothing changes until a knob is turned.
 */
 
@@ -491,66 +493,24 @@ float angleForRatio(float ratio) {
   return (1.0f - copysignf(t, ratio)) * 180.0f;
 }
 
-// Maps the same [0,360) knob angle onto a pitch ratio, one octave either
-// way, with the same direction sense and the same exponential feel as the
-// speed mapping - exponential in ratio means equal rotation buys equal
-// musical intervals, which is the only mapping that feels right for pitch.
-// The deadband exists so unity is findable by hand rather than being an
-// infinitely thin point on the dial.
-const float PITCH_DEADBAND_T = 0.02f;
+// The pitch knob is relative, like the speed and scrub knobs: each turn
+// moves the pitch you hear by PITCH_OCTAVES_PER_TURN octaves from wherever
+// it is, in whatever range. It used to be a dial covering 5 octaves either
+// side of the file's own pitch, at one octave per turn - but at high speeds
+// the pitch you hear is far outside that (200x is 7.6 octaves up), so the
+// dial anchored at its end, snapped there on the first turn, and took many
+// turns to come back.
+const float PITCH_OCTAVES_PER_TURN = 2.0f;
 
-// How far the shift goes, in octaves either side of unity, and how much
-// physical knob a single octave costs. Expressed this way round because
-// these are the two numbers worth tuning by ear - everything else is derived.
-//
-// On range: nothing in the signal path limits this. Both taps read a fixed
-// GRAIN_LENGTH_SAMPLES behind the nominal position no matter what the ratio
-// is, so the buffer margin does not care; the nominal position still
-// advances at the speed ratio alone, so the SD bandwidth does not care; and
-// it is two taps either way, so the CPU does not care. What changes with
-// range is only the *character*: shifting up reads faster and aliases (past
-// a read rate of about 2x, high frequencies fold down and go crunchy), and
-// the grain rate rises as |1 - pitchRatio| grows, so at wide settings the
-// crossfade seam climbs into the audible band and the shifter starts to
-// behave like a ring modulator. At +2 octaves the grains tick past at around
-// 70Hz. That is a straightforwardly musical effect rather than a malfunction,
-// so the limit is taste, not headroom - push these numbers and see.
-// NOTE these are octaves EITHER SIDE of unity, so the full sweep is twice
-// this many octaves and takes PITCH_TURNS_PER_OCTAVE * 2 * range turns end to
-// end. At the values below that is ten octaves across ten turns of the knob -
-// a long way, but this pot spins freely and the far ends are meant to be a
-// destination you go looking for.
-const float PITCH_OCTAVE_RANGE = 5.0f;      // +/- octaves
-const float PITCH_TURNS_PER_OCTAVE = 1.0f;  // physical turns to travel one octave
-
-// Accumulated physical degrees spanning the whole dial, top end to bottom.
-const float PITCH_KNOB_SPAN_DEGREES =
-    360.0f * PITCH_TURNS_PER_OCTAVE * PITCH_OCTAVE_RANGE * 2.0f;
-
-// Takes a position along the dial in [0,360] - NOT wrapped, see the control
-// block - and returns the pitch ratio. Exponential in ratio, so equal
-// rotation buys equal musical intervals. The deadband exists so unity is
-// findable by hand rather than being an infinitely thin point on the dial.
-float angleToPitchRatio(float dialAngle) {
-  float t = 1.0f - (dialAngle / 180.0f);  // +1 .. -1, same sense as speed
-  float magT = fabsf(t);
-  if (magT < PITCH_DEADBAND_T) return 1.0f;
-  float scaledT = (magT - PITCH_DEADBAND_T) / (1.0f - PITCH_DEADBAND_T);
-  return powf(2.0f, copysignf(scaledT * PITCH_OCTAVE_RANGE, t));
-}
-
-// Inverse of angleToPitchRatio(), in the pitch knob's accumulated degrees
-// along its whole dial - where the knob has to sit for a given pitch, so it
-// can re-anchor there. Unity is the middle of the dial.
-float pitchKnobDegreesFor(float ratio) {
-  float octaves = log2f(ratio);
-  float scaledT = fminf(fabsf(octaves) / PITCH_OCTAVE_RANGE, 1.0f);
-  float t = (octaves == 0.0f)
-                ? 0.0f
-                : copysignf(PITCH_DEADBAND_T + scaledT * (1.0f - PITCH_DEADBAND_T), octaves);
-  float dialAngle = (1.0f - t) * 180.0f;
-  return dialAngle / 360.0f * PITCH_KNOB_SPAN_DEGREES;
-}
+// How far the pitch you hear can go, either way, in octaves from the file's
+// own - as far as the speed dial goes (1024x is 10 octaves). Nothing in the
+// signal path limits it: both grain taps trail the cursor by at most a
+// grain, whatever the pitch, so the buffer, the card and the CPU don't care.
+// What changes is the character: shifting far up reads fast and aliases,
+// and as the shift grows the grains splice faster, until the crossfade
+// seam is audible and it behaves like a ring modulator. That's a musical
+// effect rather than a malfunction, so the limit is taste.
+const float PITCH_OCTAVE_LIMIT = 10.0f;
 
 // Retained from when touch1 gated a fast/slow sweep; touch1 is the mode
 // button now, so one rate serves both modes.
@@ -593,8 +553,6 @@ float knobAngle(float accumulatedDegrees, float turnsPerSweep) {
 // nothing jumps.
 float speedKnobDegrees = 0.0f;
 bool speedKnobAnchored = false;
-float pitchKnobDegrees = 0.0f;
-bool pitchKnobAnchored = false;
 // In pitch mode, the pitch you hear (relative to the file's own), which
 // knob1 sets and knob2's time-stretch holds steady - see "Time-stretch" in
 // the header comment. Kept in step with pitchRatio and the speed by
@@ -1543,11 +1501,10 @@ float perceivedPitch() {
   return (speed >= STRETCH_MIN_SPEED) ? pitchRatio * speed : pitchRatio;
 }
 
-// Makes heldPitch match the current speed and shift again, and the pitch
-// knob re-anchor there - after anything sets one of them directly.
+// Makes heldPitch match the current speed and shift again - after anything
+// sets one of them directly.
 void syncHeldPitch() {
   heldPitch = perceivedPitch();
-  pitchKnobAnchored = false;
 }
 
 // The other way round, for pitch mode: sets the shift so that the current
@@ -1562,9 +1519,9 @@ void resetPitchToUnity() {
   syncHeldPitch();
 }
 
-// PITCH:<ratio> - an exact pitch shift, re-anchoring the knob there.
+// PITCH:<ratio> - an exact pitch shift.
 void setPitchRatio(float ratio) {
-  pitchRatio = constrain(ratio, 1.0f / 32.0f, 32.0f);
+  pitchRatio = constrain(ratio, 1.0f / 1024.0f, 1024.0f);
   syncHeldPitch();
 }
 
@@ -3100,31 +3057,13 @@ void loop() {
       lastPhysicalKnobDegrees = knob1Degrees;
 
       if (pitchMode) {
-        // The knob sets the pitch you hear. It's only recomputed when the
-        // knob actually moves, so anchoring it somewhere its dial can't
-        // reach (5 octaves either way) doesn't change the sound by itself.
-        if (!pitchKnobAnchored) {
-          pitchKnobDegrees = pitchKnobDegreesFor(heldPitch);
-          pitchKnobAnchored = true;
-          delta = 0.0f;
-        } else {
-          pitchKnobDegrees += delta;
-        }
-
-        // Pitch parks at its extremes instead of wrapping round to the
-        // opposite one. Speed wraps deliberately - its dial is continuous
-        // through the seam, since fastest-forward and fastest-backward are
-        // genuinely adjacent ideas. Pitch has two hard ends and running off
-        // one to reappear at the other is just disorienting, so the
-        // accumulator is clamped and the dial position computed directly
-        // rather than through knobAngle()'s fmod.
-        if (pitchKnobDegrees < 0.0f) pitchKnobDegrees = 0.0f;
-        if (pitchKnobDegrees > PITCH_KNOB_SPAN_DEGREES) {
-          pitchKnobDegrees = PITCH_KNOB_SPAN_DEGREES;
-        }
-
+        // The knob moves the pitch you hear - relative, see
+        // PITCH_OCTAVES_PER_TURN. Turning the knob up lowers the pitch, the
+        // same sense as the speed dial.
         if (delta != 0.0f) {
-          heldPitch = angleToPitchRatio((pitchKnobDegrees / PITCH_KNOB_SPAN_DEGREES) * 360.0f);
+          float octaves = log2f(heldPitch) - delta / 360.0f * PITCH_OCTAVES_PER_TURN;
+          octaves = constrain(octaves, -PITCH_OCTAVE_LIMIT, PITCH_OCTAVE_LIMIT);
+          heldPitch = exp2f(octaves);
           holdPitch();
         }
       } else {

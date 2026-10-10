@@ -181,8 +181,10 @@
                          control, which is the tricky part
     `REN:<old>/<new>`    rename, answered `RENAMED:<old>/<new>`
     `DEL:<name>`         delete, answered `DELETED:<name>`
+    `CAL`                print, over USB Serial, each knob's saved and live
+                         calibration - see "Knob calibration" further down
     `RECAL`              forget both knobs' saved calibration and learn it
-                         again - see "Knob calibration" further down
+                         again
   Any of them can fail with the same `ERR:<name>:<reason>` as PLAY:. Names
   the page creates must end in .WAV, since those are the only files LIST
   shows. Touching the file that is playing closes it first (FatFs can't
@@ -353,6 +355,7 @@
        anything yet. Turn each about two full turns until it responds,
        then play and stop - Serial reports each calibration saved. Reset
        again: Serial says both were loaded, and the knobs respond at once.
+       CAL shows the saved ranges alongside the live ones.
 */
 
 #include <RV112FF.h>
@@ -1855,7 +1858,7 @@ void deleteFromCard(const String &nameArg) {
 bool isBoardCommand(const String &line) {
   static const char *const COMMANDS[] = {
     "LIST", "PLAY:", "LATCH:", "STOP", "RESET:", "PROFILE", "SPEED:", "PITCH:", "PUT:", "REN:", "DEL:",
-    "RECAL"
+    "CAL", "RECAL"
   };
   for (const char *command : COMMANDS) {
     if (line.startsWith(command)) return true;
@@ -1905,6 +1908,8 @@ void handleBLECommand(String line) {
     renameOnCard(line.substring(4));
   } else if (line.startsWith("DEL:")) {
     deleteFromCard(line.substring(4));
+  } else if (line == "CAL") {
+    printKnobCalibration();
   } else if (line == "RECAL") {
     forgetKnobCalibration();
   } else if (line.length() > 0) {
@@ -2255,13 +2260,47 @@ void saveNewKnobCalibration() {
     Serial.print(": calibration saved in ");
     Serial.print(micros() - start);
     Serial.print("us - wiper ranges ");
-    Serial.print(cal.minVal[0], 3);
-    Serial.print("-");
-    Serial.print(cal.maxVal[0], 3);
-    Serial.print(", ");
-    Serial.print(cal.minVal[1], 3);
-    Serial.print("-");
-    Serial.println(cal.maxVal[1], 3);
+    printWiperRanges(cal);
+    Serial.println();
+  }
+}
+
+// Prints one calibration's two wiper ranges, as fractions of full scale.
+void printWiperRanges(const RV112FFCalibration &cal) {
+  Serial.print(cal.minVal[0], 3);
+  Serial.print("-");
+  Serial.print(cal.maxVal[0], 3);
+  Serial.print(", ");
+  Serial.print(cal.minVal[1], 3);
+  Serial.print("-");
+  Serial.print(cal.maxVal[1], 3);
+}
+
+// The CAL command: what's saved for each knob, and what it's using now.
+// The live ranges can be a little wider than the saved ones, since the
+// library keeps widening them if a wiper ever reads past them.
+void printKnobCalibration() {
+  for (int i = 0; i < 2; i++) {
+    RV112FFCalibration saved;
+    EEPROM.get(CAL_EEPROM_ADDR[i], saved);
+    // A throwaway RV112FF is the simplest way to apply the library's own
+    // checks to what's stored, without disturbing the real pot. Its
+    // constructor doesn't touch any hardware.
+    RV112FF checker(A2, A3);
+    bool savedOk = checker.setCalibration(saved) && checker.isCalibrated();
+
+    Serial.print("Knob ");
+    Serial.print(i + 1);
+    Serial.print(calPots[i]->isCalibrated() ? ": calibrated" : ": still calibrating");
+    Serial.print(". Saved: ");
+    if (savedOk) {
+      printWiperRanges(saved);
+    } else {
+      Serial.print("nothing");
+    }
+    Serial.print(". Live: ");
+    printWiperRanges(calPots[i]->getCalibration());
+    Serial.println(".");
   }
 }
 

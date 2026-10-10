@@ -24,11 +24,6 @@ per-file settings and the web UI's mode display both build on it.
   multiple of the file's length - e.g. 8, 4, 2, 1, 1/2, 1/4... of the file
   per turn, so a short sample might pass 4x per rotation and a long one take
   4+ rotations. After the halving above.
-- **Save and load the knob calibration.** At boot, load the calibration
-  from non-volatile storage if it's there. If it wasn't, save it the first
-  time playback stops after the knobs have calibrated - so in practice it's
-  written once, ever. `RV112FF` already has `setCalibration()` for the
-  restore. Storage is the Data Flash via `EEPROM`.
 
 ### Modes
 

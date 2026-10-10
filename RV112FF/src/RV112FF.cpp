@@ -14,6 +14,7 @@ RV112FF::RV112FF(uint8_t wiperPinA, uint8_t wiperPinB,
   _smooth[0] = _smooth[1] = 0.5;
   _minVal[0] = _minVal[1] = 1.0;
   _maxVal[0] = _maxVal[1] = 0.0;
+  restartTurnCount();
   // Deliberately no hardware access here - a global "RV112FF pot(A2, A3);"
   // runs its constructor before setup(), and this board's ADC isn't
   // guaranteed ready yet at that point. analogReadResolution() below is
@@ -26,6 +27,27 @@ void RV112FF::resetCalibration() {
   _calibrated = false;
   _angle = -1;
   _prevAngle = -1;
+  _rpm = 0;
+  restartTurnCount();
+}
+
+// Starts counting a fresh turn from the observed range as it stands now.
+void RV112FF::restartTurnCount() {
+  for (int i = 0; i < 2; i++) {
+    _markMin[i] = _minVal[i];
+    _markMax[i] = _maxVal[i];
+  }
+  _turnPos = _turnLow = _turnHigh = 0;
+}
+
+// Whether either wiper's observed range has grown, by more than the
+// tolerance, since the current turn started counting.
+bool RV112FF::rangeGrewSinceMark() const {
+  for (int i = 0; i < 2; i++) {
+    if (_minVal[i] < _markMin[i] - RANGE_GROWTH_TOLERANCE) return true;
+    if (_maxVal[i] > _markMax[i] + RANGE_GROWTH_TOLERANCE) return true;
+  }
+  return false;
 }
 
 float RV112FF::readWiper(uint8_t pin, uint8_t channel, float dtSeconds) {
@@ -91,34 +113,57 @@ float RV112FF::read() {
   float a = readWiper(_pinA, 0, dtSeconds);
   float b = readWiper(_pinB, 1, dtSeconds);
 
+  // An angle can be worked out once each wiper has swept some of its
+  // range, but it's only accurate once the whole range has been seen -
+  // until then it's tracked here, to count the turn that completes
+  // calibration, but not reported.
   bool rangeOkA = (_maxVal[0] - _minVal[0]) >= _minCalibrationRange;
   bool rangeOkB = (_maxVal[1] - _minVal[1]) >= _minCalibrationRange;
-  _calibrated = rangeOkA && rangeOkB;
 
-  if (_calibrated) {
+  if (rangeOkA && rangeOkB) {
     // Center and normalize each wiper into roughly [-1, 1] using its
     // own observed range, turning the pair of triangle waves into
     // something atan2() can treat like a quadrature pair.
     float x = 2.0 * (a - _minVal[0]) / (_maxVal[0] - _minVal[0]) - 1.0;
     float y = 2.0 * (b - _minVal[1]) / (_maxVal[1] - _minVal[1]) - 1.0;
+    float angle = fmod(360.0 - atan2(y, x) * 180.0 / PI, 360.0);
 
-    _prevAngle = _angle;
-    _angle = fmod(360.0 - atan2(y, x) * 180.0 / PI, 360.0);
-
-    if (dtSeconds > 0.0001 && _prevAngle >= 0) {
+    if (_prevAngle >= 0) {
       // Shortest signed distance around the circle, so crossing the
       // 359-to-0 seam reads as a small step rather than a 359-degree
       // spike in the wrong direction.
-      float delta = _angle - _prevAngle;
+      float delta = angle - _prevAngle;
       while (delta > 180.0) delta -= 360.0;
       while (delta < -180.0) delta += 360.0;
 
-      float instantRpm = (delta / dtSeconds) / 360.0 * 60.0;
-      float rpmCoeff = 1.0 - exp(-dtSeconds / _rpmSmoothTau);
-      _rpm += rpmCoeff * (instantRpm - _rpm);
+      if (dtSeconds > 0.0001) {
+        float instantRpm = (delta / dtSeconds) / 360.0 * 60.0;
+        float rpmCoeff = 1.0 - exp(-dtSeconds / _rpmSmoothTau);
+        _rpm += rpmCoeff * (instantRpm - _rpm);
+      }
+
+      // The span of angles visited since the turn count started, rather
+      // than the distance travelled: turning back and forth over the same
+      // half turn shouldn't count as having seen the whole range.
+      if (!_calibrated) {
+        _turnPos += delta;
+        if (_turnPos < _turnLow) _turnLow = _turnPos;
+        if (_turnPos > _turnHigh) _turnHigh = _turnPos;
+      }
     }
+    _prevAngle = angle;
+
+    if (!_calibrated) {
+      if (rangeGrewSinceMark()) {
+        restartTurnCount();
+      } else if (_turnHigh - _turnLow >= 360.0) {
+        _calibrated = true;
+      }
+    }
+    _angle = _calibrated ? angle : -1;
   } else {
     _angle = -1;
+    _prevAngle = -1;
   }
 
   _lastMicros = nowMicros;
@@ -143,6 +188,7 @@ uint8_t RV112FF::calibrationChecksum(const RV112FFCalibration &cal) const {
   uint8_t sum = 0;
   sum = sumBytes(cal.minVal, sizeof(cal.minVal), sum);
   sum = sumBytes(cal.maxVal, sizeof(cal.maxVal), sum);
+  sum += cal.complete;
   return sum;
 }
 
@@ -154,6 +200,7 @@ RV112FFCalibration RV112FF::getCalibration() const {
   cal.minVal[1] = _minVal[1];
   cal.maxVal[0] = _maxVal[0];
   cal.maxVal[1] = _maxVal[1];
+  cal.complete = _calibrated ? 1 : 0;
   cal.checksum = calibrationChecksum(cal);
   return cal;
 }
@@ -170,18 +217,20 @@ bool RV112FF::setCalibration(const RV112FFCalibration &cal) {
     if (cal.minVal[i] < 0.0 || cal.minVal[i] > 1.0) return false;
     if (cal.maxVal[i] < 0.0 || cal.maxVal[i] > 1.0) return false;
     if (cal.maxVal[i] <= cal.minVal[i]) return false;
+    // A complete calibration has seen far more than the minimum range.
+    if (cal.complete && cal.maxVal[i] - cal.minVal[i] < _minCalibrationRange) return false;
   }
+  if (cal.complete > 1) return false;
 
   _minVal[0] = cal.minVal[0];
   _minVal[1] = cal.minVal[1];
   _maxVal[0] = cal.maxVal[0];
   _maxVal[1] = cal.maxVal[1];
 
-  // Same threshold read() itself uses, so a restored calibration is
-  // trusted under exactly the same rule a live one would be.
-  bool rangeOkA = (_maxVal[0] - _minVal[0]) >= _minCalibrationRange;
-  bool rangeOkB = (_maxVal[1] - _minVal[1]) >= _minCalibrationRange;
-  _calibrated = rangeOkA && rangeOkB;
+  // A complete snapshot is trusted straight away; an incomplete one just
+  // gives calibration a head start, still needing a full turn to finish.
+  _calibrated = (cal.complete == 1);
+  restartTurnCount();
 
   return true;
 }

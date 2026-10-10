@@ -2203,7 +2203,13 @@ RV112FF pot2(A4, A5, 0.02f, 0.15f, 0.02f);
 // was fixed (see NOISE_DEBUGGING.md) and scrubbing became precise enough to
 // want finer control. The trade-off: the cancellation point against 1x
 // forward playback rises back to roughly half a turn per second.
-const float SCRUB_SCALE = 1.0f / 30.0f;
+//
+// Halved again to 1/60 - one second per turn - since even 1/30 felt too
+// sensitive in use. That's back to the original value, so its old
+// complaint returns too: against 1x forward playback the cancellation
+// point is about one turn per second again. Overriding knob1 while
+// scrubbing, rather than adding to it, would remove that (an open item).
+const float SCRUB_SCALE = 1.0f / 60.0f;
 
 // -- Knob calibration -----------------------------------------------------
 // RV112FF learns each pot's range by watching it turn, and reports nothing

@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mykle Hansen
+// Specified by Mykle Hansen, implemented by Claude (Anthropic).
+
 /*
   Voice - one playback stream in SDResampleDemo: a copy of the current file
   (the WAV itself, or one of MipCache's filtered lower-rate copies), the ring

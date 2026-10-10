@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Copyright (C) 2026 Mykle Hansen
+// Specified by Mykle Hansen, implemented by Claude (Anthropic).
+
 #include "RA6M5CapTouch.h"
 
 // This library drives the RA6M5's touch peripheral register by register,

@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Mykle Hansen
+# Specified by Mykle Hansen, implemented by Claude (Anthropic).
+
 # Makefile for Renesas RA demo projects
 #
 # Drives arduino-cli so you can build, upload and watch the serial monitor

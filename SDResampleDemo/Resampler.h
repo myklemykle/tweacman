@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mykle Hansen
+// Specified by Mykle Hansen, implemented by Claude (Anthropic).
+
 /*
   Resampler - a fractional-position phase accumulator, used to play a
   source sample stream forward OR backward at any continuously-variable

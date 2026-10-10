@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Mykle Hansen
+# Specified by Mykle Hansen, implemented by Claude (Anthropic).
+
 """
 make_format_test_wavs.py - writes a set of WAV files in assorted sample
 rates, bit depths, channel counts and header styles, for testing

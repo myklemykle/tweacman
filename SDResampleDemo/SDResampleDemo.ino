@@ -1172,6 +1172,44 @@ void startLevelChange(uint8_t target) {
 // Tops up one voice's ring buffer by at most one chunk, in whichever
 // direction it's playing - see the refill comment in loop() for the
 // direction-aware margin this keeps.
+// Normally the cursor can't leave the stretch of file held in its voice's
+// ring buffer: when a read would reach past either end, the audio
+// interrupt reports an underrun and stays put until the refill catches up.
+// Only code that sets the position directly can strand it outside - a copy
+// change, which hands the cursor to a copy that was read in around where
+// the cursor was a moment earlier, is the one that can. If the cursor has
+// moved further than that while the copy was read (a slow card, or a bug -
+// see startLevelChange()), the refill can't recover: it grows the buffer
+// from its edges, and once it's full there's nowhere left to grow toward
+// the cursor. Playback would stay silent until a rewind or a new file. So
+// loop() checks every pass, and reloads the buffer around the cursor if it
+// ever finds it outside - a dropout of a few milliseconds instead.
+//
+// How far past an edge the cursor can legitimately be: an advance only
+// happens after a successful read, so at most one step's worth beyond.
+const int32_t STRANDED_SLACK = 64;  // frames
+uint32_t strandedRepairs = 0;
+
+void repairStrandedCursor(Voice &v, float step) {
+  int32_t pos = v.resampler.index;
+  if (pos >= v.ring.validLow() - STRANDED_SLACK && pos < v.ring.validHigh() + STRANDED_SLACK) return;
+
+  // Same care as rewindToStart(): the interrupt reads the position and the
+  // buffer, so it's held off across the reload.
+  audioTimer.disable_overflow_irq();
+  pos = v.resampler.index;
+  // More runway on whichever side the cursor is heading toward.
+  int32_t from = (step < 0.0f) ? pos - PRIME_AHEAD : pos - PRIME_BEHIND;
+  primeVoice(v, from, PRIME_BEHIND + PRIME_AHEAD);
+  audioTimer.enable_overflow_irq();
+  restartDropCount();
+
+  strandedRepairs++;
+  Serial.print("Playback cursor was stranded outside its buffer - reloaded it there (");
+  Serial.print(strandedRepairs);
+  Serial.println(" so far). This shouldn't happen; please report it.");
+}
+
 void refillVoice(Voice &v, float step) {
   if (!v.reader.isOpen()) return;
   int32_t pos = v.resampler.index;
@@ -2781,6 +2819,7 @@ void loop() {
   if (fileLoaded) {
     float step = currentStep;  // snapshot once per pass
     t = DWT->CYCCNT;
+    repairStrandedCursor(voices[activeVoice], step);
     refillVoice(voices[activeVoice], step);
     stageDone(STAGE_REFILL, t);
 

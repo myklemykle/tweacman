@@ -181,6 +181,8 @@
                          control, which is the tricky part
     `REN:<old>/<new>`    rename, answered `RENAMED:<old>/<new>`
     `DEL:<name>`         delete, answered `DELETED:<name>`
+    `RECAL`              forget both knobs' saved calibration and learn it
+                         again - see "Knob calibration" further down
   Any of them can fail with the same `ERR:<name>:<reason>` as PLAY:. Names
   the page creates must end in .WAV, since those are the only files LIST
   shows. Touching the file that is playing closes it first (FatFs can't
@@ -346,6 +348,11 @@
        Check the card's cache/ folder follows along: the renamed file's
        folder renamed, the deleted file's gone, and the overwritten
        file's copies rebuilt (Serial says so) the next time it's cued.
+    11. Knob calibration: send RECAL, then reset the board. Serial says
+       neither knob has a saved calibration, and neither knob does
+       anything yet. Turn each about two full turns until it responds,
+       then play and stop - Serial reports each calibration saved. Reset
+       again: Serial says both were loaded, and the knobs respond at once.
 */
 
 #include <RV112FF.h>
@@ -354,6 +361,7 @@
 #include <RA6M5CapTouch.h>
 #include <FastLED.h>
 #include <codelessBLEPeripheral.h>
+#include <EEPROM.h>       // the Data Flash, for saving the knobs' calibration
 #include <RA6M5FastSD.h>  // the core's SD driver, but reading and writing many sectors per command
 #include "FATFileSystem.h"
 #include "bsp_api.h"   // for R_DAC - the audio ISR writes it directly, same as DACAudioTest
@@ -1846,7 +1854,8 @@ void deleteFromCard(const String &nameArg) {
 // Binary mode pipe. See handleBLELine() for why that matters.
 bool isBoardCommand(const String &line) {
   static const char *const COMMANDS[] = {
-    "LIST", "PLAY:", "LATCH:", "STOP", "RESET:", "PROFILE", "SPEED:", "PITCH:", "PUT:", "REN:", "DEL:"
+    "LIST", "PLAY:", "LATCH:", "STOP", "RESET:", "PROFILE", "SPEED:", "PITCH:", "PUT:", "REN:", "DEL:",
+    "RECAL"
   };
   for (const char *command : COMMANDS) {
     if (line.startsWith(command)) return true;
@@ -1896,6 +1905,8 @@ void handleBLECommand(String line) {
     renameOnCard(line.substring(4));
   } else if (line.startsWith("DEL:")) {
     deleteFromCard(line.substring(4));
+  } else if (line == "RECAL") {
+    forgetKnobCalibration();
   } else if (line.length() > 0) {
     Serial.print("Unrecognized BLE command: \"");
     Serial.print(line);
@@ -2189,6 +2200,82 @@ RV112FF pot2(A4, A5, 0.02f, 0.15f, 0.02f);
 // forward playback rises back to roughly half a turn per second.
 const float SCRUB_SCALE = 1.0f / 30.0f;
 
+// -- Knob calibration -----------------------------------------------------
+// RV112FF learns each pot's range by watching it turn, and reports nothing
+// until it has seen all of it - about two full turns per pot. Rather than
+// ask for that at every power-on, this sketch saves each pot's calibration
+// to the Data Flash (through the EEPROM library) and restores it at boot.
+//
+// A pot is saved only if nothing valid was found for it at boot, the first
+// time the transport stops after its calibration completes - so in
+// practice each pot is saved once, ever. That matters because the Data
+// Flash doesn't spread writes around to limit wear. Stopping is chosen as
+// a quiet moment: the write pauses loop() briefly, and with the tape
+// stopped there's little going on for that to disturb.
+//
+// RECAL (over BLE or the USB serial monitor) forgets both calibrations and
+// starts learning again - after swapping a pot, say, or to test this.
+const int CAL_EEPROM_ADDR[2] = {0, sizeof(RV112FFCalibration)};
+RV112FF *const calPots[2] = {&pot1, &pot2};
+bool calStored[2] = {false, false};
+
+// Set by RECAL: the next real knob1 reading becomes the new baseline
+// instead of being diffed against the last one from before - otherwise
+// the knob's position when it finishes recalibrating would register as
+// one sudden turn, and jump the speed.
+bool knob1NeedsBaseline = false;
+
+void loadKnobCalibration() {
+  for (int i = 0; i < 2; i++) {
+    RV112FFCalibration cal;
+    EEPROM.get(CAL_EEPROM_ADDR[i], cal);
+    // setCalibration() checks the data itself and refuses anything it
+    // can't trust: never-written flash, a partial write, an old format.
+    calStored[i] = calPots[i]->setCalibration(cal) && calPots[i]->isCalibrated();
+    Serial.print("Knob ");
+    Serial.print(i + 1);
+    Serial.println(calStored[i]
+        ? ": calibration loaded."
+        : ": no saved calibration - turn it about two full turns to calibrate.");
+  }
+}
+
+// Saves any pot that has finished calibrating and has nothing stored yet.
+void saveNewKnobCalibration() {
+  for (int i = 0; i < 2; i++) {
+    if (calStored[i] || !calPots[i]->isCalibrated()) continue;
+    RV112FFCalibration cal = calPots[i]->getCalibration();
+    unsigned long start = micros();
+    EEPROM.put(CAL_EEPROM_ADDR[i], cal);
+    calStored[i] = true;
+    // The wiper ranges are fractions of full scale - handy for spotting a
+    // pot whose range looks short.
+    Serial.print("Knob ");
+    Serial.print(i + 1);
+    Serial.print(": calibration saved in ");
+    Serial.print(micros() - start);
+    Serial.print("us - wiper ranges ");
+    Serial.print(cal.minVal[0], 3);
+    Serial.print("-");
+    Serial.print(cal.maxVal[0], 3);
+    Serial.print(", ");
+    Serial.print(cal.minVal[1], 3);
+    Serial.print("-");
+    Serial.println(cal.maxVal[1], 3);
+  }
+}
+
+void forgetKnobCalibration() {
+  RV112FFCalibration blank = {};  // magic 0, which setCalibration() refuses
+  for (int i = 0; i < 2; i++) {
+    EEPROM.put(CAL_EEPROM_ADDR[i], blank);
+    calPots[i]->resetCalibration();
+    calStored[i] = false;
+  }
+  knob1NeedsBaseline = true;
+  Serial.println("Knob calibration forgotten - turn each knob about two full turns to calibrate again.");
+}
+
 const unsigned long CONTROL_INTERVAL = 10;  // ms (~100Hz)
 unsigned long previousControlMillis = 0;
 
@@ -2306,6 +2393,8 @@ void setup() {
   // window, which were rejected for adding tens of milliseconds to the
   // feel of a scrub).
   pot2.setOversampling(4);
+
+  loadKnobCalibration();
 
   for (uint16_t i = 0; i < HANN_LUT_SIZE; i++) {
     hannLut[i] = 0.5f * (1.0f - cosf(2.0f * PI * (float)i / (float)HANN_LUT_SIZE));
@@ -2477,6 +2566,10 @@ void loop() {
 
     t = DWT->CYCCNT;
     float physicalNow = knob1.read();
+    if (physicalNow != -1.0f && knob1NeedsBaseline) {
+      lastPhysicalKnobDegrees = physicalNow;
+      knob1NeedsBaseline = false;
+    }
     if (physicalNow != -1.0f) {
       // Whichever mode is active drives its own accumulator; the other
       // simply holds its value until selected again. lastPhysicalKnobDegrees
@@ -2641,6 +2734,8 @@ void loop() {
     // Rewind on the rising edge of *running*, not of the pad, so engaging or
     // releasing the latch mid-playback does not jump back to the top.
     if (nowRunning && !transportRunning && fileLoaded) rewindToStart();
+    // And a stop is when newly learned knob calibrations get saved.
+    if (!nowRunning && transportRunning) saveNewKnobCalibration();
     transportRunning = nowRunning;
 
     float transportRatio = transportRunning ? lastKnownRatio : 0.0f;

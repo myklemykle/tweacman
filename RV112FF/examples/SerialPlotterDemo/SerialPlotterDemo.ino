@@ -16,8 +16,8 @@
     Both pots' track ends -> 3.3V and GND
 
   Each angle briefly reads -1 right after power-on - that's the pot's
-  self-calibration warm-up (see RV112FF.h); it clears after roughly one
-  full turn of that shaft. Each pot's isCalibrated() is plotted too (as
+  self-calibration warm-up (see RV112FF.h); it clears after about two
+  full turns of that shaft. Each pot's isCalibrated() is plotted too (as
   0 or 1), so the moment calibration completes shows up as a clean step
   right where the angle trace stops sitting at -1.
 */

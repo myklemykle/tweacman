@@ -20,8 +20,6 @@
   full turn of that shaft. Each pot's isCalibrated() is plotted too (as
   0 or 1), so the moment calibration completes shows up as a clean step
   right where the angle trace stops sitting at -1.
-
-  This example code is in the public domain.
 */
 
 #include <RV112FF.h>

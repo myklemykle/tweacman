@@ -70,8 +70,6 @@
     1. Blue (press USR if it's green). Ground EN for a couple of seconds,
        then release it. The monitor should reconnect and print the count.
     2. Green. Ground EN and measure the 3V3 and VREF pins, then release.
-
-  This example code is in the public domain.
 */
 
 #include <FastLED.h>

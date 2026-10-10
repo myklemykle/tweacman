@@ -19,8 +19,6 @@
   [0, 360) every revolution. Press USR_BTN to call write(0) and watch
   accumulated jump to wherever the shaft physically is right now, minus
   nothing - i.e. "here" becomes the new zero.
-
-  This example code is in the public domain.
 */
 
 #include <RV112FF.h>

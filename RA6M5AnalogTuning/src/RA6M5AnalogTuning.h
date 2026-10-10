@@ -60,8 +60,6 @@
   On any chip other than an RA6M5, begin() does nothing and returns false
   - so a sketch can call it unconditionally and still build for other
   boards, and a library like RV112FF stays free of chip-specific code.
-
-  This example code is in the public domain.
 */
 
 #ifndef RA6M5AnalogTuning_h

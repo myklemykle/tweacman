@@ -130,8 +130,6 @@
     n - show/hide the noise traces
     x - show/hide the crosstalk traces
   Hiding the biggest traces lets the plotter zoom in on the smaller ones.
-
-  This example code is in the public domain.
 */
 
 #include <RA6M5CapTouch.h>

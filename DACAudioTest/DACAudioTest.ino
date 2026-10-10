@@ -31,8 +31,6 @@
     once, while the L/R tone alternation keeps running - so each channel
     gets heard with the amplifier both on and off over time, on top of
     whatever else differs between them (A1 has a coupling cap, A0 doesn't).
-
-  This example code is in the public domain.
 */
 
 #include "analogWave.h"

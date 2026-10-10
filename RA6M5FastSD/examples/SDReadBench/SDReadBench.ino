@@ -43,8 +43,6 @@
   monitor connects (the USB serial port drops anything printed before
   then), takes about 10 seconds, and runs again whenever you send any
   character.
-
-  This example code is in the public domain.
 */
 
 #include <RA6M5FastSD.h>

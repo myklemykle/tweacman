@@ -74,8 +74,6 @@
   - CaptureUI below is how the sketch gets a direct pointer to each of
     synth.dsp's four named controls (freq1, freq2, gain1, gain2) without
     building an actual user interface - see its comment.
-
-  This example code is in the public domain.
 */
 
 #include <RV112FF.h>

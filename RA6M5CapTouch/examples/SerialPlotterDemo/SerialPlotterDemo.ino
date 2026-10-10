@@ -35,8 +35,6 @@
   CapTouch's default touch threshold is just a starting point - watch
   raw1/raw2 against baseline1/baseline2 here and adjust with
   setThreshold() if isTouched() doesn't track what you'd expect.
-
-  This example code is in the public domain.
 */
 
 #include <RA6M5CapTouch.h>

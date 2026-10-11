@@ -24,8 +24,8 @@
   Otherwise same as DACAudioTest (3.5mm jack on A0/A1/GND) plus two pots
   (RV112FF wipers on A2/A3 for speed or pitch, A4/A5 for tape scrub or
   time-stretch, both pots' track ends on 3.3V/GND) and two CapTouch pads
-  (D20 switches between speed mode and pitch mode, and chorded with D21
-  latches the transport;
+  (D20 steps through the knob modes, and chorded with D21 latches the
+  transport;
   D21 is the transport itself - hold it to run, release to stop; both
   share the TSCAP capacitor on D6 - see RA6M5CapTouch.h). The onboard WS2812
   on D13 shows the knob mode and the blue STAT LED the transport - no extra
@@ -105,7 +105,7 @@
   is fitted to each file as it loads: about one second of audio, moved
   to the nearest power-of-two fraction or multiple of the file's length,
   so whole turns line up with the file's loop - see
-  SCRUB_SECONDS_PER_TURN and scrubControl().
+  SCRUB_SECONDS_PER_TURN and scrubKnob().
 
   Relative speed control: the first pot is RELATIVE (like a DJ jog wheel
   or a DAW's jog control), not ABSOLUTE (like a normal volume knob, where
@@ -220,11 +220,14 @@
   still works while stopped - that is the point of expressing "stopped" as a
   speed of zero.
 
-  Pitch: pressing D20 on its own (not chorded with D21, which latches)
-  switches between two modes. In speed mode knob1 sets the speed, tape-style
-  (any pitch shift stays a ratio on top), and knob2 scrubs. In pitch mode
-  knob1 sets the pitch you hear and knob2 stretches time - see below.
-  Switching never changes the sound by itself. Pitch is saved per file, like
+  Knob modes: pressing D20 on its own (not chorded with D21, which latches)
+  steps to the next knob mode, round and round. Each mode gives the two
+  knobs a different job, and is one row of the MODES table - see "Knob
+  modes" further down. Two are built so far, and four more are placeholders
+  with a colour and knobs that do nothing yet. In speed mode knob1 sets the
+  speed, tape-style (any pitch shift stays a ratio on top), and knob2
+  scrubs. In pitch mode knob1 sets the pitch you hear and knob2 stretches
+  time - see below. Switching never changes the sound by itself. Pitch is saved per file, like
   speed (see "Per-file settings"). The pitch knob is relative, at
   PITCH_OCTAVES_PER_TURN octaves per turn from wherever the pitch is, out to
   PITCH_OCTAVE_LIMIT octaves either way, where it stops. Speed
@@ -246,11 +249,12 @@
   further out.
 
   Two LEDs show the state. The onboard WS2812 on D13 is always lit, in the
-  colour of the knob mode: green while knob1 sets speed, blue while it sets
-  pitch - at RGBLED_BRIGHTNESS, 10% of what the LED can actually do, since it
-  is startlingly bright otherwise. The blue STAT LED shows the transport: dark
-  when stopped, blinking while running from a held finger, steady when
-  latched. (One LED used to do both jobs, by colour and by blinking, which
+  colour of the knob mode: green for speed mode, aqua for pitch mode, then
+  purple, pink, orange and yellow for the placeholders (no red or blue, which
+  the board's other LEDs already use) - at RGBLED_BRIGHTNESS or a little
+  less, 10% of what the LED can actually do, since it is startlingly bright
+  otherwise. The blue STAT LED shows the transport: dark when stopped,
+  blinking while running from a held finger, steady when latched. (One LED used to do both jobs, by colour and by blinking, which
   left the mode invisible whenever the transport was stopped.)
 
   File formats: mono or stereo, at any sample rate, in 8-, 16-, 24- or
@@ -741,11 +745,10 @@ inline float hannAt(float phase01) {
   return hannLut[i];
 }
 
-// True while knob1 is adjusting pitch instead of speed. Toggled by touch1
-// (pressed on its own - chorded with touch2 it latches the transport
-// instead). Each mode keeps its own virtual knob position, so switching back
-// and forth leaves both settings where they were.
-bool pitchMode = false;
+// Which knob mode is selected: a row of MODES - see "Knob modes". Advanced
+// by touch1 (pressed on its own - chorded with touch2 it latches the
+// transport instead).
+uint8_t knobMode = 0;
 
 // Transport state, as of the last control tick. Only loop() touches it -
 // the audio ISR has no opinion about it, since stopping is expressed purely
@@ -1513,7 +1516,7 @@ void setSpeedRatio(float ratio) {
   lastKnownRatio = ratio;
   speedAnchorRatio = ratio;
   speedKnobAnchored = false;
-  if (pitchMode) holdPitch();  // as knob2's time-stretch does
+  if (modeHoldsPitch()) holdPitch();  // as knob2's time-stretch does
 }
 
 // Below this speed the pitch you hear can't be worked out from the shift
@@ -2400,7 +2403,7 @@ bool wasBlinking = false;
 
 // The second pot: tape scrub. While it's being turned it takes over the
 // playback cursor outright, like a hand on the reel - see "Tape scrub" in
-// the header comment, and scrubControl() below.
+// the header comment, and scrubKnob() below.
 RV112FF pot2(A4, A5);
 
 // -- Tape scrub -------------------------------------------------------------
@@ -2512,23 +2515,17 @@ void endScrub() {
   scrubAnchorDegrees = scrubKnobDegrees;
 }
 
-// Reads the scrub knob. Returns true while it owns the cursor, with the
-// step that moves the cursor toward where the knob has put it in `step`.
-//
-// The knob sets a target position in the file and the cursor is steered
-// onto it, rather than the knob setting a speed: steering corrects for
-// anything that holds the cursor back (the speed cap while copies are
-// built, a moment's lag in a copy change), so the cursor always ends up
-// exactly where the knob says - N turns covers the same stretch of the
-// file every time.
-// Reads knob2, and returns how far it has turned since the last call,
-// after the backlash - 0 at rest, and until it's calibrated. Used both for
-// scrubbing and, in pitch mode, for time-stretch.
-float readKnob2() {
+// Reads knob2. Returns false until it's calibrated; after that, `turned`
+// is how far it has turned since the last call, in degrees after the
+// backlash - 0 at rest. It also keeps the positions the scrub works from
+// (scrubPhysicalDegrees, scrubKnobDegrees), whichever mode is using the knob.
+bool readKnob2(float &turned) {
+  turned = 0.0f;
   float angle = pot2.read();
   if (angle < 0.0f) {
     scrubPrevAngle = -1.0f;
-    return 0.0f;
+    if (scrubbing) endScrub();
+    return false;
   }
 
   if (scrubPrevAngle < 0.0f) {
@@ -2536,7 +2533,7 @@ float readKnob2() {
     // at rest there.
     scrubPrevAngle = angle;
     endScrub();
-    return 0.0f;
+    return true;
   }
 
   // The short way round, across the 0/360 seam.
@@ -2554,14 +2551,29 @@ float readKnob2() {
     moved = slack + SCRUB_BACKLASH_DEGREES;
   }
   scrubKnobDegrees += moved;
-  return moved;
+  turned = moved;
+  return true;
 }
 
-bool scrubControl(float &step) {
-  readKnob2();
-  if (scrubPrevAngle < 0.0f || !fileLoaded) {
+// The step that moves the cursor toward where the scrub knob has put it,
+// for loop() to use while `scrubbing` is true.
+float scrubStep = 0.0f;
+
+// Knob2 in speed mode: tape scrub. Called every control tick, turned or
+// not, since it's the knob coming to rest that ends a scrub. While the knob
+// owns the cursor, `scrubbing` is true and scrubStep is the step to take.
+//
+// The knob sets a target position in the file and the cursor is steered
+// onto it, rather than the knob setting a speed: steering corrects for
+// anything that holds the cursor back (the speed cap while copies are
+// built, a moment's lag in a copy change), so the cursor always ends up
+// exactly where the knob says - N turns covers the same stretch of the
+// file every time. That's also why this works from the knob's accumulated
+// position (see readKnob2()) rather than from `turned`.
+void scrubKnob(float turned) {
+  if (!fileLoaded) {
     if (scrubbing) endScrub();
-    return false;
+    return;
   }
 
   // Movement is measured in clear steps from a resting point that's moved
@@ -2580,11 +2592,11 @@ bool scrubControl(float &step) {
 #endif
     }
   }
-  if (!scrubbing) return false;
+  if (!scrubbing) return;
 
   if (now - scrubLastMoveMillis >= SCRUB_RELEASE_MS) {
     endScrub();
-    return false;
+    return;
   }
 
   // Where the knob has moved the tape to since the scrub started. Negated:
@@ -2598,8 +2610,142 @@ bool scrubControl(float &step) {
   double error = scrubTarget - cursorFrames();
   if (error > fileFrames / 2.0) error -= fileFrames;
   if (error < -(fileFrames / 2.0)) error += fileFrames;
-  step = (float)error / SCRUB_FOLLOW_TICKS;
+  scrubStep = (float)error / SCRUB_FOLLOW_TICKS;
+}
+
+// -- Knob modes -------------------------------------------------------------
+// The two knobs do different jobs depending on the mode, and touch1 steps
+// through the modes. Each mode is one row of MODES, below: a name, the
+// colour the RGB LED shows while it's selected, and a function for each
+// knob. Every control tick, loop() reads both knobs and hands however far
+// each has turned to the current mode's function for it - so adding a mode
+// means writing its two knob functions and adding a row.
+//
+// A knob function is called every tick its knob is calibrated, whether it
+// moved or not (`turned` is 0 at rest), because some need that: the speed
+// dial anchors itself on its first call, and the scrub ends when its knob
+// stops. A mode that leaves a knob unused has nullptr there.
+
+// Set by RECAL: the next real knob1 reading becomes the new baseline
+// instead of being diffed against the last one from before - otherwise
+// the knob's position when it finishes recalibrating would register as
+// one sudden turn, and jump the speed.
+bool knob1NeedsBaseline = true;  // and at boot, before knob1's first reading
+
+// Reads knob1. Returns false until it's calibrated; after that, `turned`
+// is how far it has turned since the last call, in degrees after a small
+// backlash - 0 at rest.
+bool readKnob1(float &turned) {
+  turned = 0.0f;
+  float physicalNow = knob1.read();
+  if (physicalNow == -1.0f) return false;
+
+  if (knob1NeedsBaseline) {
+    knob1Degrees = physicalNow;
+    lastPhysicalKnobDegrees = physicalNow;
+    knob1NeedsBaseline = false;
+  }
+
+  // A small backlash, as on the scrub knob (see SCRUB_BACKLASH_DEGREES):
+  // the knob's reading jitters by a fraction of a degree at rest, which
+  // made the speed flicker between 1.00x and 0.9999x on the web page.
+  float slack = physicalNow - knob1Degrees;
+  if (slack > KNOB1_BACKLASH_DEGREES) {
+    knob1Degrees = physicalNow - KNOB1_BACKLASH_DEGREES;
+  } else if (slack < -KNOB1_BACKLASH_DEGREES) {
+    knob1Degrees = physicalNow + KNOB1_BACKLASH_DEGREES;
+  }
+
+  // Measured from the last tick's position whatever mode that tick was in,
+  // which is what makes a mode switch seamless instead of jumpy.
+  turned = knob1Degrees - lastPhysicalKnobDegrees;
+  lastPhysicalKnobDegrees = knob1Degrees;
   return true;
+}
+
+// Knob1 in pitch mode: moves the pitch you hear - relative, see
+// PITCH_OCTAVES_PER_TURN. Turning the knob up lowers the pitch, the same
+// sense as the speed dial.
+void turnPitch(float turned) {
+  if (turned == 0.0f) return;
+  float octaves = log2f(heldPitch) - turned / 360.0f * PITCH_OCTAVES_PER_TURN;
+  octaves = constrain(octaves, -PITCH_OCTAVE_LIMIT, PITCH_OCTAVE_LIMIT);
+  heldPitch = exp2f(octaves);
+  holdPitch();
+}
+
+// Knob2 in pitch mode: time-stretch. Turns the same speed dial knob1 does
+// in speed mode, with the pitch you hear held where knob1 set it.
+void stretchTime(float turned) {
+  if (turned == 0.0f) return;
+  turnSpeedDial(turned);
+  holdPitch();
+}
+
+struct KnobMode {
+  const char *name;             // printed to Serial when the mode is selected
+  float hue;                    // the RGB LED's colour, in degrees round the colour
+                                // wheel (0 red, 120 green, 240 blue) - see modeColour()
+  uint8_t brightness;           // and its brightness, as a percentage of all it can do
+  bool holdsPitch;              // speed changes leave the pitch you hear alone
+                                // (time-stretch) rather than moving it, tape-style
+  void (*enter)();              // called when the mode is selected, or nullptr
+  void (*knob1)(float turned);  // degrees knob1 turned this tick, or nullptr
+  void (*knob2)(float turned);  // the same for knob2
+};
+
+// The hues stay clear of red and blue, which the board's other LEDs already
+// use. Most are at RGBLED_BRIGHTNESS; green, aqua and yellow are turned down
+// to look about as bright as the rest - the eye is most sensitive to green,
+// and aqua and yellow each have two of the LED's three colours lit. The last
+// four modes are placeholders - a name and a colour, with knobs that do
+// nothing yet.
+const KnobMode MODES[] = {
+  // name, hue, brightness, holdsPitch, enter, knob1, knob2
+  {"speed / scrub", 120.0f, 7, false, nullptr, turnSpeedDial, scrubKnob},             // green
+  {"pitch / time-stretch", 180.0f, 6, true, syncHeldPitch, turnPitch, stretchTime},  // aqua
+  {"start / end (not built yet)", 268.0f, RGBLED_BRIGHTNESS, false, nullptr, nullptr, nullptr},  // purple
+  {"echo (not built yet)", 335.0f, RGBLED_BRIGHTNESS, false, nullptr, nullptr, nullptr},  // pink
+  {"filter (not built yet)", 30.0f, RGBLED_BRIGHTNESS, false, nullptr, nullptr, nullptr},  // orange
+  {"unassigned", 60.0f, 6, false, nullptr, nullptr, nullptr},                         // yellow
+};
+const uint8_t MODE_COUNT = sizeof(MODES) / sizeof(MODES[0]);
+
+bool modeHoldsPitch() {
+  return MODES[knobMode].holdsPitch;
+}
+
+// A fully saturated colour at `hueDegrees` round the colour wheel, at
+// `percent` of the LED's full brightness - the standard HSV conversion: the wheel is six 60-degree
+// sectors, and across each one a single channel ramps up or down while the
+// other two sit at full and at zero.
+CRGB modeColour(float hueDegrees, uint8_t percent) {
+  float sector = fmodf(hueDegrees, 360.0f) / 60.0f;
+  uint8_t full = rgbLevel(percent);
+  uint8_t rising = (uint8_t)lroundf(full * (sector - floorf(sector)));
+  uint8_t falling = full - rising;
+  switch ((int)sector) {
+    case 0:  return CRGB(full, rising, 0);   // red to yellow
+    case 1:  return CRGB(falling, full, 0);  // yellow to green
+    case 2:  return CRGB(0, full, rising);   // green to cyan
+    case 3:  return CRGB(0, falling, full);  // cyan to blue
+    case 4:  return CRGB(rising, 0, full);   // blue to magenta
+    default: return CRGB(full, 0, falling);  // magenta to red
+  }
+}
+
+// Switches to a knob mode. A scrub in progress ends, since its knob may be
+// about to mean something else.
+void selectMode(uint8_t index) {
+  knobMode = index % MODE_COUNT;
+  endScrub();
+  if (MODES[knobMode].enter) MODES[knobMode].enter();
+  Serial.print("Knob mode ");
+  Serial.print(knobMode + 1);
+  Serial.print(" of ");
+  Serial.print(MODE_COUNT);
+  Serial.print(": ");
+  Serial.println(MODES[knobMode].name);
 }
 
 // -- Knob calibration -----------------------------------------------------
@@ -2620,12 +2766,6 @@ bool scrubControl(float &step) {
 const int CAL_EEPROM_ADDR[2] = {0, sizeof(RV112FFCalibration)};
 RV112FF *const calPots[2] = {&pot1, &pot2};
 bool calStored[2] = {false, false};
-
-// Set by RECAL: the next real knob1 reading becomes the new baseline
-// instead of being diffed against the last one from before - otherwise
-// the knob's position when it finishes recalibrating would register as
-// one sudden turn, and jump the speed.
-bool knob1NeedsBaseline = true;  // and at boot, before knob1's first reading
 
 void loadKnobCalibration() {
   for (int i = 0; i < 2; i++) {
@@ -3060,48 +3200,6 @@ void loop() {
     stageDone(STAGE_TOUCH, t);
 
     t = DWT->CYCCNT;
-    float physicalNow = knob1.read();
-    if (physicalNow != -1.0f && knob1NeedsBaseline) {
-      knob1Degrees = physicalNow;
-      lastPhysicalKnobDegrees = physicalNow;
-      knob1NeedsBaseline = false;
-    }
-    if (physicalNow != -1.0f) {
-      // A small backlash, as on the scrub knob (see SCRUB_BACKLASH_DEGREES):
-      // the knob's reading jitters by a fraction of a degree at rest, which
-      // made the speed flicker between 1.00x and 0.9999x on the web page.
-      float slack = physicalNow - knob1Degrees;
-      if (slack > KNOB1_BACKLASH_DEGREES) {
-        knob1Degrees = physicalNow - KNOB1_BACKLASH_DEGREES;
-      } else if (slack < -KNOB1_BACKLASH_DEGREES) {
-        knob1Degrees = physicalNow + KNOB1_BACKLASH_DEGREES;
-      }
-
-      // Whichever mode is active drives its own accumulator; the other
-      // simply holds its value until selected again. lastPhysicalKnobDegrees
-      // is shared and updated every tick either way, which is what makes a
-      // mode switch seamless instead of jumpy.
-      float delta = knob1Degrees - lastPhysicalKnobDegrees;
-      lastPhysicalKnobDegrees = knob1Degrees;
-
-      if (pitchMode) {
-        // The knob moves the pitch you hear - relative, see
-        // PITCH_OCTAVES_PER_TURN. Turning the knob up lowers the pitch, the
-        // same sense as the speed dial.
-        if (delta != 0.0f) {
-          float octaves = log2f(heldPitch) - delta / 360.0f * PITCH_OCTAVES_PER_TURN;
-          octaves = constrain(octaves, -PITCH_OCTAVE_LIMIT, PITCH_OCTAVE_LIMIT);
-          heldPitch = exp2f(octaves);
-          holdPitch();
-        }
-      } else {
-        turnSpeedDial(delta);
-      }
-    }
-    // else: pot not yet calibrated - lastKnownRatio keeps whatever it
-    // already had (the native-speed passthrough default from setup()/
-    // loadFile(), until pot1 calibrates for the first time).
-
     // Transport: touch pad 2 held means running, released means stopped.
     //
     // "Stopped" is implemented as a speed of zero rather than as a mode,
@@ -3124,26 +3222,18 @@ void loop() {
     // is also holding the transport up by itself, so running only ends when
     // that finger lifts. Both triggers are edge-detected so they fire once
     // per press rather than continuously while held.
-    //
-    // Note touch1 keeps its existing job of gating the speed knob's
-    // fast/slow sweep - the chord only means "latch" when touch2 is also
-    // down, so the two uses do not collide.
     bool touch1Now = touch1.isTouched();
     bool touch2Now = touch2.isTouched();
 
-    // touch1 pressed on its own toggles pitch mode; chorded with touch2 it
-    // latches the transport instead. One button, two jobs, disambiguated by
+    // touch1 pressed on its own steps to the next knob mode; chorded with
+    // touch2 it latches the transport instead. One button, two jobs, disambiguated by
     // whether the other pad is down - which is exactly how the latch was
     // already specified, so nothing had to move.
     if (touch1Now && !touch1WasTouched) {
       if (touch2Now) {
         transportLatched = true;
       } else {
-        pitchMode = !pitchMode;
-        endScrub();
-        if (pitchMode) syncHeldPitch();
-        Serial.println(pitchMode ? "Knob 1 now sets PITCH, knob 2 stretches TIME (pitch held)"
-                                 : "Knob 1 now sets SPEED, knob 2 SCRUBS");
+        selectMode(knobMode + 1);
       }
     }
     if (touch2Now && !touch2WasTouched && transportLatched) transportLatched = false;
@@ -3160,30 +3250,27 @@ void loop() {
     if (!nowRunning && transportRunning) saveNewKnobCalibration();
     transportRunning = nowRunning;
 
-    float transportRatio = transportRunning ? lastKnownRatio : 0.0f;
+    // The knobs: each hands however far it has turned since the last tick to
+    // the current mode's function for it - see "Knob modes". Both are read
+    // every tick whatever the mode does with them, so that a knob turned in
+    // one mode doesn't arrive as a jump in the next. Until a pot is
+    // calibrated its function isn't called, and lastKnownRatio keeps
+    // whatever it had (native speed, from setup()/loadFile()).
+    const KnobMode &activeMode = MODES[knobMode];
+    float turned;
+    if (readKnob1(turned) && activeMode.knob1) activeMode.knob1(turned);
+    if (readKnob2(turned) && activeMode.knob2) activeMode.knob2(turned);
 
     // While the scrub knob is moving it owns the cursor outright, like a
     // hand on the reel, and the transport waits underneath - when the knob
     // comes to rest, playback carries on from wherever it left the tape.
-    float step;
-    bool scrubDriven = false;
-    if (pitchMode) {
-      // Time-stretch: knob2 turns the same speed dial knob1 does in speed
-      // mode, and the pitch you hear is held where knob1 set it.
-      float turned = readKnob2();
-      if (turned != 0.0f) {
-        turnSpeedDial(turned);
-        holdPitch();
-        transportRatio = transportRunning ? lastKnownRatio : 0.0f;
-      }
-    } else {
-      scrubDriven = scrubControl(step);
-    }
-    if (!scrubDriven) step = transportRatio * rateFactor;
+    bool scrubDriven = scrubbing;
+    float step = scrubDriven ? scrubStep
+                             : (transportRunning ? lastKnownRatio : 0.0f) * rateFactor;
 
     // While time-stretching, the grains read at the held pitch whatever the
     // speed - see grainTapRate. Only while running: stopped is silent.
-    grainTapRate = (pitchMode && transportRunning) ? heldPitch * rateFactor : -1.0f;
+    grainTapRate = (activeMode.holdsPitch && transportRunning) ? heldPitch * rateFactor : -1.0f;
 
     // Until the cached copies are built, high speeds are capped at
     // MAX_STEP_UNCACHED samples per tick through the highest ready copy (or
@@ -3237,16 +3324,14 @@ void loop() {
     }
     digitalWrite(LED_BUILTIN, statOn ? HIGH : LOW);
 
-    // Mode indicator, on the RGB LED: always lit, green while knob1 sets
-    // speed, blue while it sets pitch. Without this the mode toggle is
-    // completely invisible - you would have to turn the knob and listen to
-    // find out which one you were in.
+    // Mode indicator, on the RGB LED: always lit, in the current mode's
+    // colour. Without this the mode is completely invisible - you would
+    // have to turn a knob and listen to find out which one you were in.
     //
     // FastLED.show() bit-bangs the WS2812's timing and masks interrupts for
     // long enough to drop an audio tick. So it is called only when the
-    // colour actually changes - which is now only when the mode does.
-    CRGB wanted = pitchMode ? CRGB(0, 0, rgbLevel(RGBLED_BRIGHTNESS))
-                            : CRGB(0, rgbLevel(RGBLED_BRIGHTNESS), 0);
+    // colour actually changes - which is only when the mode does.
+    CRGB wanted = modeColour(activeMode.hue, activeMode.brightness);
     if (wanted != leds[0]) {
       leds[0] = wanted;
       FastLED.show();

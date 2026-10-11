@@ -232,8 +232,7 @@
   its start, until D20 is released - or on past that, if the transport was
   already latched on. Each mode gives the two
   knobs a different job, and is one row of the MODES table - see "Knob
-  modes" further down. Three are built so far, and three more are
-  placeholders with a colour and knobs that do nothing yet. In speed mode knob1 sets the
+  modes" further down. Three are built so far. In speed mode knob1 sets the
   speed, tape-style (any pitch shift stays a ratio on top), and knob2
   scrubs. In pitch mode knob1 sets the pitch you hear and knob2 stretches
   time - see below. Switching never changes the sound by itself. Pitch is saved per file, like
@@ -275,8 +274,7 @@
 
   Two LEDs show the state. The onboard WS2812 on D13 is always lit, in the
   colour of the knob mode: green for speed mode, aqua for pitch mode, purple
-  for the window, then pink, orange and yellow for the placeholders (no red or blue, which
-  the board's other LEDs already use) - at RGBLED_BRIGHTNESS or a little
+  for the window (no red or blue, which the board's other LEDs already use) - at RGBLED_BRIGHTNESS or a little
   less, 10% of what the LED can actually do, since it is startlingly bright
   otherwise. The blue STAT LED shows the transport: dark when stopped,
   blinking while running from a held finger, steady when latched. (One LED used to do both jobs, by colour and by blinking, which
@@ -3008,19 +3006,16 @@ struct KnobMode {
 };
 
 // The hues stay clear of red and blue, which the board's other LEDs already
-// use. Most are at RGBLED_BRIGHTNESS; green, aqua and yellow are turned down
+// use. Most are at RGBLED_BRIGHTNESS; green and aqua are turned down
 // to look about as bright as the rest - the eye is most sensitive to green,
-// and aqua and yellow each have two of the LED's three colours lit. The last
-// three modes are placeholders - a name and a colour, with knobs that do
-// nothing yet.
+// and aqua has two of the LED's three colours lit. Three more colours were
+// picked to go with these, for modes still to come: pink (335, at
+// RGBLED_BRIGHTNESS), orange (30, the same) and yellow (60, at 6).
 const KnobMode MODES[] = {
   // name, hue, brightness, holdsPitch, enter, knob1, knob2
   {"speed / scrub", 120.0f, 7, false, nullptr, turnSpeedDial, scrubKnob},             // green
   {"pitch / time-stretch", 180.0f, 6, true, syncHeldPitch, turnPitch, stretchTime},  // aqua
   {"window start / end", 268.0f, RGBLED_BRIGHTNESS, false, printWindow, turnWindowStart, turnWindowEnd},  // purple
-  {"echo (not built yet)", 335.0f, RGBLED_BRIGHTNESS, false, nullptr, nullptr, nullptr},  // pink
-  {"filter (not built yet)", 30.0f, RGBLED_BRIGHTNESS, false, nullptr, nullptr, nullptr},  // orange
-  {"unassigned", 60.0f, 6, false, nullptr, nullptr, nullptr},                         // yellow
 };
 const uint8_t MODE_COUNT = sizeof(MODES) / sizeof(MODES[0]);
 

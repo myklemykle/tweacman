@@ -26,6 +26,15 @@ const uint32_t RING_CAPACITY = 32768;  // per voice, in samples: 16384 stereo fr
                                         // Part of this is kept as trailing-edge headroom
                                         // (REVERSAL_MARGIN).
 
+// The sketch's window (see "The window" there), fitted to one copy of the
+// file, in that copy's frames.
+struct CopyWindow {
+  uint32_t start = 0;
+  uint32_t length = 1;
+  uint32_t fade = 0;       // length of the crossfade joining its end to its start
+  bool fadeAtEnd = true;   // whether that's over its last frames, or its first
+};
+
 struct Voice {
   WavReader reader;                     // the WAV itself, or one of its cached copies
   AudioRingBuffer<RING_CAPACITY> ring;
@@ -37,7 +46,6 @@ struct Voice {
   // The stretch of this copy that plays, as a loop - "The window" in the
   // sketch. The voice's position runs on and on, and maps onto the copy
   // round and round the window, with position windowBase at its start.
-  uint32_t windowStart = 0;             // in frames of this copy
-  uint32_t windowLength = 1;
+  CopyWindow window;
   int32_t windowBase = 0;
 };

@@ -259,7 +259,10 @@
   The two ends can't come closer than WINDOW_MIN_SECONDS (20ms): push one
   into the other and both move, so at that width either knob slides the
   window along the file. An end stops at the end of the file, rather than
-  carrying on round it. If an end is moved past the playing position,
+  carrying on round it. The join from the window's end back to its start is
+  crossfaded over a few milliseconds, so it doesn't click (the whole file,
+  with nothing either side to fade with, loops as it always did). If an end
+  is moved past the playing position,
   playback carries on from the window's start. Moving the window never
   interrupts the sound - see "The window" further down for how, given that
   audio is read from the card well ahead of where it's playing.
@@ -1065,27 +1068,46 @@ AUDIO_HOT void audioCallback(timer_callback_args_t *args) {
 
 // -- File switching (BLE PLAY: command, and the boot-time default) -------
 
+// The crossfade that joins the end of the window to its start - see "The
+// window" further down. This long, though never more than a quarter of the
+// window, nor than fits the buffer it's worked out in.
+const float WINDOW_FADE_SECONDS = 0.005f;
+const uint32_t WINDOW_FADE_MAX_FRAMES = 256;
+alignas(4) int16_t fadeBuffer[WINDOW_FADE_MAX_FRAMES * 2];  // room for stereo
+
 // The window (windowStart/windowEnd), in frames of one voice's copy. Never
 // empty, however small the window or coarse the copy.
-void windowInCopy(const Voice &v, uint32_t &start, uint32_t &length) {
+CopyWindow windowInCopy(const Voice &v) {
   uint32_t total = v.reader.totalFrames();
-  uint32_t first = (uint32_t)windowStart >> v.level;
+  uint32_t start = (uint32_t)windowStart >> v.level;
   uint32_t end = (uint32_t)windowEnd >> v.level;
   if (end > total) end = total;
-  if (first >= end) {
-    first = (end > 0) ? end - 1 : 0;
-    end = first + 1;
+  if (start >= end) {
+    start = (end > 0) ? end - 1 : 0;
+    end = start + 1;
   }
-  start = first;
-  length = end - first;
+  CopyWindow w;
+  w.start = start;
+  w.length = end - start;
+
+  // The crossfade needs the same length of audio from outside the window:
+  // the lead-in before its start, or failing that what follows its end.
+  // The whole file has neither, and loops as it always did.
+  uint32_t fade = (uint32_t)(WINDOW_FADE_SECONDS * (nativeRate >> v.level));
+  if (fade > WINDOW_FADE_MAX_FRAMES) fade = WINDOW_FADE_MAX_FRAMES;
+  if (fade > w.length / 4) fade = w.length / 4;
+  w.fadeAtEnd = start >= fade;
+  if (!w.fadeAtEnd && end + fade > total) fade = 0;
+  w.fade = fade;
+  return w;
 }
 
-// Gives a voice the window afresh, with its position `windowStart` at the
+// Gives a voice the window afresh, with its position `window.start` at the
 // start of the window - for a voice that's about to be primed from
 // scratch. moveVoiceWindow() is the one for a voice that's playing.
 void resetVoiceWindow(Voice &v) {
-  windowInCopy(v, v.windowStart, v.windowLength);
-  v.windowBase = (int32_t)v.windowStart;
+  v.window = windowInCopy(v);
+  v.windowBase = (int32_t)v.window.start;
 }
 
 // The only place a virtual (signed, possibly-wrapped-many-times-over)
@@ -1095,33 +1117,63 @@ void resetVoiceWindow(Voice &v) {
 // wraparound in either direction - the buffer simply holds the window end
 // to end, as many times over as fit.
 uint32_t fileOffsetFor(const Voice &v, int32_t virtualPos) {
-  int32_t m = (virtualPos - v.windowBase) % (int32_t)v.windowLength;
-  if (m < 0) m += (int32_t)v.windowLength;
-  return v.windowStart + (uint32_t)m;
+  int32_t m = (virtualPos - v.windowBase) % (int32_t)v.window.length;
+  if (m < 0) m += (int32_t)v.window.length;
+  return v.window.start + (uint32_t)m;
+}
+
+// Crossfades a run of frames just read from the card - `frames` of them
+// in dst, from file offset `pos` - wherever it overlaps the window's fade:
+// see "The window". Each frame there is mixed with the one a whole window
+// away, outside the window, which is read into fadeBuffer.
+void fadeSeam(Voice &v, uint32_t pos, int16_t *dst, size_t frames) {
+  const CopyWindow &w = v.window;
+  if (w.fade == 0) return;
+  uint32_t zone = w.fadeAtEnd ? w.start + w.length - w.fade : w.start;
+  uint32_t from = (pos > zone) ? pos : zone;
+  uint32_t to = (pos + frames < zone + w.fade) ? pos + frames : zone + w.fade;
+  if (from >= to) return;
+
+  uint32_t other = w.fadeAtEnd ? from - w.length : from + w.length;
+  if (v.reader.readFramesAt(other, fadeBuffer, to - from) != to - from) return;
+
+  uint8_t channels = v.reader.channels();
+  int16_t *mine = dst + (from - pos) * channels;
+  for (uint32_t i = 0; i < to - from; i++) {
+    // How much of the other audio: rising to all of it by the window's last
+    // frame, or falling from all of it at the window's first.
+    uint32_t n = from + i - zone;
+    float mix = w.fadeAtEnd ? (float)(n + 1) / w.fade : (float)(w.fade - n) / w.fade;
+    for (uint8_t c = 0; c < channels; c++) {
+      int16_t &sample = mine[i * channels + c];
+      sample = (int16_t)lroundf(sample + mix * (fadeBuffer[i * channels + c] - sample));
+    }
+  }
 }
 
 // Reads `frames` frames of a voice's copy into dst, starting at file offset
 // `offset` (which must be inside its window) and carrying on round the
-// window from its end back to its start.
+// window from its end back to its start, crossfaded there.
 //
 // A window can be much shorter than what's asked for - the minimum is a few
 // frames of a low-rate copy - so once one whole lap is in dst, the rest is
 // copied from there rather than read from the card again and again.
 size_t readLooped(Voice &v, uint32_t offset, int16_t *dst, size_t frames) {
   uint8_t channels = v.reader.channels();
-  uint32_t end = v.windowStart + v.windowLength;
+  uint32_t end = v.window.start + v.window.length;
   uint32_t pos = offset;
   size_t done = 0;
   while (done < frames) {
-    if (pos >= end) pos = v.windowStart;
+    if (pos >= end) pos = v.window.start;
     size_t n = frames - done;
     if (n > end - pos) n = end - pos;
-    if (done >= v.windowLength) {
-      memcpy(dst + done * channels, dst + (done - v.windowLength) * channels,
+    if (done >= v.window.length) {
+      memcpy(dst + done * channels, dst + (done - v.window.length) * channels,
              n * channels * sizeof(int16_t));
     } else {
       n = v.reader.readFramesAt(pos, dst + done * channels, n);
       if (n == 0) break;  // shouldn't happen, but avoid spinning forever
+      fadeSeam(v, pos, dst + done * channels, n);
     }
     done += n;
     pos += n;
@@ -1296,7 +1348,7 @@ void startLevelChange(uint8_t target) {
   // If it crossed the end of the window meanwhile, the fresh position will
   // have wrapped round to the start - but the ring was primed in one
   // continuous stretch, so unwrap it back alongside where priming began.
-  int32_t len = (int32_t)incoming.windowLength;
+  int32_t len = (int32_t)incoming.window.length;
   if (idx < primedAt - len / 2) idx += len;
   if (idx > primedAt + len / 2) idx -= len;
   incoming.resampler.index = idx;
@@ -1402,7 +1454,23 @@ void refillVoice(Voice &v, float step) {
 // back to a short runway ahead of the cursor, and the window's mapping is
 // re-anchored so that reading carries on seamlessly from there, round the
 // new window. No dropout, and the change is heard within the runway's
-// length. If the cut would land outside the new window - an end has been
+// length.
+//
+// The join from the window's end back to its start is crossfaded, or it
+// would click on every lap - the audio either side of it has nothing to do
+// with each other. Over the window's last few milliseconds its own audio
+// fades out while the lead-in to its start (the audio just before the
+// window) fades in, so that by the last frame the signal is exactly what
+// comes before the first, and carries straight on into it. A window at the
+// very start of the file has no lead-in, so it's done the other way round
+// there: the window's first few milliseconds fade in from the audio that
+// follows its end. It's worked into the audio as it's read from the card
+// (readLooped() and fadeSeam()), so it costs the audio interrupt nothing,
+// and it's as smooth played backward or scrubbed across. It can't change
+// what a short window is, though: a 20ms loop is a 50Hz buzz however
+// neatly it's joined - only the click goes.
+//
+// If the cut would land outside the new window - an end has been
 // moved past the playing position - reading carries on from the window's
 // start instead (or from its end, playing backward).
 //
@@ -1430,48 +1498,43 @@ double wrapToWindow(double frames) {
 // Brings a playing voice into line with a window that has just moved - see
 // above. `step` only says which way it's playing.
 void moveVoiceWindow(Voice &v, float step) {
-  uint32_t newStart, newLength;
-  windowInCopy(v, newStart, newLength);
-  if (newStart == v.windowStart && newLength == v.windowLength) return;
-  uint32_t newEnd = newStart + newLength;
-  uint32_t oldStart = v.windowStart;
-  uint32_t oldEnd = v.windowStart + v.windowLength;
+  CopyWindow was = v.window;
+  CopyWindow now = windowInCopy(v);
+  if (now.start == was.start && now.length == was.length) return;
 
   // If everything buffered in the direction of travel lies inside both the
-  // old window and the new one, in one piece, it's all still right and
-  // nothing need be thrown away. Otherwise keep only a runway.
+  // old window and the new one, in one piece and clear of both crossfades,
+  // it's all still right and nothing need be thrown away. Otherwise keep
+  // only a runway.
   int32_t cursor = v.resampler.index;
-  uint32_t at = fileOffsetFor(v, cursor);
-  int32_t edge;  // the position the next read will join on to
-  if (step >= 0.0f) {
-    int32_t high = v.ring.validHigh();
-    uint32_t ahead = (high > cursor) ? (uint32_t)(high - cursor) : 0;
-    bool stillGood = at >= newStart && at + ahead <= oldEnd && at + ahead <= newEnd;
-    edge = cursor;
-    if (!stillGood) {
-      edge = cursor + WINDOW_RUNWAY;
-      if (edge < high) v.ring.releaseHigh(edge);
-      else edge = high;
-    }
-  } else {
-    int32_t low = v.ring.validLow();
-    uint32_t behind = (cursor > low) ? (uint32_t)(cursor - low) : 0;
-    bool stillGood = at < newEnd && at >= oldStart + behind && at >= newStart + behind;
-    edge = cursor;
-    if (!stillGood) {
-      edge = cursor - WINDOW_RUNWAY;
-      if (edge > low) v.ring.releaseLow(edge);
-      else edge = low;
-    }
+  int32_t limit = (step >= 0.0f) ? v.ring.validHigh() : v.ring.validLow();
+  int64_t at = fileOffsetFor(v, cursor);
+  int64_t reach = at + (limit - cursor);  // the far end of what's buffered that way
+  int64_t lowest = (reach < at) ? reach : at;
+  int64_t highest = (reach < at) ? at : reach;
+  int64_t safeLow = was.start + was.fade;
+  if (safeLow < now.start + now.fade) safeLow = now.start + now.fade;
+  int64_t safeHigh = was.start + was.length - was.fade;
+  if (safeHigh > now.start + now.length - now.fade) safeHigh = now.start + now.length - now.fade;
+  bool stillGood = lowest >= safeLow && highest <= safeHigh;
+
+  int32_t edge = cursor;  // the position the next read will join on to
+  if (!stillGood && step >= 0.0f) {
+    edge = cursor + WINDOW_RUNWAY;
+    if (edge < limit) v.ring.releaseHigh(edge);
+    else edge = limit;
+  } else if (!stillGood) {
+    edge = cursor - WINDOW_RUNWAY;
+    if (edge > limit) v.ring.releaseLow(edge);
+    else edge = limit;
   }
 
   // Re-anchor: the edge keeps the file offset it had if that's still in
   // the window, and otherwise becomes the window's start.
   uint32_t edgeAt = fileOffsetFor(v, edge);  // by the old window
-  bool inside = edgeAt >= newStart && edgeAt < newEnd;
-  v.windowStart = newStart;
-  v.windowLength = newLength;
-  v.windowBase = inside ? edge - (int32_t)(edgeAt - newStart) : edge;
+  bool inside = edgeAt >= now.start && edgeAt < now.start + now.length;
+  v.window = now;
+  v.windowBase = inside ? edge - (int32_t)(edgeAt - now.start) : edge;
 }
 
 // Keeps a window legal: inside the file, and no shorter than the minimum.
@@ -1575,7 +1638,7 @@ bool loadFile(const String &filename, String &errorOut) {
   applySettings(FileSettings::load(filename));
   // And cued at the start of its window.
   resetVoiceWindow(v);
-  v.resampler.index = (int32_t)v.windowStart;
+  v.resampler.index = (int32_t)v.window.start;
   v.resampler.frac = 0.0f;
   // Only moving if the transport is running. Starting at 1x regardless
   // played a fragment of every file picked while stopped: the audio comes
@@ -1651,7 +1714,7 @@ void rewindToStart() {
     openVoice(v, currentFilename, 0);  // copy unreadable - fall back to the WAV
   }
   resetVoiceWindow(v);
-  v.resampler.index = (int32_t)v.windowStart;
+  v.resampler.index = (int32_t)v.window.start;
   v.resampler.frac = 0.0f;
   endScrub();
   lastGoodLeft = lastGoodRight = 0;  // don't carry a stale frame across the jump

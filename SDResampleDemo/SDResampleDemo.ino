@@ -28,7 +28,8 @@
   latches the transport;
   D21 is the transport itself - hold it to run, release to stop; both
   share the TSCAP capacitor on D6 - see RA6M5CapTouch.h). The onboard WS2812
-  on D13 is used as the transport indicator - no extra wiring. The DA14531MOD Bluetooth
+  on D13 shows the knob mode and the blue STAT LED the transport - no extra
+  wiring. The DA14531MOD Bluetooth
   module used for BLE control is already onboard -
   no extra wiring for that part.
 
@@ -244,12 +245,13 @@
   sound rather than a studio stretcher: clean around 0.5x-2x, more grainy
   further out.
 
-  The onboard WS2812 on D13 shows both: dark when stopped, blinking at half
-  brightness while running from a held finger, steady at full brightness when
-  latched - green while knob1 sets speed, blue while it sets pitch. "Full" is
-  RGBLED_MAX_BRIGHTNESS, which is 20% of what the LED can actually do - it is
-  startlingly bright otherwise. Note the mode is not visible while stopped,
-  since the LED is dark then.
+  Two LEDs show the state. The onboard WS2812 on D13 is always lit, in the
+  colour of the knob mode: green while knob1 sets speed, blue while it sets
+  pitch - at RGBLED_BRIGHTNESS, 10% of what the LED can actually do, since it
+  is startlingly bright otherwise. The blue STAT LED shows the transport: dark
+  when stopped, blinking while running from a held finger, steady when
+  latched. (One LED used to do both jobs, by colour and by blinking, which
+  left the mode invisible whenever the transport was stopped.)
 
   File formats: mono or stereo, at any sample rate, in 8-, 16-, 24- or
   32-bit PCM or 32- or 64-bit float, with plain or WAVE_FORMAT_EXTENSIBLE
@@ -360,7 +362,7 @@
        wherever it just was - not by jumping to whatever an absolute
        mapping of the pot's new position would imply.
     9. From the page: play a file with its play button and confirm it
-       latches (steady LED, keeps playing with no pad touched), that Stop
+       latches (steady STAT LED, keeps playing with no pad touched), that Stop
        releases it, and that the two Reset buttons snap speed to 1.00x and
        pitch to 1.000x in either knob mode.
     10. Upload a short WAV, then upload it again to confirm the overwrite
@@ -2370,18 +2372,19 @@ CapTouch touch2(21);
 bool touch1WasTouched = false;
 bool touch2WasTouched = false;
 
-// -- Onboard RGB LED (transport indicator) -------------------------------
-// Blinking = running from a held finger, steady = latched, dark = stopped.
-// Same WS2812 on D13 that WS2812TouchDemo drives.
+// -- Onboard LEDs (mode and transport indicators) -------------------------
+// The RGB LED - the same WS2812 on D13 that WS2812TouchDemo drives - is
+// always lit, in the colour of the knob mode. The blue STAT LED
+// (LED_BUILTIN) shows the transport: blinking = running from a held finger,
+// steady = latched, dark = stopped.
 const uint8_t RGB_LED_PIN = 13;
 const uint8_t NUM_LEDS = 1;
 CRGB leds[NUM_LEDS];
 
 // This LED is startlingly bright at full scale, so everything here is
 // expressed as a percentage of it and kept low. Adjustable by hand for now.
-const uint8_t RGBLED_MAX_BRIGHTNESS = 20;                          // percent
-const uint8_t RGBLED_DIM_BRIGHTNESS = RGBLED_MAX_BRIGHTNESS / 2;   // percent
-const unsigned long RGBLED_BLINK_INTERVAL = 300;                   // ms on, ms off
+const uint8_t RGBLED_BRIGHTNESS = 10;                    // percent
+const unsigned long TRANSPORT_BLINK_INTERVAL = 300;      // ms on, ms off
 
 inline uint8_t rgbLevel(uint8_t percent) { return (uint8_t)((255 * percent) / 100); }
 
@@ -2900,8 +2903,10 @@ void setup() {
   // ---- end RA6M5-specific ----
 
   FastLED.addLeds<WS2812B, RGB_LED_PIN, GRB>(leds, NUM_LEDS);
-  leds[0] = CRGB::Black;
+  leds[0] = CRGB::Black;  // loop() lights it in the mode's colour
   FastLED.show();
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, LOW);
 
   if (sdFs.mount(&sdBlockDevice) != 0) {
     Serial.println("SD card mount failed - check it's inserted and FAT32-formatted.");
@@ -3218,35 +3223,30 @@ void loop() {
       stageDone(STAGE_COPY_CHANGE, t);
     }
 
-    // Transport indicator: steady at full level when latched, blinking at
-    // half level when running from a held finger, dark when stopped.
-    //
-    // FastLED.show() bit-bangs the WS2812's timing and blocks (and on most
-    // platforms masks interrupts) for tens of microseconds - long enough to
-    // straddle a 48kHz audio tick. So it is called only when the colour
-    // actually changes, which during a blink is a handful of times a second
-    // rather than a hundred.
+    // Transport indicator, on the blue STAT LED: steady when latched,
+    // blinking when running from a held finger, dark when stopped.
     uint32_t ledStartMicros = micros();  // see "loop() profiling" on why not the cycle counter
     bool blinking = transportRunning && !transportLatched;
     if (blinking && !wasBlinking) blinkPhaseStartMillis = currentMillis;
     wasBlinking = blinking;
 
-    // Colour carries the knob's mode, brightness and blink carry the
-    // transport: green while knob1 sets speed, blue while it sets pitch.
-    // Without this the mode toggle is completely invisible - you would have
-    // to turn the knob and listen to find out which one you were in.
-    uint8_t level = 0;
-    if (transportLatched) {
-      level = RGBLED_MAX_BRIGHTNESS;
-    } else if (blinking) {
+    bool statOn = transportLatched;
+    if (blinking) {
       unsigned long phase = currentMillis - blinkPhaseStartMillis;
-      if (((phase / RGBLED_BLINK_INTERVAL) % 2) == 0) level = RGBLED_DIM_BRIGHTNESS;
+      statOn = ((phase / TRANSPORT_BLINK_INTERVAL) % 2) == 0;
     }
+    digitalWrite(LED_BUILTIN, statOn ? HIGH : LOW);
 
-    CRGB wanted = level == 0
-                      ? CRGB::Black
-                      : (pitchMode ? CRGB(0, 0, rgbLevel(level))
-                                   : CRGB(0, rgbLevel(level), 0));
+    // Mode indicator, on the RGB LED: always lit, green while knob1 sets
+    // speed, blue while it sets pitch. Without this the mode toggle is
+    // completely invisible - you would have to turn the knob and listen to
+    // find out which one you were in.
+    //
+    // FastLED.show() bit-bangs the WS2812's timing and masks interrupts for
+    // long enough to drop an audio tick. So it is called only when the
+    // colour actually changes - which is now only when the mode does.
+    CRGB wanted = pitchMode ? CRGB(0, 0, rgbLevel(RGBLED_BRIGHTNESS))
+                            : CRGB(0, rgbLevel(RGBLED_BRIGHTNESS), 0);
     if (wanted != leds[0]) {
       leds[0] = wanted;
       FastLED.show();

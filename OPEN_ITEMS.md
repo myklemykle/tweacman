@@ -14,9 +14,9 @@ and touch noise fixes is in `NOISE_DEBUGGING.md`.
 Captured 2026-10-09. Several depend on each other: the general modes
 framework comes before modes 3-5, and the web UI's mode display builds on
 it. Modes are rows of the `MODES` table in the sketch, stepped through by
-touch1. Two are built so far: speed mode (knob1 speed, knob2 scrub) and
-pitch mode (knob1 pitch, knob2 time-stretch); four more are placeholders
-with a colour and no knob functions. Per-file
+touch1. Three are built so far: speed mode (knob1 speed, knob2 scrub),
+pitch mode (knob1 pitch, knob2 time-stretch) and window mode (knob1 start,
+knob2 end); three more are placeholders with a colour and no knob functions. Per-file
 settings exist too (speed and pitch, see `FileSettings.h`); each new mode's
 parameters should be added to them.
 
@@ -31,7 +31,13 @@ parameters should be added to them.
 - **Mode selection by knob.** Pressing touch1 (the left pad) advances to the
   next mode, as now. Also: while touch1 is held and touch2 is not, turning
   either knob steps forward or back through the modes.
-- **Mode 3: sample start and end points.**
+- **Window that wraps round the file's ends.** Mode 3's start and end stop
+  at the ends of the file; letting the window carry on round from the end
+  to the beginning would be cool.
+- **Shorter windows.** The minimum is 20ms (`WINDOW_MIN_SECONDS`). Much
+  shorter and the loop becomes a pitched buzz - worth trying.
+- **Show the window** on the web page; it's only on Serial so far
+  (`WINDOW:<s>,<e>`, `RESET:WINDOW`).
 - **Mode 4: digital feedback echo** - delay time and feedback/volume.
 - **Mode 5: filter on the output** - low/band/high-pass, with cutoff(s) and
   width/Q.

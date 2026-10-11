@@ -33,4 +33,11 @@ struct Voice {
   uint8_t level = 0;                    // 0 = the WAV, k = the copy at 1/2^k its rate
   float levelScale = 1.0f;              // 1/2^level: converts a step through the
                                         // original file into a step through this copy
+
+  // The stretch of this copy that plays, as a loop - "The window" in the
+  // sketch. The voice's position runs on and on, and maps onto the copy
+  // round and round the window, with position windowBase at its start.
+  uint32_t windowStart = 0;             // in frames of this copy
+  uint32_t windowLength = 1;
+  int32_t windowBase = 0;
 };

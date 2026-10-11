@@ -214,8 +214,9 @@
   LATCH:<name> then SPEED:500, for instance.
 
   Transport: touch pad D21 held runs the tape, released stops it. Pressing
-  D20 while D21 is held latches it on, so playback continues after the finger
-  lifts; the next press of D21 clears the latch, without interrupting
+  D20 while D21 is held - or D21 while D20 is held, the chord works in
+  either order - latches it on, so playback continues after the fingers
+  lift; the next press of D21 on its own clears the latch, without interrupting
   playback, since that press is holding the transport up by itself. Starting
   rewinds to the top of the file, so each start plays from the beginning
   rather than resuming where scrubbing left off - engaging or clearing the
@@ -3646,6 +3647,7 @@ void loop() {
     //
     //   touch2 held                -> running, for as long as it is held
     //   touch1 pressed while held  -> latched on; running survives release
+    //   touch2 pressed, touch1 held -> the same, the other way round
     //   touch2 pressed again       -> latch cleared
     //
     // Clearing the latch never interrupts playback: the press that clears it
@@ -3678,7 +3680,9 @@ void loop() {
     bool selecting = touch1Now && !touch2Now;
     if (!selecting) auditioning = false;
 
-    if (touch2Now && !touch2WasTouched && transportLatched) transportLatched = false;
+    // touch2 pressed while touch1 is down latches too - the chord works in
+    // either order. Pressed on its own, it clears the latch.
+    if (touch2Now && !touch2WasTouched) transportLatched = touch1Now;
 
     touch1WasTouched = touch1Now;
     touch2WasTouched = touch2Now;

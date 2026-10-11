@@ -16,21 +16,19 @@ framework comes before modes 3-5, and the web UI's mode display builds on
 it. Modes are rows of the `MODES` table in the sketch, stepped through by
 touch1. Three are built so far: speed mode (knob1 speed, knob2 scrub),
 pitch mode (knob1 pitch, knob2 time-stretch) and window mode (knob1 start,
-knob2 end); three more are placeholders with a colour and no knob functions. Per-file
+knob2 end). Each further mode gets its own feature branch. Per-file
 settings exist too (speed and pitch, see `FileSettings.h`); each new mode's
 parameters should be added to them.
 
 ### Modes
 
-- **Mode colours.** Trying six hues clear of the board's red and blue LEDs:
-  green 120, aqua 180, purple 268, pink 335, orange 30, yellow 60 degrees,
-  with green, aqua and yellow dimmed to match the rest. Revisit if any pair
-  is hard to tell apart on the real LED.
+- **Mode colours.** Six hues clear of the board's red and blue LEDs: green
+  120, aqua 180 and purple 268 degrees are in use; pink 335, orange 30 and
+  yellow 60 are picked and waiting for modes 4-6 (they were tried on the LED
+  as placeholder modes, then taken out). Green, aqua and yellow are dimmed
+  to match the rest. Revisit if any pair is hard to tell apart.
 - **Describe each mode's parameters in the table** (name, value, units), for
   the web page's tiles and the per-file settings - when the web UI needs it.
-- **Mode selection by knob.** Pressing touch1 (the left pad) advances to the
-  next mode, as now. Also: while touch1 is held and touch2 is not, turning
-  either knob steps forward or back through the modes.
 - **Window that wraps round the file's ends.** Mode 3's start and end stop
   at the ends of the file; letting the window carry on round from the end
   to the beginning would be cool.

@@ -28,9 +28,6 @@ parameters should be added to them.
   is hard to tell apart on the real LED.
 - **Describe each mode's parameters in the table** (name, value, units), for
   the web page's tiles and the per-file settings - when the web UI needs it.
-- **Mode selection by knob.** Pressing touch1 (the left pad) advances to the
-  next mode, as now. Also: while touch1 is held and touch2 is not, turning
-  either knob steps forward or back through the modes.
 - **Window that wraps round the file's ends.** Mode 3's start and end stop
   at the ends of the file; letting the window carry on round from the end
   to the beginning would be cool.

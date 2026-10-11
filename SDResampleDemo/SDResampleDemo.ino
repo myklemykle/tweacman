@@ -223,8 +223,13 @@
   still works while stopped - that is the point of expressing "stopped" as a
   speed of zero.
 
-  Knob modes: pressing D20 on its own (not chorded with D21, which latches)
-  steps to the next knob mode, round and round. Each mode gives the two
+  Knob modes: tapping D20 on its own (not chorded with D21, which latches)
+  steps to the next knob mode, round and round. Holding it turns the knobs
+  into selectors: knob1 steps through the modes, forward or back, one every
+  60 degrees, so any mode is one gesture away; knob2 steps through the WAVs
+  on the card, one every 30 degrees, and plays each one it lands on from
+  its start, until D20 is released - or on past that, if the transport was
+  already latched on. Each mode gives the two
   knobs a different job, and is one row of the MODES table - see "Knob
   modes" further down. Three are built so far, and three more are
   placeholders with a colour and knobs that do nothing yet. In speed mode knob1 sets the
@@ -426,6 +431,15 @@
        window's start each time. In speed mode the scrub stays inside the
        window. Pick another file and come back, or reboot: the window is
        restored.
+    15. Selecting with the knobs: tap D20 - the mode steps on as the finger
+       lifts. Hold D20 alone and turn knob 1 - the LED steps through the
+       mode colours, one every 60 degrees, forward and back, and letting go
+       doesn't step it again. Still holding it, turn knob 2 - each 30
+       degrees cues the next or previous WAV on the card and plays it
+       (Serial says "Loaded"). Holding D20 without turning plays nothing.
+       Release it: playback stops, and both knobs do their jobs in the mode
+       shown, with no jump. Latch the transport first and do the same: the
+       file picked keeps playing after D20 is released.
 */
 
 #include <RV112FF.h>
@@ -3032,6 +3046,116 @@ CRGB modeColour(float hueDegrees, uint8_t percent) {
   }
 }
 
+// -- Selecting with the knobs ---------------------------------------------------
+// While touch1 is held on its own, the knobs select instead of doing their
+// jobs in the current mode: knob1 picks the mode and knob2 picks the file.
+// Each steps on, or back, every so many degrees it turns, round and round,
+// so any mode or file is one gesture away. The knobs go back to their jobs,
+// in whichever mode that leaves, when the pad is released.
+//
+// Touching the pad and letting go without selecting anything is a tap,
+// which steps to the next mode.
+const float MODE_SELECT_DEGREES = 60.0f;
+const float FILE_SELECT_DEGREES = 30.0f;
+float modeSelectDegrees = 0.0f;  // how far each knob has turned toward its next step
+float fileSelectDegrees = 0.0f;
+bool wasSelecting = false;
+bool modeTapPending = false;     // touch1 is down, and so far it could be a tap
+
+// True while a file picked with knob2 is playing for as long as touch1
+// stays held - an audition. It runs the transport the same way a finger on
+// touch2 does, so if the transport was already latched on, letting go
+// changes nothing and the new file plays on.
+bool auditioning = false;
+
+// Adds a knob's movement to `degrees`, and takes out and returns however
+// many whole steps of `perStep` that makes - negative for backward.
+int selectorSteps(float &degrees, float turned, float perStep) {
+  // Negated, like the scrub: the knob's readings run opposite to the way
+  // that feels like "forward".
+  degrees -= turned;
+  int steps = (int)(degrees / perStep);  // rounds toward zero
+  degrees -= steps * perStep;
+  return steps;
+}
+
+void turnModeSelector(float turned) {
+  int steps = selectorSteps(modeSelectDegrees, turned, MODE_SELECT_DEGREES);
+  if (steps == 0) return;
+  modeTapPending = false;
+  selectMode((knobMode + MODE_COUNT + steps % MODE_COUNT) % MODE_COUNT);
+}
+
+// The next name in an open folder that looks like a WAV. False at the end.
+bool nextWavName(DIR *dir, String &name) {
+  struct dirent *ent;
+  while ((ent = readdir(dir)) != nullptr) {
+    if (ent->d_type != DT_REG) continue;
+    name = ent->d_name;
+    String upper = name;
+    upper.toUpperCase();
+    if (upper.endsWith(".WAV")) return true;
+  }
+  return false;
+}
+
+// The WAV `steps` places on from the current file (back, if negative) in
+// the card's own order - the order LIST gives - going round at the ends.
+// Empty if the card has none. Reads the folder twice: once to count the
+// WAVs and find the current one among them, once to fetch the one wanted.
+String wavAtOffset(int steps) {
+  DIR *dir = opendir("/sd");
+  if (!dir) return "";
+  String name;
+  int count = 0;
+  int current = 0;
+  while (nextWavName(dir, name)) {
+    if (isCurrentFile(name)) current = count;
+    count++;
+  }
+  closedir(dir);
+  if (count == 0) return "";
+
+  int wanted = ((current + steps) % count + count) % count;
+  dir = opendir("/sd");
+  if (!dir) return "";
+  for (int i = 0; i <= wanted; i++) {
+    if (!nextWavName(dir, name)) name = "";
+  }
+  closedir(dir);
+  return name;
+}
+
+// Knob2 while selecting: steps through the card's WAVs. Each one it lands
+// on is cued and plays from its start for as long as the pad stays held -
+// an audition. Only turning does that: holding the pad plays nothing by
+// itself.
+//
+// A fast turn can cover several steps in one tick, and they're taken in one
+// go - loading a file takes tens of milliseconds, far too long to load
+// each one passed on the way.
+void turnFileSelector(float turned) {
+  int steps = selectorSteps(fileSelectDegrees, turned, FILE_SELECT_DEGREES);
+  if (steps == 0 || uploadInProgress()) return;
+  modeTapPending = false;
+  int direction = (steps > 0) ? 1 : -1;
+  // A file that won't play is stepped over, a few times at most.
+  for (int tries = 0; tries < 8; tries++, steps += direction) {
+    String name = wavAtOffset(steps);
+    if (name.length() == 0 || isCurrentFile(name)) return;
+    String err;
+    if (loadFile(name, err)) {
+      auditioning = true;
+      blePrintLine("PLAYING:" + name);
+      return;
+    }
+    Serial.print("  skipping ");
+    Serial.print(name);
+    Serial.print(" - ");
+    Serial.println(err);
+  }
+}
+
 // Switches to a knob mode. A scrub in progress ends, since its knob may be
 // about to mean something else.
 void selectMode(uint8_t index) {
@@ -3531,23 +3655,35 @@ void loop() {
     bool touch1Now = touch1.isTouched();
     bool touch2Now = touch2.isTouched();
 
-    // touch1 pressed on its own steps to the next knob mode; chorded with
-    // touch2 it latches the transport instead. One button, two jobs, disambiguated by
-    // whether the other pad is down - which is exactly how the latch was
-    // already specified, so nothing had to move.
+    // touch1 pressed while touch2 is down latches the transport. On its own
+    // it's the selector: tapped, it steps to the next knob mode; held, it
+    // turns the knobs into selectors - see "Selecting with the knobs". A
+    // tap is a press and release with no selecting in between, so the step
+    // comes on the release.
     if (touch1Now && !touch1WasTouched) {
       if (touch2Now) {
         transportLatched = true;
       } else {
-        selectMode(knobMode + 1);
+        modeTapPending = true;
       }
     }
+    if (touch2Now) modeTapPending = false;
+    if (!touch1Now) {
+      if (touch1WasTouched && modeTapPending) selectMode(knobMode + 1);
+      modeTapPending = false;
+    }
+
+    // Selecting: while touch1 is held on its own. A file picked then plays
+    // only until it's released (see turnFileSelector()).
+    bool selecting = touch1Now && !touch2Now;
+    if (!selecting) auditioning = false;
+
     if (touch2Now && !touch2WasTouched && transportLatched) transportLatched = false;
 
     touch1WasTouched = touch1Now;
     touch2WasTouched = touch2Now;
 
-    bool nowRunning = touch2Now || transportLatched;
+    bool nowRunning = touch2Now || transportLatched || auditioning;
 
     // Rewind on the rising edge of *running*, not of the pad, so engaging or
     // releasing the latch mid-playback does not jump back to the top.
@@ -3562,10 +3698,25 @@ void loop() {
     // one mode doesn't arrive as a jump in the next. Until a pot is
     // calibrated its function isn't called, and lastKnownRatio keeps
     // whatever it had (native speed, from setup()/loadFile()).
-    const KnobMode &activeMode = MODES[knobMode];
+    //
+    // Except while touch1 is held on its own: then knob1 picks the mode and
+    // knob2 the file instead - see "Selecting with the knobs".
+    if (selecting && !wasSelecting) modeSelectDegrees = fileSelectDegrees = 0.0f;
+    wasSelecting = selecting;
+
     float turned;
-    if (readKnob1(turned) && activeMode.knob1) activeMode.knob1(turned);
-    if (readKnob2(turned) && activeMode.knob2) activeMode.knob2(turned);
+    if (selecting) {
+      if (readKnob1(turned)) turnModeSelector(turned);
+      if (readKnob2(turned)) turnFileSelector(turned);
+      // So that knob2's turning isn't taken for a scrub once the pad is
+      // released: wherever it is now is where it's resting.
+      endScrub();
+    }
+    const KnobMode &activeMode = MODES[knobMode];
+    if (!selecting) {
+      if (readKnob1(turned) && activeMode.knob1) activeMode.knob1(turned);
+      if (readKnob2(turned) && activeMode.knob2) activeMode.knob2(turned);
+    }
 
     // While the scrub knob is moving it owns the cursor outright, like a
     // hand on the reel, and the transport waits underneath - when the knob

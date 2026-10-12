@@ -14,17 +14,17 @@ and touch noise fixes is in `NOISE_DEBUGGING.md`.
 Captured 2026-10-09. Several depend on each other: the general modes
 framework comes before modes 3-5, and the web UI's mode display builds on
 it. Modes are rows of the `MODES` table in the sketch, stepped through by
-touch1. Three are built so far: speed mode (knob1 speed, knob2 scrub),
-pitch mode (knob1 pitch, knob2 time-stretch) and window mode (knob1 start,
-knob2 end). Each further mode gets its own feature branch. Per-file
-settings exist too (speed and pitch, see `FileSettings.h`); each new mode's
+touch1. Four are built so far: speed mode (knob1 speed, knob2 scrub),
+pitch mode (knob1 pitch, knob2 time-stretch), window mode (knob1 start,
+knob2 end) and echo mode (knob1 delay time, knob2 amount). Each further mode gets its own feature branch. Per-file
+settings exist too (speed, pitch, window and echo, see `FileSettings.h`); each new mode's
 parameters should be added to them.
 
 ### Modes
 
 - **Mode colours.** Six hues clear of the board's red and blue LEDs: green
-  120, aqua 180 and purple 268 degrees are in use; pink 335, orange 30 and
-  yellow 60 are picked and waiting for modes 4-6 (they were tried on the LED
+  120, aqua 180, purple 268 and pink 335 degrees are in use; orange 30 and
+  yellow 60 are picked and waiting for modes 5-6 (they were tried on the LED
   as placeholder modes, then taken out). Green, aqua and yellow are dimmed
   to match the rest. Revisit if any pair is hard to tell apart.
 - **Describe each mode's parameters in the table** (name, value, units), for
@@ -36,7 +36,25 @@ parameters should be added to them.
   shorter and the loop becomes a pitched buzz - worth trying.
 - **Show the window** on the web page; it's only on Serial so far
   (`WINDOW:<s>,<e>`, `RESET:WINDOW`).
-- **Mode 4: digital feedback echo** - delay time and feedback/volume.
+- **Echo: a longer delay.** Mode 4's delay line is in RAM (`EchoDelay.h`):
+  mono, 24kHz, 2.7 seconds. Longer means keeping it on the SD card - a
+  pre-allocated file used as a circle, written behind the write head and
+  read ahead of the tap like a third voice. Mono is comfortable on average
+  (about 96KB/s of writes against the card's 350KB/s); the risks are the
+  card's occasional long write stalls underrunning playback, and 25ms
+  writes stuttering the control tick. Measure the worst-case write time
+  during playback first. Kept as a file, it's also most of a
+  sound-on-sound looper.
+- **Echo: runaway feedback.** The amount stops at 0.95. Past 1 the echo
+  feeds itself for ever, tape-echo style, but needs a soft clipper in the
+  loop rather than today's hard limit. Loud material with a lot of echo
+  already clips at the output - the same clipper would help there.
+- **Echo: separate level and feedback?** One knob sets both. See how it
+  plays before splitting them.
+- **Echo: delay time locked to the window**, so the repeats fall in step
+  with the loop.
+- **Show the echo** on the web page; it's in the stats line (`ECT:`,
+  `ECA:`) but the page doesn't display it yet.
 - **Mode 5: filter on the output** - low/band/high-pass, with cutoff(s) and
   width/Q.
 

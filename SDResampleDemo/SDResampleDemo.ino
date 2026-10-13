@@ -166,7 +166,8 @@
   reads 0.00 while stopped and follows the scrub knob while it's turning; `REQ:` is the
   speed knob's requested ratio, which survives being stopped, so a client
   can show what the transport *would* run at; `PIT:` is the pitch ratio,
-  1.000 meaning unshifted; `LAT:0|1` is whether the transport is latched;
+  1.000 meaning unshifted; `ECT:` and `ECA:` are the echo's delay in seconds
+  and its amount; `LAT:0|1` is whether the transport is latched;
   `LVL:` is which copy is playing (0 the original, k the cached copy at
   1/2^k its rate); `CACHE:` is how far building those copies has got, in
   percent.
@@ -183,6 +184,9 @@
     `WINDOW:<s>,<e>`     play only from <s> to <e> seconds into the file -
                          see "Start and end points"; `RESET:WINDOW` goes
                          back to the whole file
+    `ECHO:<s>,<amount>`  set the echo: a delay of <s> seconds, and an amount
+                         from 0 (none) to 0.95 - see "Echo"; `RESET:ECHO`
+                         turns it off
     `PROFILE`            print, over USB Serial, how often each stage of
                          loop() did work since the last PROFILE and how long
                          it took - see "loop() profiling" further down
@@ -232,7 +236,7 @@
   its start, until D20 is released - or on past that, if the transport was
   already latched on. Each mode gives the two
   knobs a different job, and is one row of the MODES table - see "Knob
-  modes" further down. Three are built so far. In speed mode knob1 sets the
+  modes" further down. Four are built so far. In speed mode knob1 sets the
   speed, tape-style (any pitch shift stays a ratio on top), and knob2
   scrubs. In pitch mode knob1 sets the pitch you hear and knob2 stretches
   time - see below. Switching never changes the sound by itself. Pitch is saved per file, like
@@ -272,9 +276,26 @@
   interrupts the sound - see "The window" further down for how, given that
   audio is read from the card well ahead of where it's playing.
 
+  Echo: in the fourth mode (pink), knob1 sets an echo's delay time and
+  knob2 how much of it there is - one amount for both its level and its
+  feedback, so more means louder repeats and more of them. It's off until
+  knob2 is turned up. The delay runs from a millisecond (not an echo at that
+  length but a metallic ring) to 2.7 seconds, three octaves per turn, and
+  turning it bends the pitch of the echoes already on their way, as moving
+  the head of a tape echo would. The echoes are mono and duller than the
+  sound itself, increasingly so as they repeat: the delay is kept in RAM,
+  and making 2.7 seconds of it fit meant keeping less of the signal - see
+  EchoDelay.h, which explains all of this. The echo applies to whatever
+  comes out, in every mode. When the transport stops, the echoes die away
+  within about half a second rather than ringing on (or being cut dead):
+  the feedback is taken away and what's left fades. Scrubbing a stopped
+  tape brings the echo back for as long as the knob keeps moving; when it
+  comes to rest the echo fades out slowly and evenly, over three delay
+  times. Both settings are saved per file.
+
   Two LEDs show the state. The onboard WS2812 on D13 is always lit, in the
   colour of the knob mode: green for speed mode, aqua for pitch mode, purple
-  for the window (no red or blue, which the board's other LEDs already use) - at RGBLED_BRIGHTNESS or a little
+  for the window, pink for the echo (no red or blue, which the board's other LEDs already use) - at RGBLED_BRIGHTNESS or a little
   less, 10% of what the LED can actually do, since it is startlingly bright
   otherwise. The blue STAT LED shows the transport: dark when stopped,
   blinking while running from a held finger, steady when latched. (One LED used to do both jobs, by colour and by blinking, which
@@ -439,6 +460,19 @@
        Release it: playback stops, and both knobs do their jobs in the mode
        shown, with no jump. Latch the transport first and do the same: the
        file picked keeps playing after D20 is released.
+    16. Echo: latch a file playing, press D20 until the LED is pink, and
+       turn knob 2 forward - echoes appear and, further round, take longer
+       to die away, without ever building up. Turn knob 1: the echoes move
+       apart or together, bending in pitch as they go. All the way back on
+       knob 1 they close up into a metallic ring. Stop the transport: the
+       echoes die away within about half a second, however long the delay,
+       and the output doesn't thump or stick. Back in speed mode, scrub the
+       stopped tape with knob 2: it echoes in full, and when the knob
+       comes to rest the echoes fade evenly away over three delay times.
+       ECHO:0.5,0.6 sets one exactly (Serial prints it, and the status line
+       shows it) and RESET:ECHO turns it off. The "isr" figures on the
+       status line should be only a few percent higher than before. Pick
+       another file and come back, or reboot: the echo is restored.
 */
 
 #include <RV112FF.h>
@@ -459,6 +493,7 @@
 #include "FileSettings.h"
 #include "Voice.h"
 #include "SincInterpolator.h"
+#include "EchoDelay.h"
 #include <utility>  // for std::move in loadFile()
 
 // -- Speed range and knob mapping ----------------------------------------
@@ -917,6 +952,34 @@ AUDIO_HOT inline bool renderVoice(Voice &v, float step, float pitch, bool shifti
   return ok;
 }
 
+// -- Echo --------------------------------------------------------------------
+// A feedback echo on the output, set by the fourth knob mode - see
+// EchoDelay.h for how it works and why it sounds as it does. It runs in the
+// audio interrupt on every tick, whatever the mode and whether or not
+// anything is playing. With the amount at zero, as it is until that knob is
+// turned, it adds nothing to the sound.
+//
+// When the sound stops, loop() damps it (EchoDelay's setDamped()), so the
+// tail dies away quickly instead of ringing on. "The sound" is the
+// transport running, or the scrub knob moving a stopped tape. When that
+// knob comes to rest the echo isn't damped but faded out, in a straight
+// line over a few delay times (ECHO_SCRUB_HOLD_REPEATS) - long enough for
+// the last thing it played to come round that many times, each quieter.
+EchoDelay echo;
+float echoSeconds = 0.3f;  // the delay time; loop()'s copy of what `echo` was told
+float echoAmount = 0.0f;   // level and feedback, 0 (off) to ECHO_MAX_AMOUNT
+const float ECHO_SCRUB_HOLD_REPEATS = 3.0f;
+bool echoScrubbed = false;             // whether a scrub is keeping the echo undamped...
+unsigned long echoScrubMillis = 0;     // ...and when the knob last moved the tape
+
+// The delay knob is relative and exponential, like the pitch knob: a turn
+// multiplies or divides the delay by 2 to the power of this, wherever it
+// is. All the way from ECHO_MIN_SECONDS to ECHO_MAX_SECONDS is a little
+// under four turns.
+const float ECHO_OCTAVES_PER_TURN = 3.0f;
+// The amount knob goes from nothing to ECHO_MAX_AMOUNT in this many turns.
+const float ECHO_AMOUNT_TURNS = 1.0f;
+
 // -- Audio interrupt timing (diagnostic) -------------------------------------
 // The audio interrupt should fire every 1/48000s exactly. If anything keeps
 // interrupts masked for longer than a tick, a tick is skipped outright and
@@ -1063,6 +1126,13 @@ AUDIO_HOT void audioCallback(timer_callback_args_t *args) {
       underrunTicks++;
     }
   }
+
+  // The echo, last: it hears exactly what goes out, including a held frame.
+  // (lastGoodLeft/Right above stay as they were, without it.)
+  float withEcho[2] = {(float)outLeft, (float)outRight};
+  echo.process(withEcho);
+  outLeft = clampToSample(withEcho[0]);
+  outRight = clampToSample(withEcho[1]);
 
   // 16-bit signed -> 12-bit unsigned, same shift-based rescale used
   // throughout this pipeline for cheapness; a few LSBs of resolution
@@ -1854,6 +1924,35 @@ void setPitchRatio(float ratio) {
 // cueRememberedFile()). Written only when it changes.
 String rememberedFile;
 
+// Sets the echo: its delay in seconds and its amount (level and feedback),
+// each held within its range.
+void setEcho(float seconds, float amount) {
+  echoSeconds = constrain(seconds, ECHO_MIN_SECONDS, ECHO_MAX_SECONDS);
+  echoAmount = constrain(amount, 0.0f, ECHO_MAX_AMOUNT);
+  echo.setTime(echoSeconds);
+  echo.setAmount(echoAmount);
+}
+
+void printEcho() {
+  Serial.print("Echo: ");
+  Serial.print(echoSeconds, 3);
+  Serial.print("s, amount ");
+  Serial.println(echoAmount, 2);
+}
+
+// ECHO:<seconds>,<amount> - an exact echo, mostly for testing.
+void setEchoFromCommand(const String &args) {
+  int comma = args.indexOf(',');
+  if (comma == -1) return;
+  setEcho(args.substring(0, comma).toFloat(), args.substring(comma + 1).toFloat());
+  printEcho();
+}
+
+// Echo off. The delay time stays where it was, ready for next time.
+void resetEcho() {
+  setEcho(echoSeconds, 0.0f);
+}
+
 void rememberCurrentFile() {
   if (currentFilename == rememberedFile) return;
   FileSettings::saveCurrentName(currentFilename);
@@ -2391,7 +2490,7 @@ void deleteFromCard(const String &nameArg) {
 // Binary mode pipe. See handleBLELine() for why that matters.
 bool isBoardCommand(const String &line) {
   static const char *const COMMANDS[] = {
-    "LIST", "PLAY:", "LATCH:", "STOP", "RESET:", "PROFILE", "SPEED:", "PITCH:", "WINDOW:", "PUT:", "REN:", "DEL:",
+    "LIST", "PLAY:", "LATCH:", "STOP", "RESET:", "PROFILE", "SPEED:", "PITCH:", "WINDOW:", "ECHO:", "PUT:", "REN:", "DEL:",
     "CAL", "RECAL"
   };
   for (const char *command : COMMANDS) {
@@ -2439,6 +2538,10 @@ void handleBLECommand(String line) {
     setWindowSeconds(line.substring(7));
   } else if (line == "RESET:WINDOW") {
     resetWindowToWholeFile();
+  } else if (line.startsWith("ECHO:")) {
+    setEchoFromCommand(line.substring(5));
+  } else if (line == "RESET:ECHO") {
+    resetEcho();
   } else if (line.startsWith("PUT:")) {
     startUpload(line.substring(4));
   } else if (line.startsWith("REN:")) {
@@ -2993,6 +3096,22 @@ void turnWindowEnd(float turned) {
   setWindow(fmin(windowStart, end - minimum), end);
 }
 
+// Knob1 in echo mode: the delay time - relative, see ECHO_OCTAVES_PER_TURN.
+// Forward lengthens it. The echoes bend in pitch while it turns, like a
+// tape echo's - see EchoDelay.h.
+void turnEchoTime(float turned) {
+  if (turned == 0.0f) return;
+  float octaves = log2f(echoSeconds) - turned / 360.0f * ECHO_OCTAVES_PER_TURN;
+  setEcho(exp2f(octaves), echoAmount);
+}
+
+// Knob2 in echo mode: how much echo - its level and its feedback together.
+// Forward is more; it stops at none and at ECHO_MAX_AMOUNT.
+void turnEchoAmount(float turned) {
+  if (turned == 0.0f) return;
+  setEcho(echoSeconds, echoAmount - turned / 360.0f * ECHO_MAX_AMOUNT / ECHO_AMOUNT_TURNS);
+}
+
 struct KnobMode {
   const char *name;             // printed to Serial when the mode is selected
   float hue;                    // the RGB LED's colour, in degrees round the colour
@@ -3008,14 +3127,15 @@ struct KnobMode {
 // The hues stay clear of red and blue, which the board's other LEDs already
 // use. Most are at RGBLED_BRIGHTNESS; green and aqua are turned down
 // to look about as bright as the rest - the eye is most sensitive to green,
-// and aqua has two of the LED's three colours lit. Three more colours were
-// picked to go with these, for modes still to come: pink (335, at
-// RGBLED_BRIGHTNESS), orange (30, the same) and yellow (60, at 6).
+// and aqua has two of the LED's three colours lit. Two more colours were
+// picked to go with these, for modes still to come: orange (30, at
+// RGBLED_BRIGHTNESS) and yellow (60, at 6).
 const KnobMode MODES[] = {
   // name, hue, brightness, holdsPitch, enter, knob1, knob2
   {"speed / scrub", 120.0f, 7, false, nullptr, turnSpeedDial, scrubKnob},             // green
   {"pitch / time-stretch", 180.0f, 6, true, syncHeldPitch, turnPitch, stretchTime},  // aqua
   {"window start / end", 268.0f, RGBLED_BRIGHTNESS, false, printWindow, turnWindowStart, turnWindowEnd},  // purple
+  {"echo time / amount", 335.0f, RGBLED_BRIGHTNESS, false, printEcho, turnEchoTime, turnEchoAmount},  // pink
 };
 const uint8_t MODE_COUNT = sizeof(MODES) / sizeof(MODES[0]);
 
@@ -3260,7 +3380,7 @@ void printKnobCalibration() {
 }
 
 // -- Per-file settings -------------------------------------------------------
-// Each WAV keeps its own speed, pitch and window on the card (see FileSettings.h):
+// Each WAV keeps its own speed, pitch, window and echo on the card (see FileSettings.h):
 // picking a file again, or rebooting, brings them back. They're saved a
 // couple of seconds after the last change rather than on every tick of a
 // knob - an SD write can pause loop() for tens of milliseconds - and at
@@ -3276,6 +3396,8 @@ FileSettings currentSettings() {
   s.pitch = pitchRatio;
   s.windowStart = (uint32_t)windowStart;
   s.windowEnd = (windowEnd >= fileFrames) ? 0 : (uint32_t)windowEnd;  // 0: the file's end
+  s.echoTime = echoSeconds;
+  s.echoAmount = echoAmount;
   return s;
 }
 
@@ -3292,6 +3414,7 @@ void applySettings(const FileSettings &s) {
   windowStart = s.windowStart;
   windowEnd = s.windowEnd ? (double)s.windowEnd : (double)fileFrames;
   clampWindow(windowStart, windowEnd);
+  setEcho(s.echoTime, s.echoAmount);
   savedSettings = seenSettings = currentSettings();
 }
 
@@ -3458,6 +3581,8 @@ void setup() {
   }
   initSincTable();
   initSpeedCurve();
+  echo.begin();
+  setEcho(echoSeconds, echoAmount);
 
   // ---- RA6M5-specific ----
   // Start the Cortex-M33's cycle counter, which the audio interrupt uses to
@@ -3688,7 +3813,10 @@ void loop() {
     // releasing the latch mid-playback does not jump back to the top.
     if (nowRunning && !transportRunning && fileLoaded) rewindToStart();
     // And a stop is when newly learned knob calibrations get saved.
-    if (!nowRunning && transportRunning) saveNewKnobCalibration();
+    if (!nowRunning && transportRunning) {
+      saveNewKnobCalibration();
+      echoScrubbed = false;  // a stop damps the echo, whatever was scrubbed before it
+    }
     transportRunning = nowRunning;
 
     // The knobs: each hands however far it has turned since the last tick to
@@ -3723,6 +3851,20 @@ void loop() {
     bool scrubDriven = scrubbing;
     float step = scrubDriven ? scrubStep
                              : (transportRunning ? lastKnownRatio : 0.0f) * rateFactor;
+
+    // The echo is damped unless there's sound to echo, and fades out after
+    // a scrub of a stopped tape - see "Echo".
+    float echoFade = 1.0f;
+    if (scrubDriven) {
+      echoScrubbed = true;
+      echoScrubMillis = millis();
+    } else if (echoScrubbed) {
+      float held = (float)(millis() - echoScrubMillis) / (echoSeconds * ECHO_SCRUB_HOLD_REPEATS * 1000.0f);
+      if (held >= 1.0f) echoScrubbed = false;
+      else echoFade = 1.0f - held;
+    }
+    echo.setFade(transportRunning ? 1.0f : echoFade);
+    echo.setDamped(!transportRunning && !echoScrubbed);
 
     // While time-stretching, the grains read at the held pitch whatever the
     // speed - see grainTapRate. Only while running: stopped is silent.
@@ -3822,6 +3964,10 @@ void loop() {
     }
     Serial.print(")  pitch ");
     Serial.print(pitchRatio, 3);
+    Serial.print("  echo ");
+    Serial.print(echoSeconds, 3);
+    Serial.print("s x");
+    Serial.print(echoAmount, 2);
     Serial.print("  buffer ");
     Serial.print(fillPercent, 0);
     Serial.print("%  underruns ");
@@ -3876,6 +4022,7 @@ void loop() {
       String stat = "SPD:" + String(ratio, speedDecimals) +
                      ",REQ:" + String(lastKnownRatio, fabsf(lastKnownRatio) < 1.0f ? 4 : 2) +
                      ",PIT:" + String(pitchRatio, 3) +
+                     ",ECT:" + String(echoSeconds, 3) + ",ECA:" + String(echoAmount, 2) +
                      ",BUF:" + String((int)fillPercent) + ",UND:" + String(underrunTicks) +
                      ",RUN:" + String(transportRunning ? 1 : 0) +
                      ",LAT:" + String(transportLatched ? 1 : 0) +

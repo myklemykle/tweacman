@@ -13,6 +13,8 @@
     pitch=0.500000
     window_start=11025
     window_end=0
+    echo_time=0.300000
+    echo_amount=0.500000
 
   Plain text so it can be read or edited from a computer. Unknown lines are
   ignored and missing ones keep their defaults, so adding a setting later
@@ -40,6 +42,8 @@ struct FileSettings {
   float pitch = 1.0f;  // pitch ratio, 1 for unshifted
   uint32_t windowStart = 0;  // the stretch of the file that plays, in frames -
   uint32_t windowEnd = 0;    // its end being 0 for "the end of the file"
+  float echoTime = 0.3f;    // the echo's delay, in seconds
+  float echoAmount = 0.0f;  // its level and feedback, 0 for no echo
 
   // Close enough counts as equal: the knobs recompute these through the
   // dial's own mapping, which doesn't land back on exactly the value that

@@ -67,8 +67,12 @@
   That makes two gains out of the one amount: how much of the echo is fed
   back, and how loud it is heard. Undamped, both simply follow the amount.
 
+  setFade() is the slow way out, for a fade of any length and shape: it
+  scales how loud the echo is heard, and nothing else, so the repeats carry
+  on underneath exactly as they were while the caller turns them down.
+
   process() runs in the audio interrupt, once per output sample; setTime(),
-  setAmount() and setDamped() are called from loop(). The cost is a few dozen floating
+  setAmount(), setFade() and setDamped() are called from loop(). The cost is a few dozen floating
   point operations a tick whatever the settings.
 */
 
@@ -151,6 +155,7 @@ class EchoDelay {
     inputFilter_.setCutoff(ECHO_CUTOFF_HZ, ECHO_OUTPUT_RATE);
     outputFilter_.setCutoff(ECHO_CUTOFF_HZ, ECHO_OUTPUT_RATE);
     targetDelay_ = delay_ = ECHO_MIN_SECONDS * ECHO_LINE_RATE;
+    fade_ = 1.0f;
   }
 
   // The delay time, in seconds. The echo slides there - see above.
@@ -167,6 +172,15 @@ class EchoDelay {
     targetAmount_ = amount;
   }
 
+  // Turns the echo down without changing it: 1 is its full level, 0
+  // silent. The feedback isn't touched. Smoothed like the amount, so it can
+  // be stepped down from loop() without zippering.
+  void setFade(float fade) {
+    if (fade < 0.0f) fade = 0.0f;
+    if (fade > 1.0f) fade = 1.0f;
+    fade_ = fade;
+  }
+
   // Damped, the echo dies away quickly whatever its amount: no feedback,
   // and what's already in the line fades out - see above. For when the
   // sound that was being echoed has stopped.
@@ -181,7 +195,7 @@ class EchoDelay {
     float amount = damped ? 0.0f : targetAmount_;
     float feedback = feedback_ + (amount - feedback_) * ECHO_AMOUNT_GLIDE;
     feedback_ = feedback;
-    float level = level_ + (amount - level_) * (damped ? ECHO_DAMP_GLIDE : ECHO_AMOUNT_GLIDE);
+    float level = level_ + (amount * fade_ - level_) * (damped ? ECHO_DAMP_GLIDE : ECHO_AMOUNT_GLIDE);
     level_ = level;
 
     // Slide the delay toward where it's been set.
@@ -246,6 +260,7 @@ class EchoDelay {
   // Set by loop(), followed by the interrupt. The delay is in line samples.
   volatile float targetDelay_ = 0.0f;
   volatile float targetAmount_ = 0.0f;
+  volatile float fade_ = 0.0f;  // 1 once begin() has run
   volatile bool damped_ = false;
   float delay_ = 0.0f;
   float feedback_ = 0.0f;  // how much of the echo goes back into the line

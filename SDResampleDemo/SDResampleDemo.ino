@@ -289,8 +289,9 @@
   comes out, in every mode. When the transport stops, the echoes die away
   within about half a second rather than ringing on (or being cut dead):
   the feedback is taken away and what's left fades. Scrubbing a stopped
-  tape brings the echo back, for as long as the knob keeps moving and one
-  delay time afterwards. Both settings are saved per file.
+  tape brings the echo back for as long as the knob keeps moving; when it
+  comes to rest the echo fades out slowly and evenly, over three delay
+  times. Both settings are saved per file.
 
   Two LEDs show the state. The onboard WS2812 on D13 is always lit, in the
   colour of the knob mode: green for speed mode, aqua for pitch mode, purple
@@ -466,8 +467,8 @@
        knob 1 they close up into a metallic ring. Stop the transport: the
        echoes die away within about half a second, however long the delay,
        and the output doesn't thump or stick. Back in speed mode, scrub the
-       stopped tape with knob 2: it echoes in full, and goes on doing so
-       for one delay time after the knob comes to rest.
+       stopped tape with knob 2: it echoes in full, and when the knob
+       comes to rest the echoes fade evenly away over three delay times.
        ECHO:0.5,0.6 sets one exactly (Serial prints it, and the status line
        shows it) and RESET:ECHO turns it off. The "isr" figures on the
        status line should be only a few percent higher than before. Pick
@@ -960,12 +961,14 @@ AUDIO_HOT inline bool renderVoice(Voice &v, float step, float pitch, bool shifti
 //
 // When the sound stops, loop() damps it (EchoDelay's setDamped()), so the
 // tail dies away quickly instead of ringing on. "The sound" is the
-// transport running, or the scrub knob moving a stopped tape - and for one
-// delay time after that knob comes to rest, long enough for the last thing
-// it played to come round once at full strength.
+// transport running, or the scrub knob moving a stopped tape. When that
+// knob comes to rest the echo isn't damped but faded out, in a straight
+// line over a few delay times (ECHO_SCRUB_HOLD_REPEATS) - long enough for
+// the last thing it played to come round that many times, each quieter.
 EchoDelay echo;
 float echoSeconds = 0.3f;  // the delay time; loop()'s copy of what `echo` was told
 float echoAmount = 0.0f;   // level and feedback, 0 (off) to ECHO_MAX_AMOUNT
+const float ECHO_SCRUB_HOLD_REPEATS = 3.0f;
 bool echoScrubbed = false;             // whether a scrub is keeping the echo undamped...
 unsigned long echoScrubMillis = 0;     // ...and when the knob last moved the tape
 
@@ -3849,13 +3852,18 @@ void loop() {
     float step = scrubDriven ? scrubStep
                              : (transportRunning ? lastKnownRatio : 0.0f) * rateFactor;
 
-    // The echo is damped unless there's sound to echo - see "Echo".
+    // The echo is damped unless there's sound to echo, and fades out after
+    // a scrub of a stopped tape - see "Echo".
+    float echoFade = 1.0f;
     if (scrubDriven) {
       echoScrubbed = true;
       echoScrubMillis = millis();
-    } else if (echoScrubbed && millis() - echoScrubMillis >= (unsigned long)(echoSeconds * 1000.0f)) {
-      echoScrubbed = false;
+    } else if (echoScrubbed) {
+      float held = (float)(millis() - echoScrubMillis) / (echoSeconds * ECHO_SCRUB_HOLD_REPEATS * 1000.0f);
+      if (held >= 1.0f) echoScrubbed = false;
+      else echoFade = 1.0f - held;
     }
+    echo.setFade(transportRunning ? 1.0f : echoFade);
     echo.setDamped(!transportRunning && !echoScrubbed);
 
     // While time-stretching, the grains read at the held pitch whatever the

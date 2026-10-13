@@ -84,6 +84,15 @@ parameters should be added to them.
 
 ## SDResampleDemo - known issues
 
+- **Touch debounce: on trial without it.** `SDResampleDemo` turns the
+  library's debounce off (`setDebounceSamples(1)` in `setup()`), saving
+  10ms per press and release. The debounce was added 2026-09-21 against
+  spurious latches; the cause turned out to be the scan race fixed
+  2026-09-23, after which the pads measured within +/-40 counts of a 3000
+  threshold. If nothing misbehaves after a while of use (phantom latches,
+  mode steps or unlatches), remove the debounce code from `RA6M5CapTouch`
+  and correct its comments, which still blame CTSU noise. If presses
+  chatter at the threshold instead, the fix is hysteresis, not debounce.
 - **Other pot sketches relearn calibration every boot.** Since 2026-10-09
   `RV112FF` reports nothing until a pot's calibration is complete (about two
   turns). SDResampleDemo saves it; AudioKnobsDemo, AudioKnobsWebBLEDemo,

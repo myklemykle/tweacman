@@ -177,6 +177,8 @@
                          the top and keeps playing, answered like PLAY:
     `STOP`               clear the latch, as a touch2 press would
     `RESET:SPEED`        speed back to 1.0x
+    `RESET:ALL`          everything saved per file back to its default, as
+                         the triple tap does - see "Reset"
     `RESET:PITCH`        pitch back to unshifted
     `SPEED:<ratio>`      jump to an exact speed (negative is backward, 0
                          pauses); the knob carries on from there
@@ -227,6 +229,14 @@
   latch mid-playback does not rewind, because playback never stops. Scrubbing
   still works while stopped - that is the point of expressing "stopped" as a
   speed of zero.
+
+  Reset: tapping both pads together three times in a row puts the current
+  file's speed, pitch, start and end points and echo back to their
+  defaults, and the RGB LED flashes white to say so. The first of the
+  three taps latches the transport like any other chord, and it stays
+  latched. The taps have to be taps - each under 0.4 seconds, and no more
+  than that apart - so latching and holding never counts toward one. See
+  "Triple tap" in the code.
 
   Knob modes: tapping D20 on its own (not chorded with D21, which latches)
   steps to the next knob mode, round and round. Holding it turns the knobs
@@ -473,6 +483,14 @@
        shows it) and RESET:ECHO turns it off. The "isr" figures on the
        status line should be only a few percent higher than before. Pick
        another file and come back, or reboot: the echo is restored.
+    17. Reset: change the speed, pitch, window and echo of a test file,
+       then tap both pads together three times, about as fast as knocking
+       on a door. The RGB LED flashes white, Serial prints "Reset: ...",
+       the file plays as it did when new, and the transport is latched.
+       Then confirm what doesn't reset: two taps; three slow ones (a
+       second apart); three presses each held for a second; and a chord
+       held while the other hand does anything at all. RESET:ALL does the
+       same from Serial.
 */
 
 #include <RV112FF.h>
@@ -2522,6 +2540,8 @@ void handleBLECommand(String line) {
     // Clears the latch, exactly as a touch2 press would - so a finger that
     // happens to be holding touch2 keeps the tape running until it lifts.
     transportLatched = false;
+  } else if (line == "RESET:ALL") {
+    resetAllTweaks();
   } else if (line == "RESET:SPEED") {
     resetSpeedToNative();
   } else if (line == "PROFILE") {
@@ -2776,6 +2796,88 @@ CapTouch touch2(21);
 
 bool touch1WasTouched = false;
 bool touch2WasTouched = false;
+
+// -- Triple tap ---------------------------------------------------------------
+// Both pads tapped together three times resets the current file's settings
+// (resetAllTweaks()). A "tap" here is the chord - both pads down at once -
+// and then both pads up again, all inside TAP_MAX_MS; anything shorter than
+// TAP_MIN_MS is taken for a pad's reading flickering rather than a finger.
+// Each tap has to start within TAP_GAP_MS of the last one ending.
+//
+// Nothing waits on this. The chord still latches the transport the instant
+// it lands, as it always did, and the reset happens the instant the third
+// chord lands - there is no pause to see whether another tap is coming,
+// because no other gesture uses a second or third chord.
+//
+// Two fingers never land in the same instant, so each tap really goes one
+// pad, both, one, none. The lone pad at either end is ignored here (though
+// not by the transport or the mode selector: fingers that miss each other
+// entirely are two separate taps to them). But a pad touched and let go on
+// its own, with no chord, is some other gesture, and starts the count again.
+const unsigned long TAP_MIN_MS = 30;
+const unsigned long TAP_MAX_MS = 400;
+const unsigned long TAP_GAP_MS = 400;
+uint8_t chordTapCount = 0;          // taps so far toward the three
+bool chordHeld = false;             // from the chord landing until both pads are up
+bool padAlone = false;              // a pad is down that hasn't been part of a chord
+unsigned long chordStartMillis = 0;
+unsigned long chordEndMillis = 0;
+
+// The white flash that says a reset happened.
+const unsigned long RESET_FLASH_MS = 150;
+bool resetFlashing = false;
+unsigned long resetFlashStartMillis = 0;
+
+// Everything that's saved per file back to its default - what a file that
+// has never been played gets. From the triple tap and RESET:ALL.
+void resetAllTweaks() {
+  if (!fileLoaded) return;
+  FileSettings defaults;
+  resetSpeedToNative();
+  resetPitchToUnity();
+  resetWindowToWholeFile();
+  setEcho(defaults.echoTime, defaults.echoAmount);
+  resetFlashStartMillis = millis();
+  resetFlashing = true;
+  Serial.print("Reset: speed, pitch, window and echo back to defaults for ");
+  Serial.println(currentFilename);
+}
+
+// Call every control tick with the two pads' states.
+void watchForTripleTap(bool pad1, bool pad2, unsigned long now) {
+  bool both = pad1 && pad2;
+  bool neither = !pad1 && !pad2;
+
+  if (both && !chordHeld) {
+    // A chord lands.
+    chordHeld = true;
+    padAlone = false;
+    chordStartMillis = now;
+    if (chordTapCount > 0 && now - chordEndMillis > TAP_GAP_MS) chordTapCount = 0;
+    if (chordTapCount == 2) {
+      chordTapCount = 0;
+      chordStartMillis = now - TAP_MAX_MS - 1;  // this one isn't the first tap of another three
+      resetAllTweaks();
+    }
+  } else if (chordHeld && neither) {
+    // ...and has been let go. Was it a tap?
+    chordHeld = false;
+    unsigned long held = now - chordStartMillis;
+    if (held >= TAP_MIN_MS && held <= TAP_MAX_MS) {
+      chordTapCount++;
+      chordEndMillis = now;
+    } else {
+      chordTapCount = 0;
+    }
+  } else if (!chordHeld) {
+    if (!neither) {
+      padAlone = true;
+    } else if (padAlone) {
+      padAlone = false;
+      chordTapCount = 0;
+    }
+  }
+}
 
 // -- Onboard LEDs (mode and transport indicators) -------------------------
 // The RGB LED - the same WS2812 on D13 that WS2812TouchDemo drives - is
@@ -3777,6 +3879,9 @@ void loop() {
     bool touch1Now = touch1.isTouched();
     bool touch2Now = touch2.isTouched();
 
+    // Three taps of both pads together reset the file - see "Triple tap".
+    watchForTripleTap(touch1Now, touch2Now, currentMillis);
+
     // touch1 pressed while touch2 is down latches the transport. On its own
     // it's the selector: tapped, it steps to the next knob mode; held, it
     // turns the knobs into selectors - see "Selecting with the knobs". A
@@ -3928,8 +4033,17 @@ void loop() {
     //
     // FastLED.show() bit-bangs the WS2812's timing and masks interrupts for
     // long enough to drop an audio tick. So it is called only when the
-    // colour actually changes - which is only when the mode does.
+    // colour actually changes - which is only when the mode does, or for
+    // the white flash that marks a reset (twice then: on and off).
     CRGB wanted = modeColour(activeMode.hue, activeMode.brightness);
+    if (resetFlashing) {
+      if (currentMillis - resetFlashStartMillis < RESET_FLASH_MS) {
+        uint8_t white = (uint8_t)(255u * RGBLED_BRIGHTNESS / 100u);
+        wanted = CRGB(white, white, white);
+      } else {
+        resetFlashing = false;
+      }
+    }
     if (wanted != leds[0]) {
       leds[0] = wanted;
       FastLED.show();

@@ -72,7 +72,9 @@ parameters should be added to them.
   replacing today's separate speed and pitch resets - back to the defaults,
   and saved that way in its per-file settings. It's also the way back to
   the file's own pitch, now that the pitch knob is relative with no
-  click-stop at unity.
+  click-stop at unity. The board's half is done: `RESET:ALL`, which is
+  also what tapping both pads three times does. The page just has to
+  send it.
 - **Pitch tile shows the shift, not the pitch you hear.** `PIT:` reports
   `pitchRatio`, the shift on top of the speed. In pitch mode the knob sets
   the pitch you hear (shift times speed), so at 2x unshifted-sounding audio

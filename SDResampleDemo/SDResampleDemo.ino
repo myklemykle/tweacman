@@ -3859,14 +3859,6 @@ void setup() {
 
   touch1.begin();
   touch2.begin();
-  // On trial: no debouncing. The library waits for two scans to agree
-  // before a pad changes state, which costs 10ms on every press and release.
-  // That was added against spurious latches which turned out to be a bug in
-  // the library's own scan, since fixed - so it should no longer be needed.
-  // If a pad starts registering touches or releases nobody made, take these
-  // two lines out again.
-  touch1.setDebounceSamples(1);
-  touch2.setDebounceSamples(1);
 
   // ---- RA6M5-specific ----
   // Tune the ADC for the pots: a longer sampling time and a discharge

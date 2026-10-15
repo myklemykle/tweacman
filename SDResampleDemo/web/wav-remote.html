@@ -5,9 +5,11 @@
 <html lang="en">
 <meta charset="UTF-8">
 <!-- Without this a phone lays the page out at desktop width and shrinks it,
-     leaving every button too small to hit with a finger. -->
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>WAV Remote</title>
+     leaving every button too small to hit with a finger. viewport-fit=cover
+     lets the page run under a phone's notch and home bar; the status line
+     and tab bar pad themselves clear of them (the env() insets below). -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Tweacman</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600&family=Public+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap">
 <style>
   :root {
@@ -52,23 +54,367 @@
 
   * { box-sizing: border-box; }
 
+  [hidden] { display: none !important; }
+
+  /* -- the frame ---------------------------------------------------------
+     The page is the height of the screen and never scrolls as a whole: a
+     status line on top, a tab bar at the bottom, and between them whichever
+     tab is showing, which scrolls on its own. One scroller at a time - the
+     file list used to be a scrolling box inside a scrolling page, and a
+     thumb couldn't tell which one it had hold of. */
+
+  html, body { height: 100%; }
   body {
     background: var(--bg);
     color: var(--text);
     font-family: "Public Sans", -apple-system, "Helvetica Neue", Arial, sans-serif;
-    padding-inline: 16px;
-    padding-block: 28px;
     margin: 0;
+    overflow: hidden;
     display: flex;
     justify-content: center;
   }
 
-  .panel {
+  .app {
     width: 100%;
-    max-width: 420px;
+    max-width: 480px;
+    height: 100vh;
+    height: 100dvh;  /* the visible height, where a phone's toolbars come and go */
     display: flex;
     flex-direction: column;
-    gap: 18px;
+    min-height: 0;
+  }
+
+  /* -- status line --------------------------------------------------------- */
+
+  .statusLine {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 52px;
+    padding: 4px 12px;
+    padding-top: calc(4px + env(safe-area-inset-top, 0px));
+    padding-left: calc(12px + env(safe-area-inset-left, 0px));
+    padding-right: calc(12px + env(safe-area-inset-right, 0px));
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  /* The app's name - a logo will go here. */
+  .brand {
+    font-family: "Oswald", "Arial Narrow", sans-serif;
+    font-weight: 600;
+    font-size: 1.05rem;
+    letter-spacing: 0.08em;
+    flex-shrink: 0;
+  }
+  .status {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: baseline;
+    justify-content: flex-end;
+    gap: 0.4em;
+    font-size: 0.8rem;
+    color: var(--text-dim);
+  }
+  /* The track's name gives way (with an ellipsis) before its state does. */
+  .statusTrack {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  .statusState { white-space: nowrap; flex-shrink: 0; }
+  .statusState.playing { color: var(--good); font-weight: 600; }
+  /* Play and stop wear the tape-deck symbols: a triangle and a square. */
+  .transportBtn {
+    width: 52px;
+    padding: 0;
+    flex-shrink: 0;
+    display: grid;
+    place-items: center;
+  }
+  .transportBtn svg { width: 22px; height: 22px; }
+
+  /* -- connect screen ------------------------------------------------------
+     Nothing else on the page means anything until there's a board on the
+     other end, so until then this is the page: one button, most of the
+     screen. */
+
+  .connectScreen {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 16px;
+    padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  }
+  .connectBtn {
+    flex: 1 0 220px;
+    background: var(--accent);
+    color: var(--surface-2);
+    border-color: var(--accent-strong);
+    border-radius: 14px;
+    font-size: clamp(1.8rem, 9vw, 2.6rem);
+    font-weight: 600;
+    letter-spacing: 0.08em;
+  }
+  .connectBtn:active:not(:disabled) { background: var(--accent-strong); }
+  .about {
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    text-align: center;
+    margin: 0;
+  }
+  .about.bad { color: var(--bad); }
+
+  /* -- tabs ----------------------------------------------------------------- */
+
+  .tabPanel {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    padding: 12px 12px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .tabPanel > * { flex-shrink: 0; }
+
+  .tabBar {
+    flex-shrink: 0;
+    display: flex;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .tabBar button {
+    flex: 1;
+    min-height: 39px;
+    background: none;
+    border: none;
+    border-top: 3px solid transparent;
+    border-radius: 0;
+    color: var(--text-dim);
+    font-size: 0.85rem;
+    font-weight: 600;
+  }
+  .tabBar button[aria-selected="true"] {
+    color: var(--accent-strong);
+    border-top-color: var(--accent);
+    background: var(--surface-2);
+  }
+
+  /* Results and errors sit just above the tab bar, whichever tab is up. */
+  .notice { margin: 0 12px 8px; flex-shrink: 0; }
+
+  /* -- tweaks: one card per knob mode ---------------------------------------
+     Each card wears its mode's colour, the same hue the board's RGB LED
+     shows (--h, set per card), as a stripe down its left edge. The mode the
+     knobs are in has the colour all the way round and behind it. There are
+     no titles: the settings' own names say which mode a card is, and
+     tapping a card anywhere that isn't a control puts the board in it. */
+
+  .modeCard {
+    --mode: hsl(var(--h) 60% 34%);
+    border: 2px solid var(--border);
+    border-left: 8px solid var(--mode);
+    border-radius: 12px;
+    background: var(--surface);
+    overflow: hidden;
+    cursor: pointer;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .modeCard { --mode: hsl(var(--h) 55% 62%); }
+  }
+  :root[data-theme="dark"] .modeCard { --mode: hsl(var(--h) 55% 62%); }
+  .modeCard.current {
+    border-color: var(--mode);
+    background: color-mix(in srgb, var(--mode) 16%, var(--surface));
+  }
+  .modeCard:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* A mode's two settings sit side by side, as its two knobs do. */
+  .pair {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+  .param {
+    min-width: 0;
+    display: flex;
+    padding: 4px 4px 0 2px;
+  }
+  .param + .param { border-left: 1px solid var(--border); }
+  /* A setting's name lies on its side up the left edge of its controls,
+     reading bottom to top, so it costs no height. */
+  .paramLabel {
+    flex: none;
+    width: 16px;
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    font-family: "Oswald", "Arial Narrow", sans-serif;
+    font-size: 0.72rem;
+    line-height: 16px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .paramBody { flex: 1; min-width: 0; margin-left: 2px; }
+  /* The value, then Reverse (where there is one) and Reset. The value's
+     box takes whatever width the buttons leave. */
+  .paramRow {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  /* The value is a button: tap it to type an exact number. */
+  .paramValue {
+    flex: 1;
+    min-width: 0;
+    background: var(--surface-2);
+    color: var(--text);
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: 0.9rem;
+    text-transform: none;
+    letter-spacing: 0;
+    padding: 4px;
+    text-align: right;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  .paramValue .unit { font-size: 0.7em; color: var(--text-dim); margin-left: 3px; }
+  .paramInput {
+    flex: 1;
+    min-width: 0;
+    width: 0;
+    min-height: 44px;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 16px;  /* 16px or more stops iOS zooming the page on focus */
+    text-align: right;
+    color: var(--text);
+    background: var(--surface-2);
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    padding: 4px 8px;
+  }
+  /* Reset and Reverse: square, a finger wide. */
+  .paramBtn {
+    width: 40px;
+    flex-shrink: 0;
+    padding: 0;
+    display: grid;
+    place-items: center;
+    font-size: 0.62rem;
+  }
+  .paramBtn svg { width: 18px; height: 18px; }
+  /* A reset button lights up when there's something to reset: its setting
+     isn't at its default. */
+  .paramBtn.changed, .resetAllBtn.changed:not(.arming) {
+    color: var(--surface-2);
+    background: var(--accent);
+    border-color: var(--accent-strong);
+  }
+  /* The half of a card whose knob has no setting to show. */
+  .param.byHand {
+    align-items: center;
+    color: var(--text-dim);
+    padding-bottom: 4px;
+  }
+  .param.byHand .paramLabel { align-self: stretch; }
+  .param.byHand p { font-size: 0.75rem; margin: 0 0 0 6px; }
+  .param input[type="range"] {
+    display: block;
+    width: 100%;
+    height: 36px;
+    margin: 0;
+    accent-color: var(--mode);
+    /* A finger that starts on a slider and moves up or down still scrolls
+       the tab; only sideways movement drags the slider. */
+    touch-action: pan-y;
+  }
+  .param input[type="range"]:disabled { opacity: 0.45; }
+  #modeCards { display: flex; flex-direction: column; gap: 6px; }
+  .resetRow { display: flex; justify-content: center; }
+  /* The mode cards run almost edge to edge - sliders want the width. */
+  #tab-tweaks { padding: 6px 1px; gap: 6px; }
+  .smallBtn.arming {
+    background: var(--bad);
+    border-color: var(--bad);
+    color: var(--surface-2);
+  }
+
+  /* -- info tab --------------------------------------------------------------- */
+
+  .readouts {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+  .stat {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    align-items: center;
+    text-align: center;
+  }
+  .stat .label {
+    font-family: "Oswald", "Arial Narrow", sans-serif;
+    font-size: 0.68rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+  .stat .value {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: 1.1rem;
+    line-height: 1.1;
+    white-space: nowrap;
+  }
+  .stat .value.bad { color: var(--bad); }
+  .stat .value.quiet { color: var(--text-dim); }
+  .stat .value .unit { font-size: 0.6em; color: var(--text-dim); margin-left: 3px; }
+
+  /* The link log, newest line first, as long as it likes: it scrolls with
+     whatever it's in (the info tab, or the connect screen while there's no
+     board), not in a box of its own. Folded away until asked for. */
+  .logPanel {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface);
+  }
+  .logPanel summary {
+    font-family: "Oswald", "Arial Narrow", sans-serif;
+    font-size: 0.72rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    padding: 14px 12px;
+    cursor: pointer;
+  }
+  .logToolbar { padding: 0 12px 8px; }
+  .copyLogBtn.copied { color: var(--good); border-color: var(--good); }
+  .logBody {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 0.72rem;
+    line-height: 1.5;
+    color: var(--text-dim);
+    padding: 0 12px 12px;
+    white-space: pre-wrap;
+    word-break: break-word;
   }
 
   .eyebrow {
@@ -76,49 +422,6 @@
     font-size: 0.72rem;
     font-weight: 500;
     letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: var(--text-dim);
-  }
-
-  h1 {
-    font-family: "Oswald", "Arial Narrow", sans-serif;
-    font-weight: 600;
-    font-size: clamp(1.6rem, 6vw, 2rem);
-    letter-spacing: 0.01em;
-    margin: 2px 0 0;
-    text-wrap: balance;
-  }
-
-  /* -- header / connection strip ----------------------------------- */
-
-  .headerRow {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 12px;
-  }
-
-  .statusRow {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-top: 10px;
-  }
-
-  .dot {
-    width: 9px;
-    height: 9px;
-    border-radius: 50%;
-    background: var(--bad);
-    flex-shrink: 0;
-    transition: background-color 0.2s ease;
-  }
-  .dot.connected { background: var(--good); }
-
-  .statusText {
-    font-family: "Oswald", "Arial Narrow", sans-serif;
-    font-size: 0.85rem;
-    letter-spacing: 0.06em;
     text-transform: uppercase;
     color: var(--text-dim);
   }
@@ -139,18 +442,6 @@
   }
   button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   button:disabled { opacity: 0.45; cursor: default; }
-
-  .connectBtn {
-    background: var(--accent);
-    color: var(--surface-2);
-    border-color: var(--accent-strong);
-    font-size: 0.8rem;
-    font-weight: 600;
-    padding: 9px 16px;
-    flex-shrink: 0;
-  }
-  .connectBtn:active { background: var(--accent-strong); }
-  .connectBtn[hidden] { display: none; }
 
   /* Secondary buttons: Refresh, Upload, Reset, Cancel... */
   .smallBtn {
@@ -186,112 +477,6 @@
   .notice.bad { border-left-color: var(--bad); }
   .notice[hidden] { display: none; }
 
-  /* -- now playing + transport ---------------------------------------- */
-
-  .nowPlaying {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 12px 14px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-  .nowPlayingTop, .nowPlayingBottom {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 10px;
-  }
-  .nowPlaying .label {
-    font-family: "Oswald", "Arial Narrow", sans-serif;
-    font-size: 0.72rem;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: var(--text-dim);
-  }
-  /* Transport state, from the stats line's RUN:/LAT: fields - the board runs
-     only while its touch pad is held unless latched, so this flips
-     constantly in normal use. */
-  .transport {
-    font-family: "Oswald", "Arial Narrow", sans-serif;
-    font-size: 0.66rem;
-    letter-spacing: 0.09em;
-    text-transform: uppercase;
-    padding: 2px 8px;
-    border-radius: 999px;
-    border: 1px solid var(--border);
-    color: var(--text-dim);
-    flex-shrink: 0;
-    white-space: nowrap;
-  }
-  .transport.running {
-    color: var(--surface-2);
-    background: var(--good);
-    border-color: var(--good);
-  }
-
-  .nowPlaying .filename {
-    font-family: "IBM Plex Mono", ui-monospace, monospace;
-    font-size: 0.85rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    min-width: 0;
-  }
-  .transportBtn { min-width: 84px; flex-shrink: 0; }
-
-  /* -- stat readout tiles ------------------------------------------- */
-
-  .readouts {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 10px;
-  }
-
-  .stat {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 14px 10px 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    align-items: center;
-    text-align: center;
-  }
-
-  .stat .label {
-    font-family: "Oswald", "Arial Narrow", sans-serif;
-    font-size: 0.68rem;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: var(--text-dim);
-  }
-
-  .stat .value {
-    font-family: "IBM Plex Mono", ui-monospace, monospace;
-    font-variant-numeric: tabular-nums;
-    font-size: clamp(1.1rem, 6vw, 1.4rem);
-    line-height: 1.1;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 100%;
-  }
-  .stat .value.bad { color: var(--bad); }
-  .stat .value .unit {
-    font-size: 0.6em;
-    color: var(--text-dim);
-    margin-left: 3px;
-  }
-  /* The speed tile showing what the transport *would* run at, rather than
-     what it is doing - see handleTelemetry(). Also pitch at unity. */
-  .value.potential {
-    color: var(--text-dim);
-  }
-  .stat .smallBtn { width: 100%; margin-top: 2px; }
-
   /* -- file list ------------------------------------------------------ */
 
   .filesHeader {
@@ -305,20 +490,26 @@
   .hint {
     font-size: 0.75rem;
     color: var(--text-dim);
-    margin: 6px 0 0;
+    margin: 0;
   }
 
+  /* On the files tab the header, and an upload or recording in progress,
+     stay put; the list is the part that scrolls. */
+  #tab-files { overflow: hidden; padding-bottom: 0; }
   .fileList {
     list-style: none;
-    margin: 8px 0 0;
-    padding: 0;
+    margin: 0;
+    padding: 0 0 20px;
     display: flex;
     flex-direction: column;
     gap: 8px;
-    max-height: 360px;
+    flex: 1 1 0;
+    min-height: 0;
     overflow-y: auto;
     overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
   }
+  .fileList > * { flex-shrink: 0; }
   .fileItem {
     background: var(--surface);
     border: 1px solid var(--border);
@@ -411,7 +602,6 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
-    margin-top: 8px;
   }
   .uploadPanel[hidden] { display: none; }
   .uploadPanel .prompt { font-size: 0.85rem; overflow-wrap: anywhere; }
@@ -461,7 +651,6 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
-    margin-top: 8px;
   }
   .recordPanel.live { border-color: var(--bad); }
   .recordPanel[hidden] { display: none; }
@@ -508,45 +697,6 @@
     background: var(--good);
   }
 
-  /* -- debug log -------------------------------------------------------- */
-
-  details.log {
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    background: var(--surface);
-    overflow: hidden;
-  }
-  details.log summary {
-    font-family: "Oswald", "Arial Narrow", sans-serif;
-    font-size: 0.72rem;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: var(--text-dim);
-    padding: 14px;
-    cursor: pointer;
-  }
-  .logToolbar {
-    padding: 0 14px 8px;
-  }
-  .copyLogBtn.copied { color: var(--good); border-color: var(--good); }
-  .logBody {
-    font-family: "IBM Plex Mono", ui-monospace, monospace;
-    font-size: 0.72rem;
-    line-height: 1.5;
-    color: var(--text-dim);
-    padding: 0 14px 12px;
-    max-height: 140px;
-    overflow-y: auto;
-    white-space: pre-wrap;
-    word-break: break-word;
-  }
-
-  footer {
-    font-size: 0.72rem;
-    color: var(--text-dim);
-    text-align: center;
-  }
-
   .visuallyHidden {
     position: absolute;
     width: 1px;
@@ -557,62 +707,36 @@
   }
 </style>
 
-<div class="panel">
-  <div class="headerRow">
-    <div>
-      <div class="eyebrow">SparkFun Thing Plus RA6M5</div>
-      <h1>WAV&nbsp;Remote</h1>
-      <div class="statusRow">
-        <span class="dot" id="dot"></span>
-        <span class="statusText" id="statusText">Disconnected</span>
-      </div>
-    </div>
+<div class="app">
+  <header class="statusLine">
+    <span class="brand">TWEACMAN</span>
+    <span class="status" role="status">
+      <span class="statusTrack" id="statusTrack" hidden></span>
+      <span class="statusState" id="statusState">disconnected</span>
+    </span>
+    <button class="smallBtn primary transportBtn" id="transportBtn" aria-label="Play" hidden disabled></button>
+  </header>
+
+  <!-- Until a board is connected. -->
+  <div class="connectScreen" id="connectScreen">
     <button class="connectBtn" id="connectBtn">Connect</button>
+    <p class="about" id="browserNote">On iOS, open this page in Bluefy or WebBLE - Safari has no Web Bluetooth support.</p>
+    <div id="logSlotConnect"></div>
   </div>
 
-  <div class="notice" id="notice" role="status" hidden></div>
+  <!-- Tweaks: every knob setting, by mode. Built by buildTweaks(). -->
+  <main class="tabPanel" id="tab-tweaks" hidden>
+    <div class="resetRow">
+      <button class="smallBtn resetAllBtn" disabled>Reset all tweaks</button>
+    </div>
+    <div id="modeCards"></div>
+    <div class="resetRow">
+      <button class="smallBtn resetAllBtn" disabled>Reset all tweaks</button>
+    </div>
+  </main>
 
-  <div class="nowPlaying">
-    <div class="nowPlayingTop">
-      <span class="label">Now&nbsp;Playing</span>
-      <span class="transport" id="transport">&mdash;</span>
-    </div>
-    <div class="nowPlayingBottom">
-      <span class="filename" id="nowPlaying">&mdash;</span>
-      <button class="smallBtn primary transportBtn" id="transportBtn" disabled>Play</button>
-    </div>
-  </div>
-
-  <div class="readouts">
-    <div class="stat">
-      <div class="label">Speed</div>
-      <div class="value" id="speed">&mdash;<span class="unit">x</span></div>
-      <button class="smallBtn" id="resetSpeedBtn" disabled>Reset 1x</button>
-    </div>
-    <div class="stat">
-      <div class="label">Pitch</div>
-      <div class="value" id="pitch">&mdash;<span class="unit">x</span></div>
-      <button class="smallBtn" id="resetPitchBtn" disabled>Reset 1x</button>
-    </div>
-    <div class="stat">
-      <div class="label">Buffer</div>
-      <div class="value" id="buffer">&mdash;<span class="unit">%</span></div>
-    </div>
-    <div class="stat">
-      <div class="label">Underruns</div>
-      <div class="value" id="underruns">&mdash;</div>
-    </div>
-    <div class="stat">
-      <div class="label">Playing from</div>
-      <div class="value" id="level">&mdash;</div>
-    </div>
-    <div class="stat">
-      <div class="label">Cache</div>
-      <div class="value" id="cache">&mdash;<span class="unit">%</span></div>
-    </div>
-  </div>
-
-  <div>
+  <!-- Files: what's on the card. -->
+  <main class="tabPanel" id="tab-files" hidden>
     <div class="filesHeader">
       <div class="eyebrow">Files on card</div>
       <div class="filesButtons">
@@ -642,19 +766,47 @@
     </div>
 
     <ul class="fileList" id="fileList"></ul>
-  </div>
+  </main>
 
-  <details class="log">
-    <summary>Link log</summary>
-    <div class="logToolbar">
-      <button class="smallBtn copyLogBtn" id="copyLogBtn">Copy log</button>
+  <!-- Info: how playback and the link are doing. -->
+  <main class="tabPanel" id="tab-info" hidden>
+    <div class="readouts">
+      <div class="stat">
+        <div class="label">Buffer</div>
+        <div class="value" id="buffer">&mdash;<span class="unit">%</span></div>
+      </div>
+      <div class="stat">
+        <div class="label">Underruns</div>
+        <div class="value" id="underruns">&mdash;</div>
+      </div>
+      <div class="stat">
+        <div class="label">Playing from</div>
+        <div class="value" id="level">&mdash;</div>
+      </div>
+      <div class="stat">
+        <div class="label">Cache</div>
+        <div class="value" id="cache">&mdash;<span class="unit">%</span></div>
+      </div>
     </div>
-    <div class="logBody" id="logBody">Not connected yet.</div>
-  </details>
+    <div id="logSlotInfo">
+      <details class="logPanel" id="logPanel">
+        <summary>Link log</summary>
+        <div class="logToolbar">
+          <button class="smallBtn copyLogBtn" id="copyLogBtn">Copy log</button>
+        </div>
+        <div class="logBody" id="logBody">Not connected yet.</div>
+      </details>
+    </div>
+    <p class="about">SparkFun Thing Plus RA6M5, over Bluetooth LE through its DA14531MOD's CodeLess link.</p>
+  </main>
 
-  <footer id="footer">
-    Bluetooth LE via the DA14531MOD's CodeLess link. On iOS, open this page in Bluefy or WebBLE - Safari has no Web Bluetooth support.
-  </footer>
+  <div class="notice" id="notice" role="status" hidden></div>
+
+  <nav class="tabBar" id="tabBar" hidden>
+    <button data-tab="tweaks" aria-selected="true">Tweaks</button>
+    <button data-tab="files" aria-selected="false">Files</button>
+    <button data-tab="info" aria-selected="false">Info</button>
+  </nav>
 </div>
 
 <script>
@@ -707,9 +859,14 @@
   const UPLOAD_ACK_TIMEOUT_MS = 8000;
 
   const $ = (id) => document.getElementById(id);
-  const dot = $("dot");
-  const statusText = $("statusText");
+  const statusTrack = $("statusTrack");
+  const statusState = $("statusState");
   const connectBtn = $("connectBtn");
+  const connectScreen = $("connectScreen");
+  const tabBar = $("tabBar");
+  const modeCardsEl = $("modeCards");
+  const resetAllBtns = [...document.querySelectorAll(".resetAllBtn")];  // one above the tweaks, one below
+  const logPanel = $("logPanel");
   const refreshBtn = $("refreshBtn");
   const uploadBtn = $("uploadBtn");
   const recordBtn = $("recordBtn");
@@ -722,16 +879,10 @@
   const recordButtons = $("recordButtons");
   const fileInput = $("fileInput");
   const transportBtn = $("transportBtn");
-  const resetSpeedBtn = $("resetSpeedBtn");
-  const resetPitchBtn = $("resetPitchBtn");
-  const nowPlaying = $("nowPlaying");
-  const speedEl = $("speed");
   const bufferEl = $("buffer");
   const underrunsEl = $("underruns");
   const levelEl = $("level");
   const cacheEl = $("cache");
-  const transportEl = $("transport");
-  const pitchEl = $("pitch");
   const fileListEl = $("fileList");
   const noticeEl = $("notice");
   const uploadPanel = $("uploadPanel");
@@ -742,21 +893,32 @@
   const uploadButtons = $("uploadButtons");
   const logBody = $("logBody");
   const copyLogBtn = $("copyLogBtn");
-  const footer = $("footer");
+  const browserNote = $("browserNote");
 
   // The log is also kept in sessionStorage, which survives a reload of the
   // same tab. On iOS a browser that crashes the page reloads it with no
   // error shown, which would otherwise wipe the only record of what went
   // wrong. Storage can be unavailable (private browsing), hence the try.
+  //
+  // logText is the whole log in the order it happened, which is what gets
+  // stored and copied. The page shows it newest line first, and only the
+  // last LOG_SHOW_LINES of it, so the latest is always at the top of the
+  // info tab without a scrolling box of its own.
   const LOG_KEY = "wav-remote-log";
   const LOG_KEEP_CHARS = 20000;
+  const LOG_SHOW_LINES = 150;
+  let logText = "Not connected yet.";
+
+  function showLog() {
+    logBody.textContent = logText.split("\n").slice(-LOG_SHOW_LINES).reverse().join("\n");
+  }
 
   function log(line) {
     const stamp = new Date().toLocaleTimeString();
-    logBody.textContent += `\n[${stamp}] ${line}`;
-    logBody.scrollTop = logBody.scrollHeight;
+    logText = (logText + `\n[${stamp}] ${line}`).slice(-LOG_KEEP_CHARS);
+    showLog();
     try {
-      sessionStorage.setItem(LOG_KEY, logBody.textContent.slice(-LOG_KEEP_CHARS));
+      sessionStorage.setItem(LOG_KEY, logText);
     } catch (err) {
       // not kept - fine
     }
@@ -764,13 +926,14 @@
 
   try {
     const previous = sessionStorage.getItem(LOG_KEY);
-    if (previous) logBody.textContent = previous + "\n--- page reloaded ---";
+    if (previous) logText = previous + "\n--- page reloaded ---";
   } catch (err) {
     // nothing to restore
   }
+  showLog();
 
-  // Results of card operations, and errors, shown where they can be seen -
-  // the link log is folded away and easy to miss on a phone.
+  // Results of card operations, and errors, shown where they can be seen
+  // whichever tab is up - the link log is on the info tab.
   let noticeTimer = null;
   function notice(text, bad = false) {
     noticeEl.textContent = text;
@@ -801,6 +964,64 @@
 
   const sameName = (a, b) => a != null && b != null && a.toLowerCase() === b.toLowerCase();
 
+  // Where the link has got to, for the status line:
+  // "disconnected" | "connecting" | "reading" (connected, file list not in
+  // yet) | "ready".
+  let linkState = "disconnected";
+  let running = false;  // the transport, from the stats line's RUN:
+
+  // The status line: what the link is doing until there are tracks to show,
+  // then the cued track and whether it's playing.
+  function renderStatus() {
+    const showTrack = linkState === "ready" && currentFile;
+    statusTrack.hidden = !showTrack;
+    statusTrack.textContent = showTrack ? currentFile : "";
+    statusState.classList.toggle("playing", !!showTrack && running);
+    if (showTrack) statusState.textContent = running ? ": playing" : ": stopped";
+    else if (linkState === "ready") statusState.textContent = "no track";
+    else if (linkState === "reading") statusState.textContent = "reading tracks";
+    else statusState.textContent = linkState;  // "disconnected" or "connecting"
+  }
+
+  function setLinkState(state) {
+    linkState = state;
+    connectBtn.disabled = state === "connecting";
+    connectBtn.textContent = state === "connecting" ? "Connecting…" : "Connect";
+    renderStatus();
+  }
+
+  // -- tabs -----------------------------------------------------------------
+  //
+  // Three tabs, one showing at a time, each scrolling by itself. Which one
+  // was up is remembered for next time (localStorage can be unavailable in
+  // private browsing, hence the try).
+  const TAB_KEY = "wav-remote-tab";
+  const TABS = ["tweaks", "files", "info"];
+  let currentTab = "tweaks";
+  try {
+    const saved = localStorage.getItem(TAB_KEY);
+    if (TABS.includes(saved)) currentTab = saved;
+  } catch (err) {
+    // starts on tweaks
+  }
+
+  function showTab(name) {
+    currentTab = name;
+    for (const tab of TABS) $("tab-" + tab).hidden = !connected || tab !== name;
+    for (const btn of tabBar.querySelectorAll("button")) {
+      btn.setAttribute("aria-selected", String(btn.dataset.tab === name));
+    }
+    try {
+      localStorage.setItem(TAB_KEY, name);
+    } catch (err) {
+      // not remembered - fine
+    }
+  }
+
+  for (const btn of tabBar.querySelectorAll("button")) {
+    btn.addEventListener("click", () => showTab(btn.dataset.tab));
+  }
+
   // Enables and disables everything that talks to the board, in one place.
   function updateControls() {
     const ready = connected && !upload;
@@ -809,34 +1030,38 @@
     // Not while a take is being recorded - a disabled button stops getting
     // the pointer events that end the recording.
     if (!recording) recordBtn.disabled = !ready;
-    resetSpeedBtn.disabled = !ready;
-    resetPitchBtn.disabled = !ready;
+    for (const btn of resetAllBtns) btn.disabled = !ready;
     transportBtn.disabled = !ready || (!latched && !currentFile);
-    transportBtn.textContent = latched ? "Stop" : "Play";
+    transportBtn.innerHTML = latched ? ICONS.stop : ICONS.play;
+    transportBtn.setAttribute("aria-label", latched ? "Stop" : "Play");
+    updateFilePlayButtons();
     for (const btn of fileListEl.querySelectorAll("button")) btn.disabled = !ready;
+    updateTweakControls(ready);
   }
 
   function setConnected(isConnected) {
     connected = isConnected;
-    dot.classList.toggle("connected", isConnected);
-    statusText.textContent = isConnected ? "Connected" : "Disconnected";
-    connectBtn.hidden = isConnected;
+    // Connected, the page is the tabs; otherwise it's the connect screen,
+    // which borrows the link log so a failed connection can be read.
+    connectScreen.hidden = isConnected;
+    tabBar.hidden = !isConnected;
+    transportBtn.hidden = !isConnected;
+    $(isConnected ? "logSlotInfo" : "logSlotConnect").appendChild(logPanel);
+    showTab(currentTab);
+    setLinkState(isConnected ? "reading" : "disconnected");
     if (!isConnected) {
-      nowPlaying.textContent = "—";
-      transportEl.textContent = "—";
-      pitchEl.innerHTML = "&mdash;<span class=\"unit\">x</span>";
-      pitchEl.classList.remove("potential");
-      transportEl.classList.remove("running");
-      speedEl.innerHTML = "&mdash;<span class=\"unit\">x</span>";
-      speedEl.classList.remove("potential");
       bufferEl.innerHTML = "&mdash;<span class=\"unit\">%</span>";
       underrunsEl.textContent = "—";
       underrunsEl.classList.remove("bad");
+      levelEl.textContent = "—";
+      cacheEl.innerHTML = "&mdash;<span class=\"unit\">%</span>";
       fileListEl.textContent = "";
       fileNames = [];
       rowMode = null;
       currentFile = null;
       latched = false;
+      running = false;
+      forgetTweaks();
       if (upload) upload.error = "disconnected";
       wakeWaiters();
     }
@@ -915,6 +1140,7 @@
   // Small inline icons, so rows stay compact on a phone without an icon font.
   const ICONS = {
     play: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4.5v15l13-7.5z"/></svg>',
+    stop: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 6h12v12H6z"/></svg>',
     rename: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></svg>',
     delete: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>',
   };
@@ -963,7 +1189,10 @@
         li.classList.toggle("playing", sameName(name, currentFile));
         li.append(
           makeButton("fileName", name, () => sendCommand("PLAY:" + name)),
-          makeButton("iconBtn play", `Play and latch ${name}`, () => sendCommand("LATCH:" + name), ICONS.play),
+          makeButton("iconBtn play", `Play and latch ${name}`, () => {
+            // On the file that's playing, this is the stop button.
+            sendCommand(latched && sameName(name, currentFile) ? "STOP" : "LATCH:" + name);
+          }, ICONS.play),
           makeButton("iconBtn", `Rename ${name}`, () => setRowMode({ name, kind: "rename" }), ICONS.rename),
           makeButton("iconBtn", `Delete ${name}`, () => setRowMode({ name, kind: "delete" }), ICONS.delete)
         );
@@ -978,6 +1207,22 @@
       renameInput.focus();
       const dotAt = renameInput.value.lastIndexOf(".");
       renameInput.setSelectionRange(0, dotAt > 0 ? dotAt : renameInput.value.length);
+    }
+  }
+
+  // Each row's play button - except on the file that's latched playing,
+  // where it's a stop button, the same one as on the status line.
+  function updateFilePlayButtons() {
+    for (const li of fileListEl.children) {
+      const btn = li.querySelector(".iconBtn.play");
+      if (!btn) continue;
+      const name = li.dataset.name;
+      const stops = latched && sameName(name, currentFile);
+      if (btn.dataset.stops === String(stops)) continue;
+      btn.dataset.stops = String(stops);
+      btn.innerHTML = stops ? ICONS.stop : ICONS.play;
+      btn.setAttribute("aria-label", stops ? `Stop ${name}` : `Play and latch ${name}`);
+      btn.title = btn.getAttribute("aria-label");
     }
   }
 
@@ -1039,7 +1284,7 @@
 
   function setNowPlaying(name) {
     currentFile = name === "NONE" ? null : name;
-    nowPlaying.textContent = currentFile || "—";
+    renderStatus();
     for (const li of fileListEl.children) {
       li.classList.toggle("playing", !rowMode && sameName(li.dataset.name, currentFile));
     }
@@ -1518,30 +1763,435 @@
     }
   }
 
+  // -- tweaks ----------------------------------------------------------------
+  //
+  // Every setting the board's knobs change, laid out the way the knobs are:
+  // one card per knob mode, in the board's order (the rows of MODES in
+  // SDResampleDemo.ino), each with the one or two settings its knobs turn.
+  // The card for the mode the knobs are in is highlighted, whoever chose it
+  // - the stats line's MODE: says, twice a second. Tapping a card (anywhere
+  // but on one of its controls) puts the board in that mode.
+  //
+  // A card's two settings sit side by side, the way its two knobs do: knob 1's
+  // on the left, knob 2's on the right.
+  //
+  // Each setting has a slider, a button that puts it back to its default
+  // (lit when the setting isn't at it, so what's been changed shows at a
+  // glance), and its value is a button that opens a box for typing an exact
+  // number. The sliders cover the useful middle of each
+  // range rather than all of it - the speed knob goes to 1024x, which no
+  // slider a thumb's width could do justice to - and typing reaches the rest.
+  //
+  // The page and the knobs are both in charge. Whatever the stats line
+  // reports is shown, except for a setting the page itself has just changed:
+  // for TWEAK_HOLD_MS after a touch the page's own value stands, or the
+  // slider would jump back to a half-second-old reading under the thumb.
+
+  const TWEAK_HOLD_MS = 1500;
+  const TWEAK_SEND_MS = 120;        // how often a dragged slider sends
+  const WINDOW_MIN_SECONDS = 0.02;  // as in the sketch
+  const SLIDER_STEPS = 1000;
+
+  // The settings themselves, as the board last reported them or the page
+  // last set them: speed (a ratio, negative for backward), heard (the pitch
+  // you hear, a ratio), the window's start and end and the file's length in
+  // seconds, the echo's delay in seconds and its amount.
+  const tweaks = { speed: null, heard: null, winStart: null, winEnd: null, length: null, echoTime: null, echoAmount: null };
+  const tweakHeldUntil = {};  // per setting: performance.now() until which the board's value is ignored
+  let boardMode = null;
+  let boardModeHeldUntil = 0;
+
+  const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+  const num = (v, digits) => String(Number(v.toFixed(digits)));  // no trailing zeros
+
+  // Speed sliders run -4x to +4x with zero in the middle and the square of
+  // the distance from it, so 1x sits halfway out and slow speeds get room.
+  const speedSlider = {
+    fromPos: (p) => { const x = p * 2 - 1; return 4 * x * Math.abs(x); },
+    toPos: (v) => (Math.sign(v) * Math.sqrt(Math.min(Math.abs(v), 4) / 4) + 1) / 2,
+  };
+  const formatSpeed = (v) => [v.toFixed(Math.abs(v) < 1 ? 3 : 2), "x"];
+  const windowCommand = () => `WINDOW:${num(tweaks.winStart, 3)},${num(tweaks.winEnd, 3)}`;
+  const echoCommand = () => `ECHO:${num(tweaks.echoTime, 3)},${num(tweaks.echoAmount, 2)}`;
+  const ECHO_MIN = 0.001, ECHO_MAX = 2.73, ECHO_MAX_AMOUNT = 0.95;
+
+  // Each control: which setting it shows, how its slider maps onto it, how
+  // the value reads, what typing a number means, and the command to send.
+  const PARAMS = {
+    speed: {
+      // Tape style: the pitch follows.
+      setting: "speed", label: "Speed", initial: () => 1,
+      ...speedSlider, format: formatSpeed, reverse: true,
+      command: () => `TAPE:${num(tweaks.speed, 4)}`,
+    },
+    stretch: {
+      // The same speed, with the pitch you hear held where it is.
+      setting: "speed", label: "Stretch", initial: () => 1,
+      ...speedSlider, format: formatSpeed, reverse: true,
+      command: () => `STRETCH:${num(tweaks.speed, 4)}`,
+    },
+    pitch: {
+      // The pitch you hear. Two octaves either way.
+      setting: "heard", label: "Pitch", initial: () => 1,
+      fromPos: (p) => 2 ** ((p * 2 - 1) * 2),
+      toPos: (v) => (clamp(Math.log2(v), -2, 2) / 2 + 1) / 2,
+      format: (v) => [v.toFixed(3), "x"],
+      typed: (n) => (n > 0 ? n : null),
+      command: () => `HEARD:${num(tweaks.heard, 4)}`,
+    },
+    winStart: {
+      setting: "winStart", label: "Start", needsFile: true, initial: () => 0,
+      fromPos: (p) => p * tweaks.length,
+      toPos: (v) => v / tweaks.length,
+      format: (v) => [v.toFixed(3), "s"],
+      // The board keeps the two ends apart by pushing the other one along;
+      // doing the same here keeps the page's picture of it right meanwhile.
+      apply: (v) => {
+        tweaks.winStart = clamp(v, 0, tweaks.length - WINDOW_MIN_SECONDS);
+        tweaks.winEnd = Math.max(tweaks.winEnd, tweaks.winStart + WINDOW_MIN_SECONDS);
+      },
+      holds: ["winStart", "winEnd"],
+      command: windowCommand,
+    },
+    winEnd: {
+      setting: "winEnd", label: "End", needsFile: true, initial: () => tweaks.length,
+      fromPos: (p) => p * tweaks.length,
+      toPos: (v) => v / tweaks.length,
+      format: (v) => [v.toFixed(3), "s"],
+      apply: (v) => {
+        tweaks.winEnd = clamp(v, WINDOW_MIN_SECONDS, tweaks.length);
+        tweaks.winStart = Math.min(tweaks.winStart, tweaks.winEnd - WINDOW_MIN_SECONDS);
+      },
+      holds: ["winStart", "winEnd"],
+      command: windowCommand,
+    },
+    echoTime: {
+      // A millisecond to 2.7 seconds, evenly by ratio - as the knob is.
+      setting: "echoTime", label: "Delay", initial: () => 0.3,
+      fromPos: (p) => ECHO_MIN * (ECHO_MAX / ECHO_MIN) ** p,
+      toPos: (v) => Math.log(clamp(v, ECHO_MIN, ECHO_MAX) / ECHO_MIN) / Math.log(ECHO_MAX / ECHO_MIN),
+      format: (v) => [String(Math.round(v * 1000)), "ms"],
+      typed: (n) => clamp(n / 1000, ECHO_MIN, ECHO_MAX),  // typed in ms, as shown
+      holds: ["echoTime", "echoAmount"],
+      command: echoCommand,
+    },
+    echoAmount: {
+      // One amount: the echo's level and its feedback.
+      setting: "echoAmount", label: "Amount", initial: () => 0,
+      fromPos: (p) => p * ECHO_MAX_AMOUNT,
+      toPos: (v) => v / ECHO_MAX_AMOUNT,
+      format: (v) => [v.toFixed(2), ""],
+      typed: (n) => clamp(n, 0, ECHO_MAX_AMOUNT),
+      holds: ["echoTime", "echoAmount"],
+      command: echoCommand,
+    },
+  };
+
+  // The board's knob modes, in its order, with its LED hues, and what knob 1
+  // and knob 2 set in each. A knob with no setting gets a word about what it
+  // does instead.
+  const MODES = [
+    { name: "Speed", hue: 120, params: ["speed", { label: "Scrub", text: "Turn knob 2: the tape, by hand." }] },
+    { name: "Pitch", hue: 180, params: ["pitch", "stretch"] },
+    { name: "Window", hue: 268, params: ["winStart", "winEnd"] },
+    { name: "Echo", hue: 335, params: ["echoTime", "echoAmount"] },
+  ];
+
+  // Whether a setting is at its default, near enough: the board reports
+  // three decimals, and its own knobs don't land on exact values.
+  function atDefault(param) {
+    const value = tweaks[param.setting];
+    if (value == null || (param.needsFile && !tweaks.length)) return true;
+    return Math.abs(value - param.initial()) < (param.setting === "echoAmount" ? 0.005 : 0.002);
+  }
+
+  const tweakControls = [];  // { id, param, slider, valueBtn, resetBtn, buttons, dragging }
+  const modeCards = [];      // the cards, in MODES' order
+
+  function el(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text != null) node.textContent = text;
+    return node;
+  }
+
+  function buildTweaks() {
+    MODES.forEach((mode, index) => {
+      const card = el("section", "modeCard");
+      card.style.setProperty("--h", mode.hue);
+      card.tabIndex = 0;
+      card.setAttribute("role", "button");
+      card.setAttribute("aria-label", `${mode.name} mode`);
+      // A tap on the card chooses its mode - but not a tap on a control,
+      // which is just that control being used.
+      card.addEventListener("click", (e) => {
+        if (!e.target.closest("button, input")) selectMode(index);
+      });
+      // Taking hold of a slider chooses its mode too, so the knobs follow
+      // whatever is being adjusted here. ("input" covers the keyboard.)
+      for (const type of ["pointerdown", "input"]) {
+        card.addEventListener(type, (e) => {
+          if (e.target.matches('input[type="range"]')) selectMode(index);
+        });
+      }
+      card.addEventListener("keydown", (e) => {
+        if (e.target === card && (e.key === "Enter" || e.key === " ")) {
+          e.preventDefault();
+          selectMode(index);
+        }
+      });
+
+      const pair = el("div", "pair");
+      for (const id of mode.params) pair.append(buildParam(id));
+      card.append(pair);
+      modeCardsEl.append(card);
+      modeCards.push(card);
+    });
+    renderMode();
+  }
+
+  const RESET_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.6-5.9"/><path d="M4 4v4.5h4.5"/></svg>';
+
+  // One half of a card: the name up the side, then the value with its
+  // buttons above the slider.
+  function buildParam(id) {
+    if (typeof id !== "string") {
+      const row = el("div", "param byHand");
+      row.append(el("div", "paramLabel", id.label), el("p", null, id.text));
+      return row;
+    }
+    const param = PARAMS[id];
+    const row = el("div", "param");
+    const body = el("div", "paramBody");
+
+    const valueRow = el("div", "paramRow");
+    const valueBtn = el("button", "paramValue");
+    valueBtn.setAttribute("aria-label", `${param.label}: type a value`);
+    const control = { id, param, valueBtn, buttons: [valueBtn], dragging: false };
+    valueRow.append(valueBtn);
+
+    if (param.reverse) {
+      const reverseBtn = makeButton("smallBtn paramBtn", "Rev", () => {
+        if (tweaks.speed != null) changeTweak(control, -tweaks.speed);
+      });
+      reverseBtn.setAttribute("aria-label", `Reverse ${param.label.toLowerCase()}`);
+      valueRow.append(reverseBtn);
+      control.buttons.push(reverseBtn);
+    }
+    const resetBtn = makeButton("smallBtn paramBtn", `Reset ${param.label.toLowerCase()}`,
+      () => changeTweak(control, param.initial()), RESET_ICON);
+    control.buttons.push(resetBtn);
+    control.resetBtn = resetBtn;
+    valueRow.append(resetBtn);
+
+    const slider = el("input");
+    slider.type = "range";
+    slider.min = 0;
+    slider.max = SLIDER_STEPS;
+    slider.step = 1;
+    slider.setAttribute("aria-label", param.label);
+    control.slider = slider;
+
+    slider.addEventListener("input", () => {
+      control.dragging = true;
+      changeTweak(control, param.fromPos(slider.value / SLIDER_STEPS));
+    });
+    // "change" marks the end of a drag, but not every browser sends it
+    // when the value ends where it started - so lifting the finger counts too.
+    const endDrag = () => {
+      control.dragging = false;
+      renderTweaks();
+    };
+    for (const type of ["change", "pointerup", "pointercancel", "touchend", "blur"]) {
+      slider.addEventListener(type, endDrag);
+    }
+    valueBtn.addEventListener("click", () => typeTweak(control));
+
+    body.append(valueRow, slider);
+    row.append(el("div", "paramLabel", param.label), body);
+    tweakControls.push(control);
+    return row;
+  }
+
+  // A setting changed from the page: note it, show it, send it.
+  function changeTweak(control, value) {
+    const param = control.param;
+    if (!Number.isFinite(value)) return;
+    if (param.apply) param.apply(value); else tweaks[param.setting] = value;
+    const until = performance.now() + TWEAK_HOLD_MS;
+    for (const name of param.holds || [param.setting]) tweakHeldUntil[name] = until;
+    renderTweaks();
+    queueTweak(control.id);
+  }
+
+  // Dragging a slider makes far more changes than are worth sending. The
+  // first goes at once; after that, whatever is newest goes every
+  // TWEAK_SEND_MS, so the last position always gets there.
+  const tweaksToSend = new Set();
+  let tweakSendTimer = null;
+
+  function queueTweak(id) {
+    tweaksToSend.add(id);
+    if (!tweakSendTimer) sendTweaks();
+  }
+
+  function sendTweaks() {
+    tweakSendTimer = null;
+    if (tweaksToSend.size === 0) return;
+    const commands = new Set([...tweaksToSend].map((id) => PARAMS[id].command()));
+    tweaksToSend.clear();
+    for (const command of commands) sendCommand(command);
+    tweakSendTimer = setTimeout(sendTweaks, TWEAK_SEND_MS);
+  }
+
+  // The value becomes a box to type in; Enter or leaving it sets the value,
+  // Escape gives up.
+  function typeTweak(control) {
+    const { param, valueBtn } = control;
+    const current = tweaks[param.setting];
+    if (current == null) return;
+    const input = el("input", "paramInput");
+    input.type = "text";
+    input.inputMode = "decimal";
+    input.autocomplete = "off";
+    input.value = param.format(current)[0];
+    input.setAttribute("aria-label", param.label);
+
+    let done = false;
+    const finish = (commit) => {
+      if (done) return;
+      done = true;
+      const typed = Number(input.value.trim().replace(",", "."));
+      input.replaceWith(valueBtn);
+      if (!commit || input.value.trim() === "" || !Number.isFinite(typed)) return;
+      const value = param.typed ? param.typed(typed) : typed;
+      if (value == null) {
+        notice(`${param.label} can't be ${input.value.trim()}.`, true);
+        return;
+      }
+      changeTweak(control, value);
+    };
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") finish(true);
+      if (e.key === "Escape") finish(false);
+    });
+    input.addEventListener("blur", () => finish(true));
+
+    valueBtn.replaceWith(input);
+    input.focus();
+    input.select();
+  }
+
+  function renderTweaks() {
+    let anyChanged = false;
+    for (const control of tweakControls) {
+      const { param, slider, valueBtn } = control;
+      const changed = !atDefault(param);
+      control.resetBtn.classList.toggle("changed", changed);
+      anyChanged = anyChanged || changed;
+      const value = tweaks[param.setting];
+      const known = value != null && !(param.needsFile && !tweaks.length);
+      if (!known) {
+        valueBtn.textContent = "—";
+        continue;
+      }
+      const [text, unit] = param.format(value);
+      valueBtn.textContent = text;
+      if (unit) valueBtn.append(el("span", "unit", unit));
+      // Not the slider under a thumb: it's where the value came from.
+      if (!control.dragging) slider.value = Math.round(clamp(param.toPos(value), 0, 1) * SLIDER_STEPS);
+    }
+    for (const btn of resetAllBtns) btn.classList.toggle("changed", anyChanged);
+  }
+
+  function updateTweakControls(ready) {
+    for (const { param, slider, buttons } of tweakControls) {
+      const usable = ready && tweaks[param.setting] != null && !(param.needsFile && !tweaks.length);
+      slider.disabled = !usable;
+      for (const btn of buttons) btn.disabled = !usable;
+    }
+  }
+
+  function renderMode() {
+    modeCards.forEach((card, index) => {
+      const current = index === boardMode;
+      card.classList.toggle("current", current);
+      card.setAttribute("aria-pressed", String(current));
+    });
+  }
+
+  function selectMode(index) {
+    if (!connected || upload || index === boardMode) return;
+    boardMode = index;
+    boardModeHeldUntil = performance.now() + TWEAK_HOLD_MS;
+    renderMode();
+    sendCommand(`MODE:${index}`);
+  }
+
+  // The stats line's settings. A file's length comes with its window, and
+  // goes when no file is loaded.
+  const TWEAK_FIELDS = { REQ: "speed", HRD: "heard", WS: "winStart", WE: "winEnd", ECT: "echoTime", ECA: "echoAmount" };
+
+  function tweaksFromBoard(parts) {
+    const now = performance.now();
+    const wasUsable = tweaks.speed != null && tweaks.length != null;
+    for (const [field, name] of Object.entries(TWEAK_FIELDS)) {
+      if (parts[field] === undefined || now < (tweakHeldUntil[name] || 0)) continue;
+      tweaks[name] = Number(parts[field]);
+    }
+    if (parts.REQ !== undefined) tweaks.length = parts.LEN !== undefined ? Number(parts.LEN) : null;
+    if (parts.MODE !== undefined && now >= boardModeHeldUntil && Number(parts.MODE) !== boardMode) {
+      boardMode = Number(parts.MODE);
+      renderMode();
+    }
+    renderTweaks();
+    if (wasUsable !== (tweaks.speed != null && tweaks.length != null)) updateControls();
+  }
+
+  function forgetTweaks() {
+    for (const name of Object.keys(tweaks)) tweaks[name] = null;
+    boardMode = null;
+    tweaksToSend.clear();
+    renderMode();
+    renderTweaks();
+  }
+
+  // Resetting can't be undone, so the button asks once: the first tap arms
+  // it for a few seconds, the second does it.
+  let resetArmedTimer = null;
+  function disarmReset() {
+    clearTimeout(resetArmedTimer);
+    resetArmedTimer = null;
+    for (const btn of resetAllBtns) {
+      btn.classList.remove("arming");
+      btn.textContent = "Reset all tweaks";
+    }
+  }
+  for (const btn of resetAllBtns) {
+    btn.addEventListener("click", () => {
+      if (resetArmedTimer) {
+        disarmReset();
+        for (const name of Object.keys(tweakHeldUntil)) tweakHeldUntil[name] = 0;
+        sendCommand("RESET:ALL");
+        return;
+      }
+      btn.classList.add("arming");
+      btn.textContent = "Tap again to reset this file";
+      resetArmedTimer = setTimeout(disarmReset, 3000);
+    });
+  }
+
   // -- incoming data --------------------------------------------------------
 
   // The board sends a stats line like
-  // "SPD:2.35,REQ:2.35,PIT:1.000,BUF:78,UND:0,RUN:1,LAT:0,LVL:3,CACHE:100\n"
-  // (see SDResampleDemo.ino's header
-  // comment) over the DSPS pipe once Binary mode is active.
+  // "SPD:2.35,REQ:2.35,PIT:1.000,ECT:0.300,ECA:0.00,BUF:78,UND:0,RUN:1,LAT:0,
+  //  LVL:3,CACHE:100,MODE:0,HRD:1.000,WS:0.000,WE:10.000,LEN:10.000\n"
+  // (see SDResampleDemo.ino's header comment) over the DSPS pipe once
+  // Binary mode is active, twice a second.
   function handleTelemetry(line) {
     const parts = Object.fromEntries(
       line.split(",").map((p) => p.split(":")).filter((kv) => kv.length === 2)
     );
-    // While stopped, SPD: is the effective ratio and so reads 0.00 - which
-    // would throw away the speed setting every time the tape is stopped.
-    // Show REQ: (what the knob is asking for) instead, dimmed, so the tile
-    // reads as "this is what it would run at" rather than a live value.
-    const running = parts.RUN === "1";
-    const showPotential = !running && parts.REQ !== undefined;
-    const shownSpeed = showPotential ? parts.REQ : parts.SPD;
-    if (shownSpeed !== undefined) {
-      // Four decimals below 1x: the board's speed knob slows smoothly
-      // right down to zero, and 0.00 would hide everything under 0.005x.
-      const speed = Number(shownSpeed);
-      speedEl.innerHTML = `${speed.toFixed(Math.abs(speed) < 1 ? 4 : 2)}<span class="unit">x</span>`;
-      speedEl.classList.toggle("potential", showPotential);
-    }
     if (parts.BUF !== undefined) {
       bufferEl.innerHTML = `${parts.BUF}<span class="unit">%</span>`;
     }
@@ -1550,14 +2200,8 @@
       updateControls();
     }
     if (parts.RUN !== undefined) {
-      transportEl.textContent = latched ? "Latched" : running ? "Running" : "Stopped";
-      transportEl.classList.toggle("running", running);
-    }
-    if (parts.PIT !== undefined) {
-      // Dimmed at unity, because "not shifted" is the resting state and
-      // should not compete for attention with a value that is doing work.
-      pitchEl.innerHTML = `${Number(parts.PIT).toFixed(3)}<span class="unit">x</span>`;
-      pitchEl.classList.toggle("potential", Math.abs(Number(parts.PIT) - 1) < 0.001);
+      running = parts.RUN === "1";
+      renderStatus();
     }
     if (parts.UND !== undefined) {
       underrunsEl.textContent = parts.UND;
@@ -1573,9 +2217,10 @@
     // the fastest speeds are held back.
     if (parts.CACHE !== undefined) {
       cacheEl.innerHTML = `${parts.CACHE}<span class="unit">%</span>`;
-      cacheEl.classList.toggle("potential", parts.CACHE === "100");
+      cacheEl.classList.toggle("quiet", parts.CACHE === "100");
     }
     if (parts.FILE !== undefined) setNowPlaying(parts.FILE);
+    tweaksFromBoard(parts);
   }
 
   // One line at a time, dispatched by prefix ahead of the plain
@@ -1601,6 +2246,7 @@
         a.localeCompare(b, undefined, { sensitivity: "base" }));
       if (rowMode && !fileNames.some((n) => sameName(n, rowMode.name))) rowMode = null;
       renderFileList();
+      if (linkState === "reading") setLinkState("ready");
       return;
     }
     if (collectingFiles) { fileListBuffer.push(line); return; }
@@ -1700,7 +2346,10 @@
       return;
     }
     try {
-      await writeToBoard(new TextEncoder().encode(text));
+      // A newline ends the command, so two sent close together (a slider
+      // being dragged) can't run into one. Not after PUT: though - what
+      // follows that is the file itself, byte for byte.
+      await writeToBoard(new TextEncoder().encode(duringUpload ? text : text + "\n"));
       log(`> ${text}`);
     } catch (err) {
       log(`! write failed: ${err.message}`);
@@ -1796,7 +2445,7 @@
   // connect() so reconnectAndRetry() can redo it without requestDevice(),
   // which needs a fresh user gesture.
   async function establishLink() {
-    statusText.textContent = "Connecting\u2026";
+    setLinkState("connecting");
     const started = performance.now();
     try {
       for (let attempt = 1; attempt <= 2; attempt++) {
@@ -1912,8 +2561,6 @@
     recordBtn.addEventListener("contextmenu", (e) => e.preventDefault());
   }
   fileInput.addEventListener("change", onFilePicked);
-  resetSpeedBtn.addEventListener("click", () => sendCommand("RESET:SPEED"));
-  resetPitchBtn.addEventListener("click", () => sendCommand("RESET:PITCH"));
   // Play latches the cued file, from the top; Stop releases the latch.
   transportBtn.addEventListener("click", () => {
     if (latched) sendCommand("STOP");
@@ -1935,7 +2582,7 @@
 
   copyLogBtn.addEventListener("click", async () => {
     try {
-      await navigator.clipboard.writeText(logBody.textContent);
+      await navigator.clipboard.writeText(logText);
       copyLogBtn.textContent = "Copied!";
       copyLogBtn.classList.add("copied");
     } catch (err) {
@@ -1948,8 +2595,11 @@
   });
 
   if (!navigator.bluetooth) {
-    footer.textContent = "Web Bluetooth isn't available in this browser - on iOS, open this page in Bluefy or WebBLE instead of Safari.";
-    footer.style.color = "var(--bad)";
+    browserNote.textContent = "Web Bluetooth isn't available in this browser - on iOS, open this page in Bluefy or WebBLE instead of Safari.";
+    browserNote.classList.add("bad");
   }
+
+  buildTweaks();
+  setConnected(false);
 })();
 </script>

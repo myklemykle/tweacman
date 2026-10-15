@@ -1,8 +1,9 @@
 # Open items
 
 Things discussed but not yet done. Updated alongside the commits that finish
-or add items, so this should match the code on `main`; last reviewed
-2026-10-09. Roughly grouped, and within each group roughly in the order
+or add items, so this should match the code on `main` (plus the touch
+debounce trial, which lives on `test/no-touch-debounce`); last reviewed
+2026-10-13. Roughly grouped, and within each group roughly in the order
 they'd be worth doing.
 
 Design proposals large enough to have their own document are linked rather
@@ -11,15 +12,15 @@ and touch noise fixes is in `NOISE_DEBUGGING.md`.
 
 ## SDResampleDemo - planned features
 
-Captured 2026-10-09. Several depend on each other: the general modes
-framework comes before modes 3-5, and the web UI's mode display builds on
-it. Modes are rows of the `MODES` table in the sketch, stepped through by
-touch1. Five are built so far: speed mode (knob1 speed, knob2 scrub),
-pitch mode (knob1 pitch, knob2 time-stretch), window mode (knob1 start,
-knob2 end), echo mode (knob1 delay time, knob2 amount) and filter mode
-(knob1 the band's bottom, knob2 its top, Traveler-style). Each further mode gets its own feature branch. Per-file
-settings exist too (speed, pitch, window, echo and filter, see `FileSettings.h`); each new mode's
-parameters should be added to them.
+Modes are rows of the `MODES` table in the sketch, stepped through by
+touch1 (or picked with knob1 while it's held). Five are built: speed mode
+(knob1 speed, knob2 scrub), pitch mode (knob1 pitch, knob2 time-stretch),
+window mode (knob1 start, knob2 end), echo mode (knob1 delay time, knob2
+amount) and filter mode (knob1 the band's bottom, knob2 its top,
+Traveler-style). Each further mode gets its own feature branch, and its
+parameters should be added to the per-file settings (`FileSettings.h`),
+which hold speed, pitch, window, echo and filter so far, and to the web
+page's tweaks tab.
 
 ### Modes
 
@@ -28,15 +29,16 @@ parameters should be added to them.
   yellow 60 is picked and waiting for mode 6 (it was tried on the LED as a
   placeholder mode, then taken out). Green, aqua and yellow are dimmed
   to match the rest. Revisit if any pair is hard to tell apart.
-- **Describe each mode's parameters in the table** (name, value, units), for
-  the web page's tiles and the per-file settings - when the web UI needs it.
+- **One description of the modes, not two.** The web page has its own list
+  of the modes and their settings (`MODES` and `PARAMS` in
+  `wav-remote.html`), which has to be kept in step with the sketch's `MODES`
+  table by hand. The board could describe them instead (name, hue, each
+  setting's range and units) for the page to build itself from.
 - **Window that wraps round the file's ends.** Mode 3's start and end stop
   at the ends of the file; letting the window carry on round from the end
   to the beginning would be cool.
 - **Shorter windows.** The minimum is 20ms (`WINDOW_MIN_SECONDS`). Much
   shorter and the loop becomes a pitched buzz - worth trying.
-- **Show the window** on the web page; it's only on Serial so far
-  (`WINDOW:<s>,<e>`, `RESET:WINDOW`).
 - **Echo: a longer delay.** Mode 4's delay line is in RAM (`EchoDelay.h`):
   mono, 24kHz, 2.7 seconds. Longer means keeping it on the SD card - a
   pre-allocated file used as a circle, written behind the write head and
@@ -50,12 +52,14 @@ parameters should be added to them.
   feeds itself for ever, tape-echo style, but needs a soft clipper in the
   loop rather than today's hard limit. Loud material with a lot of echo
   already clips at the output - the same clipper would help there.
-- **Echo: separate level and feedback?** One knob sets both. See how it
-  plays before splitting them.
+- **Echo: finish the feedback trial.** Knob2 sets one amount, which is
+  both how loud the echoes are and how much they feed back. Play with it
+  for a while and decide whether that's right or the two want separate
+  controls. `EchoDelay` already keeps them as separate gains inside (it
+  needed to, to damp the echo on a stop), so splitting them is only a
+  question of what sets the second one - there's no third knob.
 - **Echo: delay time locked to the window**, so the repeats fall in step
   with the loop.
-- **Show the echo** on the web page; it's in the stats line (`ECT:`,
-  `ECA:`) but the page doesn't display it yet.
 - **Filter: tune it by ear.** Mode 5's character is in a few constants in
   `BandFilter.h`, set from measurements (`make filter-render`) rather than
   some listening: the bump at each edge (`FILTER_BUMP`, k = 1.5, about
@@ -75,41 +79,46 @@ parameters should be added to them.
   low-pass in series). Low-pass-only or a notch could be further modes, or
   a third parameter.
 - **Show the filter** on the web page; it's in the stats line (`FLL:`,
-  `FLH:`) but the page doesn't display it yet. Its mode card waits on the
-  web redesign (`feature/web-redesign`), which this branch wasn't built on.
+  `FLH:`) but the page doesn't display it yet - it needs a card in the
+  tweaks tab.
 
 ### Web UI (`web/wav-remote.html`)
 
-- **Full-screen CONNECT while disconnected.** The button fills most of the
-  phone screen, in front of the rest of the interface, which means nothing
-  until connected.
-- **Reorganize into tabs.** A small status line on top, then three tabs:
-  parameters (speed, pitch, ...), SD file management, and diagnostics (link
-  log, buffer and cache info). Phone-first.
-- **Show the current mode.** Probably two tiles per mode showing its
-  parameters, with the current mode highlighted.
-- **One "reset tweaks" button** for all knob tweaks on the current file,
-  replacing today's separate speed and pitch resets - back to the defaults,
-  and saved that way in its per-file settings. It's also the way back to
-  the file's own pitch, now that the pitch knob is relative with no
-  click-stop at unity. The board's half is done: `RESET:ALL`, which is
-  also what tapping both pads three times does. The page just has to
-  send it.
-- **Pitch tile shows the shift, not the pitch you hear.** `PIT:` reports
-  `pitchRatio`, the shift on top of the speed. In pitch mode the knob sets
-  the pitch you hear (shift times speed), so at 2x unshifted-sounding audio
-  reads 0.5. Report and show the heard pitch when the page shows modes.
+Redesigned 2026-10-13 (`feature/web-redesign`): a one-line status bar, a
+full-screen Connect button until there's a board, and three tabs at the
+bottom - Tweaks (a card per knob mode, its two settings side by side like
+the knobs, each with a slider and a reset; the board's current mode
+highlighted, tap a card to change mode), Files (the list scrolls under a
+fixed header), and Info (playback stats and the link log, folded away).
+
+- **Try the redesign on a phone.** It has only been run in desktop Chrome
+  against a stand-in for the board. Things to check on the real thing:
+  sliders against the half-second stats (do they fight the thumb?), the
+  slider ranges (speed -4x to 4x, pitch two octaves either way; typing
+  reaches the rest), the decimal keypad for typed values, and the layout
+  under the notch and home bar.
+- **Status line: a logo and a playing animation.** "TWEACMAN" is text for
+  now, and playing/stopped is a word.
+- **Bottom tab bar: on trial.** Move it to the top if it doesn't suit.
 - **Normalize and compress recordings.** Audio recorded on the phone comes
   out too quiet.
 
 ## SDResampleDemo - known issues
 
+- **Touch debounce: on trial without it.** `SDResampleDemo` turns the
+  library's debounce off (`setDebounceSamples(1)` in `setup()`), saving
+  10ms per press and release. The debounce was added 2026-09-21 against
+  spurious latches; the cause turned out to be the scan race fixed
+  2026-09-23, after which the pads measured within +/-40 counts of a 3000
+  threshold. If nothing misbehaves after a while of use (phantom latches,
+  mode steps or unlatches), remove the debounce code from `RA6M5CapTouch`
+  and correct its comments, which still blame CTSU noise. If presses
+  chatter at the threshold instead, the fix is hysteresis, not debounce.
 - **Other pot sketches relearn calibration every boot.** Since 2026-10-09
   `RV112FF` reports nothing until a pot's calibration is complete (about two
   turns). SDResampleDemo saves it; AudioKnobsDemo, AudioKnobsWebBLEDemo,
   NoiseMeter and the library examples don't, so their knobs need two turns
   after every power-on. Each could save it the same way if wanted.
-
 - **Cache-build stalls.** While `MipCache` is building, a single build step
   can stall `loop()` for up to ~35ms on an SD write - over this project's
   10ms limit for control latency, so the knobs and pads feel it during a
@@ -170,9 +179,10 @@ parameters should be added to them.
   URL - and the license name would fit next to the existing "this hardware
   is open source" text on the back.
 
-## Arduino libraries - publishing to the Library Manager
+## Arduino libraries
 
-- **Publish the libraries so the Arduino IDE can find and install them.**
+- **Publish the libraries to the Library Manager, so the Arduino IDE can
+  find and install them.**
   Plan approved 2026-09-26, postponed until after a code review of the
   libraries. Written for `RV112FF`, `RA6M5CapTouch`, `MultiTurnKnob` and
   `RA6M5AnalogTuning`; `RA6M5FastSD` came later and is experimental (it

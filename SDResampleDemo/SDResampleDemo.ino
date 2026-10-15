@@ -152,8 +152,10 @@
 
   BLE control: connect with web/wav-remote.html (self-hosted with real
   HTTPS - can't be a Claude Artifact, see CLAUDE.md's Bluetooth section)
-  to list the WAV files on the card, pick one, and watch the same speed/
-  buffer/underrun stats live instead of over USB Serial. Reuses the
+  to list the WAV files on the card, pick one, see and change everything
+  the knobs set (a card per knob mode, the current one highlighted), and
+  watch the same buffer/underrun stats live instead of over USB Serial.
+  Reuses the
   CodeLess Binary mode/DSPS bidirectional protocol already validated in
   AudioKnobsWebBLEDemo - see that sketch and the codeless-binary-mode-
   dsps-protocol memory for the handshake itself. On top of that
@@ -172,7 +174,10 @@
   Hz (20 and 20480 is wide open, no filter); `LAT:0|1` is whether the transport is latched;
   `LVL:` is which copy is playing (0 the original, k the cached copy at
   1/2^k its rate); `CACHE:` is how far building those copies has got, in
-  percent.
+  percent. For the page's tweaks tab there are also `MODE:`, the knob mode
+  (0 for the first row of MODES); `HRD:`, the pitch you hear (the shift
+  times the speed, which is what the pitch knob sets); and `WS:`, `WE:` and
+  `LEN:`, the window's start and end and the file's length, in seconds.
 
   The page can also drive the transport and manage the card:
     `LATCH:<name>`       load a file and latch the transport on - plays from
@@ -181,6 +186,16 @@
     `RESET:SPEED`        speed back to 1.0x
     `RESET:ALL`          everything saved per file back to its default, as
                          the triple tap does - see "Reset"
+    `MODE:<n>`           select a knob mode, 0 for the first, as stepping
+                         to it with D20 would
+    `HEARD:<ratio>`      set the pitch you hear, as the pitch knob does:
+                         the shift becomes whatever makes the current
+                         speed sound at it
+    `STRETCH:<ratio>`    set the speed with the pitch you hear held, as
+                         the time-stretch knob does
+    `TAPE:<ratio>`       set the speed and let the pitch follow, as the
+                         speed knob does. (`SPEED:` is one or the other,
+                         depending on the knob mode; these two say which.)
     `RESET:PITCH`        pitch back to unshifted
     `SPEED:<ratio>`      jump to an exact speed (negative is backward, 0
                          pauses); the knob carries on from there
@@ -448,9 +463,15 @@
        wherever it just was - not by jumping to whatever an absolute
        mapping of the pot's new position would imply.
     9. From the page: play a file with its play button and confirm it
-       latches (steady STAT LED, keeps playing with no pad touched), that Stop
-       releases it, and that the two Reset buttons snap speed to 1.00x and
-       pitch to 1.000x in either knob mode.
+       latches (steady STAT LED, keeps playing with no pad touched), and
+       that Stop releases it; the status line says which, with the file's
+       name. On the Tweaks tab, tap each mode's card and confirm the RGB
+       LED changes colour to match, then step the mode with D20 and
+       confirm the page's highlight follows. Drag each slider and confirm
+       you hear it (and that Speed bends the pitch where Stretch doesn't);
+       turn a knob and confirm its slider follows. Tap a value, type a
+       number, and confirm it's set. Reset all tweaks (two taps) puts
+       everything back.
     10. Upload a short WAV, then upload it again to confirm the overwrite
        prompt, rename it, and delete it - each time checking the list
        updates. Repeat the overwrite, rename and delete on the file that is
@@ -2006,6 +2027,46 @@ void setPitchRatio(float ratio) {
   syncHeldPitch();
 }
 
+// HEARD:<ratio> - the pitch you hear, set the way the pitch knob sets it:
+// the speed stays, and the shift makes up the difference.
+void setHeardPitch(float ratio) {
+  float limit = exp2f(PITCH_OCTAVE_LIMIT);
+  heldPitch = constrain(ratio, 1.0f / limit, limit);
+  holdPitch();
+}
+
+// STRETCH:<ratio> - the speed, set the way the time-stretch knob sets it:
+// the pitch you hear stays where it was. Whatever the mode, unlike SPEED:.
+//
+// heldPitch is only kept up to date in pitch mode, so in any other it's
+// worked out here first - but not at a standstill, where the pitch can't be
+// worked out from the shift (see STRETCH_MIN_SPEED). Doing that anyway took
+// the shift itself for the pitch every time a stretch passed through zero,
+// and sent the pitch up by the hundredfold each time.
+void stretchToSpeed(float ratio) {
+  if (!modeHoldsPitch() && fabsf(lastKnownRatio) >= STRETCH_MIN_SPEED) syncHeldPitch();
+  float held = heldPitch;
+  setSpeedRatio(ratio);
+  heldPitch = held;
+  holdPitch();
+}
+
+// The pitch you hear, for the stats line. At a standstill it's the pitch
+// being held for when the tape moves again, not the bare shift.
+float reportedPitch() {
+  return (fabsf(lastKnownRatio) >= STRETCH_MIN_SPEED) ? perceivedPitch() : heldPitch;
+}
+
+// TAPE:<ratio> - the speed, set the way the speed knob sets it: the shift
+// stays, so the pitch you hear goes up and down with the speed. Whatever
+// the mode - in pitch mode SPEED: would hold the pitch instead.
+void tapeToSpeed(float ratio) {
+  float shift = pitchRatio;
+  setSpeedRatio(ratio);
+  pitchRatio = shift;
+  syncHeldPitch();
+}
+
 // Loads the first file on the card this demo can actually play. Returns
 // whether anything was cued. See the call site in setup() for why.
 // Remembers which file is cued, so a reboot comes back to it (see
@@ -2610,6 +2671,7 @@ void deleteFromCard(const String &nameArg) {
 bool isBoardCommand(const String &line) {
   static const char *const COMMANDS[] = {
     "LIST", "PLAY:", "LATCH:", "STOP", "RESET:", "PROFILE", "SPEED:", "PITCH:", "WINDOW:", "ECHO:", "FILTER:", "PUT:", "REN:", "DEL:",
+    "MODE:", "HEARD:", "STRETCH:", "TAPE:",
     "CAL", "RECAL"
   };
   for (const char *command : COMMANDS) {
@@ -2655,6 +2717,14 @@ void handleBLECommand(String line) {
     setPitchRatio(line.substring(6).toFloat());
   } else if (line == "RESET:PITCH") {
     resetPitchToUnity();
+  } else if (line.startsWith("HEARD:")) {
+    setHeardPitch(line.substring(6).toFloat());
+  } else if (line.startsWith("STRETCH:")) {
+    stretchToSpeed(line.substring(8).toFloat());
+  } else if (line.startsWith("TAPE:")) {
+    tapeToSpeed(line.substring(5).toFloat());
+  } else if (line.startsWith("MODE:")) {
+    selectModeFromCommand(line.substring(5).toInt());
   } else if (line.startsWith("WINDOW:")) {
     setWindowSeconds(line.substring(7));
   } else if (line == "RESET:WINDOW") {
@@ -3517,6 +3587,12 @@ void selectMode(uint8_t index) {
   Serial.println(MODES[knobMode].name);
 }
 
+// MODE:<n>, from the web page. Nothing happens for the mode it's already
+// in, so a repeated command doesn't end a scrub or reprint the mode.
+void selectModeFromCommand(int index) {
+  if (index >= 0 && index < MODE_COUNT && index != knobMode) selectMode(index);
+}
+
 // -- Knob calibration -----------------------------------------------------
 // RV112FF learns each pot's range by watching it turn, and reports nothing
 // until it has seen all of it - about two full turns per pot. Rather than
@@ -3783,6 +3859,14 @@ void setup() {
 
   touch1.begin();
   touch2.begin();
+  // On trial: no debouncing. The library waits for two scans to agree
+  // before a pad changes state, which costs 10ms on every press and release.
+  // That was added against spurious latches which turned out to be a bug in
+  // the library's own scan, since fixed - so it should no longer be needed.
+  // If a pad starts registering touches or releases nobody made, take these
+  // two lines out again.
+  touch1.setDebounceSamples(1);
+  touch2.setDebounceSamples(1);
 
   // ---- RA6M5-specific ----
   // Tune the ADC for the pots: a longer sampling time and a discharge
@@ -4285,7 +4369,13 @@ void loop() {
                      ",BUF:" + String((int)fillPercent) + ",UND:" + String(underrunTicks) +
                      ",RUN:" + String(transportRunning ? 1 : 0) +
                      ",LAT:" + String(transportLatched ? 1 : 0) +
-                     ",LVL:" + String(level) + ",CACHE:" + String(cachePercent);
+                     ",LVL:" + String(level) + ",CACHE:" + String(cachePercent) +
+                     ",MODE:" + String(knobMode) + ",HRD:" + String(reportedPitch(), 3);
+      if (fileLoaded) {
+        stat += ",WS:" + String(windowStart / nativeRate, 3) +
+                ",WE:" + String(windowEnd / nativeRate, 3) +
+                ",LEN:" + String((double)fileFrames / nativeRate, 3);
+      }
       if (probing) {
         probeSentMillis = millis();
         awaitingProbeEcho = true;

@@ -73,7 +73,7 @@ OPENSCAD ?= /Applications/OpenSCAD.app/Contents/MacOS/OpenSCAD
 KNOB_PRESET ?= design default values
 
 .DEFAULT_GOAL := build
-.PHONY: build upload monitor run clean ports boards info help require-port ble-venv ble-test ble-binary-test ble-card-test faust knob
+.PHONY: build upload monitor run clean ports boards info help require-port ble-venv ble-test ble-binary-test ble-card-test faust filter-render knob
 
 # ---------------------------------------------------------------------------
 
@@ -143,6 +143,16 @@ ble-card-test: ble-venv
 faust:
 	$(FAUST) -cn KnobSynth AudioKnobsDemo/synth.dsp -o AudioKnobsDemo/synth.h
 
+# Builds tools/filter_render, which runs SDResampleDemo's filter on this
+# computer: its frequency response, its self-oscillation, or a WAV filtered
+# for listening - see the top of tools/filter_render.cpp. Needs a C++17
+# compiler with its standard headers; Homebrew's clang works where Apple's
+# Command Line Tools have lost theirs.
+FILTER_CXX ?= $(shell test -x /opt/homebrew/opt/llvm/bin/clang++ && echo /opt/homebrew/opt/llvm/bin/clang++ || echo c++)
+filter-render: tools/filter_render
+tools/filter_render: tools/filter_render.cpp SDResampleDemo/BandFilter.h
+	$(FILTER_CXX) -O2 -std=c++17 -Wno-unknown-attributes -Wno-unknown-pragmas -I SDResampleDemo $< -o $@
+
 # Exports the scrub knob's printable STL, using the tweaked parameter set
 # saved in scrub_knob.json rather than the .scad file's own defaults. Only
 # re-renders (takes a couple of minutes) when the model or presets change.
@@ -177,6 +187,7 @@ help:
 	@echo "  ble-binary-test  drive the CodeLess Binary mode handshake from here, with a full trace"
 	@echo "  ble-card-test  test SDResampleDemo's upload/rename/delete over BLE"
 	@echo "  faust     regenerate AudioKnobsDemo/synth.h from synth.dsp (needs faust on PATH)"
+	@echo "  filter-render  build tools/filter_render, SDResampleDemo's filter on this computer"
 	@echo "  knob      export hardware/scrub_knob.stl using the presets in scrub_knob.json"
 	@echo "  clean     remove build output"
 	@echo "  ports     list connected boards"

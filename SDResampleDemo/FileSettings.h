@@ -15,6 +15,8 @@
     window_end=0
     echo_time=0.300000
     echo_amount=0.500000
+    filter_low=20.000000
+    filter_high=20480.000000
 
   Plain text so it can be read or edited from a computer. Unknown lines are
   ignored and missing ones keep their defaults, so adding a setting later
@@ -44,6 +46,8 @@ struct FileSettings {
   uint32_t windowEnd = 0;    // its end being 0 for "the end of the file"
   float echoTime = 0.3f;    // the echo's delay, in seconds
   float echoAmount = 0.0f;  // its level and feedback, 0 for no echo
+  float filterLow = 20.0f;      // the filter's bottom cutoff, in Hz...
+  float filterHigh = 20480.0f;  // ...and its top; these two (BandFilter.h's range) are wide open, no filter
 
   // Close enough counts as equal: the knobs recompute these through the
   // dial's own mapping, which doesn't land back on exactly the value that

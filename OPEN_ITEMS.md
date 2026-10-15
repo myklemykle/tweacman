@@ -14,18 +14,19 @@ and touch noise fixes is in `NOISE_DEBUGGING.md`.
 Captured 2026-10-09. Several depend on each other: the general modes
 framework comes before modes 3-5, and the web UI's mode display builds on
 it. Modes are rows of the `MODES` table in the sketch, stepped through by
-touch1. Four are built so far: speed mode (knob1 speed, knob2 scrub),
+touch1. Five are built so far: speed mode (knob1 speed, knob2 scrub),
 pitch mode (knob1 pitch, knob2 time-stretch), window mode (knob1 start,
-knob2 end) and echo mode (knob1 delay time, knob2 amount). Each further mode gets its own feature branch. Per-file
-settings exist too (speed, pitch, window and echo, see `FileSettings.h`); each new mode's
+knob2 end), echo mode (knob1 delay time, knob2 amount) and filter mode
+(knob1 the band's bottom, knob2 its top, Traveler-style). Each further mode gets its own feature branch. Per-file
+settings exist too (speed, pitch, window, echo and filter, see `FileSettings.h`); each new mode's
 parameters should be added to them.
 
 ### Modes
 
 - **Mode colours.** Six hues clear of the board's red and blue LEDs: green
-  120, aqua 180, purple 268 and pink 335 degrees are in use; orange 30 and
-  yellow 60 are picked and waiting for modes 5-6 (they were tried on the LED
-  as placeholder modes, then taken out). Green, aqua and yellow are dimmed
+  120, aqua 180, purple 268, pink 335 and orange 30 degrees are in use;
+  yellow 60 is picked and waiting for mode 6 (it was tried on the LED as a
+  placeholder mode, then taken out). Green, aqua and yellow are dimmed
   to match the rest. Revisit if any pair is hard to tell apart.
 - **Describe each mode's parameters in the table** (name, value, units), for
   the web page's tiles and the per-file settings - when the web UI needs it.
@@ -55,8 +56,27 @@ parameters should be added to them.
   with the loop.
 - **Show the echo** on the web page; it's in the stats line (`ECT:`,
   `ECA:`) but the page doesn't display it yet.
-- **Mode 5: filter on the output** - low/band/high-pass, with cutoff(s) and
-  width/Q.
+- **Filter: tune it by ear.** Mode 5's character is in a few constants in
+  `BandFilter.h`, set from measurements (`make filter-render`) rather than
+  some listening: the bump at each edge (`FILTER_BUMP`, k = 1.5, about
+  +5dB - raised from 1.2 after the first listen), how hard it screams
+  (`FILTER_SCREAM`), where in the narrowing the scream starts
+  (`FILTER_RESONANCE_OCTAVES`, at about 0.5 octaves wide now), and how hard
+  the resonance clipping bites (the `1 +` in the stage's `a`). The scream
+  sits at about -11dBFS. Each knob moves its cutoff 5 octaves per turn.
+- **Filter: its CPU cost.** About 570 cycles per stereo sample, 12% of the
+  audio interrupt (56% to 68% on a stereo file with pitch shifting),
+  while narrowed; nothing wide open. Written in Faust first, it measured
+  925 - Faust's per-call overhead with one sample per call - so it's plain
+  C++. Most of what's left is chained floating-point arithmetic and four
+  divisions. If the planned post-processing needs the room: a mono filter
+  would halve it, or the divisions could be traded for an approximation.
+- **Filter: other shapes.** It's a band-pass only (a high-pass and a
+  low-pass in series). Low-pass-only or a notch could be further modes, or
+  a third parameter.
+- **Show the filter** on the web page; it's in the stats line (`FLL:`,
+  `FLH:`) but the page doesn't display it yet. Its mode card waits on the
+  web redesign (`feature/web-redesign`), which this branch wasn't built on.
 
 ### Web UI (`web/wav-remote.html`)
 

@@ -19,5 +19,3 @@ isTouched	KEYWORD2
 setThreshold	KEYWORD2
 getThreshold	KEYWORD2
 scan	KEYWORD2
-setDebounceSamples	KEYWORD2
-getDebounceSamples	KEYWORD2

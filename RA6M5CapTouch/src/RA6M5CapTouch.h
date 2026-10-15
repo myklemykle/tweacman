@@ -139,16 +139,6 @@ class CapTouch {
     void setThreshold(uint16_t delta) { _threshold = delta; }
     uint16_t getThreshold() const { return _threshold; }
 
-    // How many consecutive scans must agree before isTouched() changes.
-    // 1 disables debouncing entirely (the original behaviour). The default
-    // of 2 costs one scan interval of latency on each press and release -
-    // 20-30ms at the rates these sketches scan - and rejects any single-scan
-    // glitch. Raise it if a pad is noisy and you can afford the latency;
-    // anything edge-triggered downstream wants at least 2. See the comment
-    // in scan()'s update path for why this is not optional in practice.
-    void setDebounceSamples(uint8_t scans) { _debounceSamples = scans < 1 ? 1 : scans; }
-    uint8_t getDebounceSamples() const { return _debounceSamples; }
-
     // If isTouched() stays continuously true for longer than this,
     // scan() assumes the baseline itself has genuinely changed - not a
     // real touch-and-hold - and force-recalibrates (see recalibrate())
@@ -175,8 +165,6 @@ class CapTouch {
     uint8_t _pin;
     int8_t _tsChannel = -1;  // set by begin(); -1 means not registered
     uint16_t _threshold = DEFAULT_THRESHOLD;
-    uint8_t _debounceSamples = DEFAULT_DEBOUNCE_SAMPLES;
-    uint8_t _pendingScans = 0;
     uint16_t _raw = 0;
     uint16_t _reference = 0;
     bool _touched = false;
@@ -206,7 +194,6 @@ class CapTouch {
     static const unsigned long BASELINE_SMOOTHING_MS = 2000;
 
     static const uint16_t DEFAULT_THRESHOLD = 3000;
-    static const uint8_t DEFAULT_DEBOUNCE_SAMPLES = 2;
     static const unsigned long DEFAULT_STUCK_TIMEOUT_MS = 60000;
 
     // One instance per touch channel at most (begin() refuses a second

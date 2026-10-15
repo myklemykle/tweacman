@@ -342,16 +342,19 @@
     touch-action: pan-y;
   }
   .param input[type="range"]:disabled { opacity: 0.45; }
-  /* The filter's card stacks its two settings, one slider above the
-     other on the same scale, like the MiniKorg 700's Traveler levers:
-     a frequency is at the same place on both, so the band is what lies
-     between the two thumbs. Each row is its value and reset, then its
-     slider, so the sliders line up end to end. */
+  /* The filter's card stacks its two settings, like the MiniKorg 700's
+     two Traveler levers: High on top, then Low. Each row is its value and
+     reset beside a slider the rest of the card's width - High's slider on
+     the right of its value, Low's on the left, mirrored. */
   .modeCard.stacked .pair { grid-template-columns: 1fr; }
   .modeCard.stacked .param + .param { border-left: none; }
   .modeCard.stacked .paramBody { display: flex; align-items: center; gap: 6px; }
   .modeCard.stacked .paramRow { flex: none; width: 140px; }
   .modeCard.stacked input[type="range"] { flex: 1; min-width: 0; }
+  .modeCard.stacked [data-param="filterHigh"] { order: -1; }
+  .modeCard.stacked [data-param="filterLow"],
+  .modeCard.stacked [data-param="filterLow"] .paramBody { flex-direction: row-reverse; }
+  .modeCard.stacked [data-param="filterLow"] .paramBody { margin: 0 2px 0 0; }
   #modeCards { display: flex; flex-direction: column; gap: 6px; }
   .resetRow { display: flex; justify-content: center; }
   /* The mode cards run almost edge to edge - sliders want the width. */
@@ -2008,6 +2011,7 @@
     }
     const param = PARAMS[id];
     const row = el("div", "param");
+    row.dataset.param = id;
     const body = el("div", "paramBody");
 
     const valueRow = el("div", "paramRow");

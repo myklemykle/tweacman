@@ -342,6 +342,19 @@
     touch-action: pan-y;
   }
   .param input[type="range"]:disabled { opacity: 0.45; }
+  /* The filter's card stacks its two settings, like the MiniKorg 700's
+     two Traveler levers: High on top, then Low. Each row is its value and
+     reset beside a slider the rest of the card's width - High's slider on
+     the right of its value, Low's on the left, mirrored. */
+  .modeCard.stacked .pair { grid-template-columns: 1fr; }
+  .modeCard.stacked .param + .param { border-left: none; }
+  .modeCard.stacked .paramBody { display: flex; align-items: center; gap: 6px; }
+  .modeCard.stacked .paramRow { flex: none; width: 140px; }
+  .modeCard.stacked input[type="range"] { flex: 1; min-width: 0; }
+  .modeCard.stacked [data-param="filterHigh"] { order: -1; }
+  .modeCard.stacked [data-param="filterLow"],
+  .modeCard.stacked [data-param="filterLow"] .paramBody { flex-direction: row-reverse; }
+  .modeCard.stacked [data-param="filterLow"] .paramBody { margin: 0 2px 0 0; }
   #modeCards { display: flex; flex-direction: column; gap: 6px; }
   .resetRow { display: flex; justify-content: center; }
   /* The mode cards run almost edge to edge - sliders want the width. */
@@ -1795,8 +1808,12 @@
   // The settings themselves, as the board last reported them or the page
   // last set them: speed (a ratio, negative for backward), heard (the pitch
   // you hear, a ratio), the window's start and end and the file's length in
-  // seconds, the echo's delay in seconds and its amount.
-  const tweaks = { speed: null, heard: null, winStart: null, winEnd: null, length: null, echoTime: null, echoAmount: null };
+  // seconds, the echo's delay in seconds and its amount, and the filter's
+  // bottom and top cutoffs in Hz.
+  const tweaks = {
+    speed: null, heard: null, winStart: null, winEnd: null, length: null,
+    echoTime: null, echoAmount: null, filterLow: null, filterHigh: null,
+  };
   const tweakHeldUntil = {};  // per setting: performance.now() until which the board's value is ignored
   let boardMode = null;
   let boardModeHeldUntil = 0;
@@ -1814,6 +1831,18 @@
   const windowCommand = () => `WINDOW:${num(tweaks.winStart, 3)},${num(tweaks.winEnd, 3)}`;
   const echoCommand = () => `ECHO:${num(tweaks.echoTime, 3)},${num(tweaks.echoAmount, 2)}`;
   const ECHO_MIN = 0.001, ECHO_MAX = 2.73, ECHO_MAX_AMOUNT = 0.95;
+  const filterCommand = () => `FILTER:${Math.round(tweaks.filterLow)},${Math.round(tweaks.filterHigh)}`;
+  const FILTER_MIN = 20, FILTER_MAX = 20480;  // as in BandFilter.h: ten octaves, and both at the ends is no filter
+  // A cutoff's slider runs evenly in octaves, as the knob does.
+  const cutoffSlider = {
+    fromPos: (p) => FILTER_MIN * 2 ** (p * 10),
+    toPos: (v) => Math.log2(clamp(v, FILTER_MIN, FILTER_MAX) / FILTER_MIN) / 10,
+    format: (v) => (v < 1000 ? [String(Math.round(v)), "Hz"] : [num(v / 1000, v < 10000 ? 2 : 1), "kHz"]),
+    typed: (n) => (n > 0 ? clamp(n, FILTER_MIN, FILTER_MAX) : null),  // typed in Hz
+    tolerance: 0.5,  // the board reports whole Hz
+    holds: ["filterLow", "filterHigh"],
+    command: filterCommand,
+  };
 
   // Each control: which setting it shows, how its slider maps onto it, how
   // the value reads, what typing a number means, and the command to send.
@@ -1885,6 +1914,23 @@
       holds: ["echoTime", "echoAmount"],
       command: echoCommand,
     },
+    filterLow: {
+      // The bottom of the band. As on the board, the cutoffs can meet but
+      // not cross: pushed into the top, it takes the top along.
+      setting: "filterLow", label: "Low", initial: () => FILTER_MIN, ...cutoffSlider,
+      apply: (v) => {
+        tweaks.filterLow = clamp(v, FILTER_MIN, FILTER_MAX);
+        tweaks.filterHigh = Math.max(tweaks.filterHigh, tweaks.filterLow);
+      },
+    },
+    filterHigh: {
+      // The top of the band, pushing the bottom down ahead of it.
+      setting: "filterHigh", label: "High", initial: () => FILTER_MAX, ...cutoffSlider,
+      apply: (v) => {
+        tweaks.filterHigh = clamp(v, FILTER_MIN, FILTER_MAX);
+        tweaks.filterLow = Math.min(tweaks.filterLow, tweaks.filterHigh);
+      },
+    },
   };
 
   // The board's knob modes, in its order, with its LED hues, and what knob 1
@@ -1895,6 +1941,8 @@
     { name: "Pitch", hue: 180, params: ["pitch", "stretch"] },
     { name: "Window", hue: 268, params: ["winStart", "winEnd"] },
     { name: "Echo", hue: 335, params: ["echoTime", "echoAmount"] },
+    // Stacked, like the Traveler's two levers - see .modeCard.stacked.
+    { name: "Filter", hue: 30, params: ["filterLow", "filterHigh"], stacked: true },
   ];
 
   // Whether a setting is at its default, near enough: the board reports
@@ -1902,7 +1950,8 @@
   function atDefault(param) {
     const value = tweaks[param.setting];
     if (value == null || (param.needsFile && !tweaks.length)) return true;
-    return Math.abs(value - param.initial()) < (param.setting === "echoAmount" ? 0.005 : 0.002);
+    const tolerance = param.tolerance ?? (param.setting === "echoAmount" ? 0.005 : 0.002);
+    return Math.abs(value - param.initial()) < tolerance;
   }
 
   const tweakControls = [];  // { id, param, slider, valueBtn, resetBtn, buttons, dragging }
@@ -1917,7 +1966,7 @@
 
   function buildTweaks() {
     MODES.forEach((mode, index) => {
-      const card = el("section", "modeCard");
+      const card = el("section", mode.stacked ? "modeCard stacked" : "modeCard");
       card.style.setProperty("--h", mode.hue);
       card.tabIndex = 0;
       card.setAttribute("role", "button");
@@ -1962,6 +2011,7 @@
     }
     const param = PARAMS[id];
     const row = el("div", "param");
+    row.dataset.param = id;
     const body = el("div", "paramBody");
 
     const valueRow = el("div", "paramRow");
@@ -2130,7 +2180,10 @@
 
   // The stats line's settings. A file's length comes with its window, and
   // goes when no file is loaded.
-  const TWEAK_FIELDS = { REQ: "speed", HRD: "heard", WS: "winStart", WE: "winEnd", ECT: "echoTime", ECA: "echoAmount" };
+  const TWEAK_FIELDS = {
+    REQ: "speed", HRD: "heard", WS: "winStart", WE: "winEnd",
+    ECT: "echoTime", ECA: "echoAmount", FLL: "filterLow", FLH: "filterHigh",
+  };
 
   function tweaksFromBoard(parts) {
     const now = performance.now();
@@ -2184,7 +2237,7 @@
   // -- incoming data --------------------------------------------------------
 
   // The board sends a stats line like
-  // "SPD:2.35,REQ:2.35,PIT:1.000,ECT:0.300,ECA:0.00,BUF:78,UND:0,RUN:1,LAT:0,
+  // "SPD:2.35,REQ:2.35,PIT:1.000,ECT:0.300,ECA:0.00,FLL:20,FLH:20480,BUF:78,UND:0,RUN:1,LAT:0,
   //  LVL:3,CACHE:100,MODE:0,HRD:1.000,WS:0.000,WE:10.000,LEN:10.000\n"
   // (see SDResampleDemo.ino's header comment) over the DSPS pipe once
   // Binary mode is active, twice a second.

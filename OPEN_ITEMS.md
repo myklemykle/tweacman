@@ -77,9 +77,6 @@ page's tweaks tab.
 - **Filter: other shapes.** It's a band-pass only (a high-pass and a
   low-pass in series). Low-pass-only or a notch could be further modes, or
   a third parameter.
-- **Show the filter** on the web page; it's in the stats line (`FLL:`,
-  `FLH:`) but the page doesn't display it yet - it needs a card in the
-  tweaks tab.
 
 ### Web UI (`web/wav-remote.html`)
 

@@ -304,7 +304,7 @@
   EchoDelay.h, which explains all of this. The echo applies to whatever
   comes out, in every mode. When the transport stops, the echoes neither
   ring on for ever nor are cut dead: they carry on repeating while fading
-  out evenly over three delay times (half a second at least), and then the
+  out smoothly over three delay times (half a second at least), and then the
   feedback is taken away. Scrubbing a stopped tape brings the echo back for
   as long as the knob keeps moving, and it fades the same way when the knob
   comes to rest. Both settings are saved per file.
@@ -503,7 +503,7 @@
        to die away, without ever building up. Turn knob 1: the echoes move
        apart or together, bending in pitch as they go. All the way back on
        knob 1 they close up into a metallic ring. Stop the transport: the
-       echoes keep repeating as they fade evenly away over three delay
+       echoes keep repeating as they fade smoothly away over three delay
        times, and the output doesn't thump or stick. Back in speed mode,
        scrub the stopped tape with knob 2: it echoes in full, and when the
        knob comes to rest the echoes fade away the same way.
@@ -1021,10 +1021,13 @@ AUDIO_HOT inline bool renderVoice(Voice &v, float step, float pitch, bool shifti
 // turned, it adds nothing to the sound.
 //
 // When the sound stops, the tail doesn't ring on for ever: loop() fades it
-// out (EchoDelay's setFade()), in a straight line over a few delay times
-// (ECHO_TAIL_REPEATS) - long enough for the last thing played to come round
-// that many times, each quieter - and then damps it (setDamped()), taking
-// the feedback away. "The sound" is the transport running, or the scrub
+// out (EchoDelay's setFade()) over a few delay times (ECHO_TAIL_REPEATS) -
+// long enough for the last thing played to come round that many times, each
+// quieter - and then damps it (setDamped()), taking the feedback away. The
+// fade follows (1 - t) cubed rather than a straight line: a straight line
+// in level is only 30dB down at 97% of the way, and drops to nothing over
+// the last 3% - which is heard as a cut. The cube is 60dB down by 90% and
+// arrives at nothing gently. "The sound" is the transport running, or the scrub
 // knob moving a stopped tape; the fade starts when the transport stops or
 // that knob comes to rest. A very short delay still gets
 // ECHO_TAIL_MIN_SECONDS, so a stop is never an abrupt cut.
@@ -4100,7 +4103,7 @@ void loop() {
       float tailSeconds = fmaxf(echoSeconds * ECHO_TAIL_REPEATS, ECHO_TAIL_MIN_SECONDS);
       float faded = (float)(millis() - soundStoppedMillis) / (tailSeconds * 1000.0f);
       if (faded >= 1.0f) echoTailing = false;
-      else tailFade = 1.0f - faded;
+      else tailFade = (1.0f - faded) * (1.0f - faded) * (1.0f - faded);  // see "Echo"
     }
     echo.setFade(tailFade);
     echo.setDamped(!echoTailing);

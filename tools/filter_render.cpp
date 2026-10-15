@@ -105,9 +105,11 @@ void scream(float low, float high) {
   const float FADE_SECONDS = 0.9f;
   int fadeSamples = (int)(FADE_SECONDS * RATE), fadedAt = -1, block = RATE / 100;
   float blockPeak = 0.0f, after = 0.0f;
+  double tenth = 0.0;
   for (int i = 0; i < 3 * RATE; i++) {
     if (i % CONTROL_SAMPLES == 0) {
-      filter.setLevel(1.0f - (float)i / fadeSamples);
+      float left = fmaxf(0.0f, 1.0f - (float)i / fadeSamples);
+      filter.setLevel(left * left * left);  // the sketch's curve - see "Echo" there
       filter.update(CONTROL_SECONDS);
     }
     float frame[2] = {0.0f, 0.0f};
@@ -115,6 +117,14 @@ void scream(float low, float high) {
     float y = fabsf(frame[0]);
     blockPeak = fmaxf(blockPeak, y);
     if (i >= fadeSamples) after = fmaxf(after, y);
+    // The level through each tenth of the fade, relative to the scream's.
+    tenth += (double)y * y;
+    if (i % (fadeSamples / 10) == fadeSamples / 10 - 1 && i < fadeSamples) {
+      double rms = sqrt(tenth / (fadeSamples / 10)) * sqrt(2.0);
+      printf("  %3d%%-%3d%% of the fade: %6.1fdB\n", (i + 1) * 100 / fadeSamples - 10,
+             (i + 1) * 100 / fadeSamples, 20.0 * log10(rms / peak + 1e-9));
+      tenth = 0.0;
+    }
     if (i % block == block - 1) {
       if (fadedAt < 0 && blockPeak < peak * 0.0316f) fadedAt = i;  // 30dB down
       blockPeak = 0.0f;

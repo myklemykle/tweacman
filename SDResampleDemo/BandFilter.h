@@ -103,10 +103,6 @@ const float FILTER_HIGHEST_HZ = 21000.0f;
 // stepping it at loop()'s control rate doesn't zipper.
 const float FILTER_GLIDE_SECONDS = 0.004f;
 
-// Faded below this level the filter counts as silent, and its resonance is
-// taken out of oscillation.
-const float FILTER_SILENT = 0.01f;
-
 // Wide open for this long, the filter stops running: by then the glide of
 // the mix has long since arrived.
 const float FILTER_BYPASS_SECONDS = 0.05f;
@@ -159,9 +155,10 @@ class BandFilter {
 
     // The low-pass resonance: rising over the last of the narrowing, as the
     // square of how far in, so it creeps up and then arrives - unless the
-    // filter has been faded to silence.
+    // filter has been faded all the way out. (Only then: taken away while
+    // still faintly heard, the scream would stop short of the fade.)
     float in = clampf(1.0f - width_ / FILTER_RESONANCE_OCTAVES, 0.0f, 1.0f);
-    bool silenced = level_ < FILTER_SILENT;
+    bool silenced = level_ <= 0.0f;
     target_.kHP = FILTER_BUMP;
     target_.kLP = silenced ? FILTER_BUMP : FILTER_BUMP + (FILTER_SCREAM - FILTER_BUMP) * in * in;
 

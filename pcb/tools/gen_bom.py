@@ -30,7 +30,7 @@ PARTS = {
                        "Audio low-pass with R1/R2 (1k): sets the corner, so avoid X7R", "", "", ""),
     "2.2u film|cassette:C_DCBlock_Dual": ("2.2 uF film capacitor, radial box", "Film (PET/PP), >=25 V, 5-15 mm pitch, under 12 mm tall",
                                           "Left audio DC blocker (film side of the A/B pair)", "", "",
-                                          "Film boxes of 2.2 uF are 10.5-12.5 mm tall, lowest at 15 mm pitch; the lid is 15 mm up"),
+                                          "Film boxes of 2.2 uF are 10.5-12.5 mm tall, lowest at 15 mm pitch; the lid is 17 mm up"),
     "2.2u electrolytic|cassette:C_DCBlock_Dual": ("2.2 uF aluminium electrolytic, axial, laid flat", ">=25 V, body <= 11 mm long (15 mm pitch), 5 mm dia",
                                                   "Right audio DC blocker (electrolytic side of the A/B pair)", "", "",
                                                   "Polarised: + toward the DAC (pad 1, square). Either kind fits either channel"),
@@ -44,7 +44,7 @@ PARTS = {
                                                      "Optional pot supply filter", "", "",
                                                      "Shorted by a jumper in the footprint: cut the jumper to use it"),
     f"560|{R_AXIAL}": ("560 Ohm resistor, axial", "1% metal film, 1/8-1/6 W (0204 body)", "Touch pad series resistor", "", "", ""),
-    "RV112FF-40-25A-0B10K|cassette:RV112FF-40": ("Dual 10 kOhm endless rotary pot", "25 mm plastic shaft (with the SPK-013A knob and 15 mm lid)",
+    "RV112FF-40-25A-0B10K|cassette:RV112FF-40": ("Dual 10 kOhm endless rotary pot", "25 mm plastic shaft (with the SPK-013A knob and 17 mm lid)",
                                                  "The two knobs", "Taiwan Alpha", "RV112FF-40-25A-0B10K",
                                                  "Shaft length is in the part number; the footprint fits every length"),
     "STX-3120-3B|cassette:Kycon_STX-3120-3B": ("3.5 mm stereo jack, right angle", "This exact part (custom footprint)", "Audio out",
@@ -96,12 +96,17 @@ MOUSER = {
     "1x12 socket|None": ("200-SL112TT12", "Samtec SL-112-TT-12: body 1.27 mm + contact rim 0.38-0.71 mm = ~2 mm tall; 4.83 mm pin (drawing SX-1XX-XX-XX-X-X)"),
     "1x16 socket|None": ("200-SL116TT12", "Samtec SL-116-TT-12: body 1.27 mm + contact rim 0.38-0.71 mm = ~2 mm tall; 4.83 mm pin (drawing SX-1XX-XX-XX-X-X)"),
 }
-# Case stack, top to bottom, at each corner: M3 x 6 screw / lid PCB / 15 mm female-female standoff / carrier / 15 mm
+# Case stack, top to bottom, at each corner: M3 x 6 screw / lid PCB / 17 mm female-female standoff / carrier / 15 mm
 # male-female standoff (male end up through the carrier into the one above) / base PCB / M3 x 6 screw. The standoffs clamp
 # the carrier on their own, so the case opens without it falling loose, and every part is at Mouser.
-# Top 15 mm: the tallest parts (the Thing Plus's own JST and Qwiic sockets) reach ~11.5 mm, and the lid top at 16.6 mm leaves
-# ~1.2 mm under the knobs (25 mm shaft) - so extra height can't go here. Bottom 15 mm: a LiPo up to ~9 mm thick with foam tape,
-# plus ~2 mm of trimmed leads. M3 x 6 through a 1.6 mm board leaves ~4.4 mm of thread in each standoff.
+# Top 17 mm: with the header pins left untrimmed they bottom out in the low-profile sockets, and the Thing Plus's underside
+# sits 8.5 mm above the carrier (measured on the first build); its own JST socket then reaches 16 mm. 15 mm was planned from
+# an estimated 5.1 mm gap and turned out too short. The knobs still fit with the lid 2 mm higher (checked on the first build).
+# Bottom 15 mm: a LiPo up to ~9 mm thick with foam tape, plus ~2 mm of trimmed leads, and the hold-down screws' tips and nuts
+# (~4 mm under the carrier). M3 x 6 through a 1.6 mm board leaves ~4.4 mm of thread in each standoff.
+# Thing Plus hold-down: only three of its four holes are drilled in the carrier - the fourth (top left, by C3) would have cut
+# into the hub hole beside it. Stack: M2.5 x 16 screw / Thing Plus / 8 mm spacer + up to two thin washers (to fill the 8.5 mm
+# gap) / carrier / nut. Snug the screws gently: pulling the Thing Plus down onto its bottomed-out pins strains the header joints.
 # (description, requirements, purpose, qty per board, manufacturer, MPN, references, note, Mouser #)
 EXTRA = [
     ("Knob, 24.1 mm dia x 10.3 mm, black, white indicator", "D-bore to fit the RV112FF shaft", "Knob (small)", 1,
@@ -115,8 +120,8 @@ EXTRA = [
     ("LiPo battery, 3.7 V 1200 mAh, 34 x 62 x 5 mm", "JST PH 2-pin, + on pin 1, protection circuit, <= 9 mm thick",
      "Battery; rides under the carrier, foam-taped to the base", 1, "Adafruit", "258", "BT (plugs into J2)",
      "Check polarity before plugging in. Mouser ships lithium cells by ground only", "485-258"),
-    ("Hex standoff, M3 x 15 mm, female-female", "5.5 mm across flats (fits the corner holes, 4.2 mm from the edges)",
-     "Lid to carrier", 4, "Wurth Elektronik", "970150321", "MH1-MH4", "", "710-970150321"),
+    ("Hex standoff, M3 x 17 mm, female-female", "5.5 mm across flats (fits the corner holes, 4.2 mm from the edges)",
+     "Lid to carrier", 4, "Wurth Elektronik", "970170321", "MH1-MH4", "Clears the Thing Plus's JST socket at 16 mm", "710-970170321"),
     ("Hex standoff, M3 x 15 mm, male-female", "5.5 mm across flats; male thread passes the 1.6 mm carrier",
      "Carrier to base; its male end screws into the standoff above, clamping the carrier", 4,
      "Wurth Elektronik", "971150321", "MH1-MH4", "", "710-971150321"),
@@ -124,11 +129,16 @@ EXTRA = [
      "", "144-50M030050P006"),
     ("Adhesive rubber foot", "Taller than the base screw heads (~2 mm), or placed clear of them", "Feet", 4, "", "", "base",
      "NOT CHOSEN YET: e.g. 3M Bumpon SJ5023 (Mouser 517-SJ-5023BK, pad of 36)", ""),
-    ("M2.5 x 12 mm pan Phillips screw", "", "Optional Thing Plus hold-down (the sockets hold it already)", 4,
-     "Essentra", "50M025045P012", "U1 mounting", "Thing Plus holes are 3.05 mm", "144-50M025045P012"),
-    ("Round spacer, 5 mm, M2.5 clearance, aluminium", "Height = Thing Plus underside above the carrier: ~5.1 mm (0.200 in) with the SL/TS pair",
-     "Between the Thing Plus and the carrier", 4, "RAF Electronic Hardware", "M0504-25-AL", "U1 mounting", "", "761-M0504-25-AL"),
-    ("M2.5 hex nut", "", "Under the carrier, for the hold-down screws", 4, "Essentra", "04M025045HN", "U1 mounting", "", "144-04M025045HN"),
+    ("M2.5 x 16 mm pan Phillips screw, black", ">= 14 mm: Thing Plus 1.6 + gap 8.5 + carrier 1.6 + nut 2",
+     "Optional Thing Plus hold-down (the sockets hold it already)", 3, "Essentra", "50M025045P016B", "U1 mounting",
+     "Thing Plus holes are 3.05 mm. The plain-steel 50M025045P016 was out of stock", "144-50M025045P016B"),
+    ("Round spacer, 8 mm, M2.5 clearance, aluminium", "Height = Thing Plus underside above the carrier: 8.5 mm measured, untrimmed pins",
+     "Between the Thing Plus and the carrier", 3, "RAF Electronic Hardware", "M0507-25-AL", "U1 mounting",
+     "No 8.5 mm size listed: the washers make up the rest", "761-M0507-25-AL"),
+    ("Flat washer, M2.5, thin", "~0.25-0.5 mm thick, fits under the spacer", "Shims the 8 mm spacer to the 8.5 mm gap", 6,
+     "Essentra", "16M02556080", "U1 mounting", "Thickness not listed at Mouser: use one or two per spacer, whichever fills the gap",
+     "144-16M02556080"),
+    ("M2.5 hex nut", "", "Under the carrier, for the hold-down screws", 3, "Essentra", "04M025045HN", "U1 mounting", "", "144-04M025045HN"),
     ("Lid and base PCBs", "Two more copies of this carrier PCB", "Case top and bottom", 0, "", "", "",
      "Come with the board order (OSH Park makes 3); not bought separately", ""),
 ]

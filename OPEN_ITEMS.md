@@ -146,6 +146,15 @@ capacitors from the wiper pins to ground). What's left, for the record:
     readiness check (or a short retry on first read) would be more honest
     than the current existence check plus a fixed sleep.
 
+## PCB case
+
+- **Fit-test the case-height fix.** The first build showed the 15 mm top
+  standoffs were too short (untrimmed header pins hold the Thing Plus 8.5 mm
+  up; its JST reaches 16 mm). On order: 17 mm top standoffs, and for the
+  three Thing Plus hold-downs, 8 mm spacers shimmed with one or two thin M2.5
+  washers (thickness unlisted) under M2.5 x 16 screws. Confirm the washer
+  count and that the knobs still seat, then settle the BOM.
+
 ## Web pages
 
 - **Redeploy the hosted copies.** `mykle.com/webble/oscillator-remote.html` is

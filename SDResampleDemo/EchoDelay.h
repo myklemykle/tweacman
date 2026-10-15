@@ -60,6 +60,8 @@
   seconds, at a long delay with a lot of feedback. setDamped(true) is for
   that: it takes the feedback away at once, so nothing repeats again, and
   fades out the echoes already on their way over about half a second.
+  (SDResampleDemo fades the echo out more slowly with setFade() first - see
+  below - and damps it once that's done.)
   Cutting the echo dead instead would sound as abrupt as it is. The line
   keeps running underneath, so setDamped(false) brings the echo straight
   back.

@@ -46,7 +46,8 @@ static bool nearlyEqual(float a, float b) {
 bool FileSettings::operator==(const FileSettings &other) const {
   return nearlyEqual(speed, other.speed) && nearlyEqual(pitch, other.pitch) &&
          windowStart == other.windowStart && windowEnd == other.windowEnd &&
-         nearlyEqual(echoTime, other.echoTime) && nearlyEqual(echoAmount, other.echoAmount);
+         nearlyEqual(echoTime, other.echoTime) && nearlyEqual(echoAmount, other.echoAmount) &&
+         nearlyEqual(filterLow, other.filterLow) && nearlyEqual(filterHigh, other.filterHigh);
 }
 
 FileSettings FileSettings::load(const String &wavName) {
@@ -69,6 +70,8 @@ FileSettings FileSettings::load(const String &wavName) {
     else if (key == "window_end") s.windowEnd = strtoul(number.c_str(), nullptr, 10);
     else if (key == "echo_time" && value > 0.0f) s.echoTime = value;
     else if (key == "echo_amount" && value >= 0.0f) s.echoAmount = value;
+    else if (key == "filter_low" && value > 0.0f) s.filterLow = value;
+    else if (key == "filter_high" && value > 0.0f) s.filterHigh = value;
   }
   fclose(f);
   return s;
@@ -80,7 +83,9 @@ bool FileSettings::save(const String &wavName) const {
                 "window_start=" + String(windowStart) + "\n" +
                 "window_end=" + String(windowEnd) + "\n" +
                 "echo_time=" + String(echoTime, 6) + "\n" +
-                "echo_amount=" + String(echoAmount, 6) + "\n";
+                "echo_amount=" + String(echoAmount, 6) + "\n" +
+                "filter_low=" + String(filterLow, 6) + "\n" +
+                "filter_high=" + String(filterHigh, 6) + "\n";
   return writeReplacing(pathFor(wavName), text);
 }
 

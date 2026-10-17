@@ -2,7 +2,7 @@
 
 Things discussed but not yet done. Updated alongside the commits that finish
 or add items, so this should match the code on `main`; last reviewed
-2026-10-15. Roughly grouped, and within each group roughly in the order
+2026-10-16. Roughly grouped, and within each group roughly in the order
 they'd be worth doing.
 
 Design proposals large enough to have their own document are linked rather
@@ -33,6 +33,28 @@ page's tweaks tab.
   `wav-remote.html`), which has to be kept in step with the sketch's `MODES`
   table by hand. The board could describe them instead (name, hue, each
   setting's range and units) for the page to build itself from.
+- **Time-stretch: fixed-length grains at high speeds.** Above about 8
+  samples per tick, pitch mode's time-stretch goes dull and then nearly
+  silent - congaTam.wav (a 22kHz file, almost all its energy at 155-310Hz)
+  vanishes when the 1/64 copy takes over, and t_08000_16.wav's tune when
+  the 1/8 and 1/16 do. Two causes, both by design rather than bugs. The
+  grains stream the copy past at the playback speed, and a voice can only
+  read about 8 samples of its copy per tick, so the copy choice
+  (`levelRateFor()`, the `s / 4` floor) keeps moving to lower-rate copies,
+  each with half the bandwidth - fine in speed mode, where what a copy
+  drops would be above hearing anyway, but in time-stretch the pitch is
+  held, so it's sound you'd still hear. And the grains restart every time
+  the cursor moves a grain length (2048 samples), so at high speed they
+  are a few ticks long and mostly heard as a buzz at that rate, which
+  follows the knob. The fix: above about 8x, every ~23ms load a fresh
+  46ms grain straight from the WAV (or a low copy) at the cursor, in
+  `loop()` - one ~4KB card read per grain whatever the speed - and play
+  it at the held pitch, two overlapping with Hann windows as now. No copy
+  switching, full treble, and a steady grain rate that could become a
+  setting. Needs grain buffers, a new read path in the audio interrupt,
+  and a bench check of the card's timing. (The cheap alternative,
+  letting the cursor read each copy twice as fast before switching, only
+  moves the problem up an octave and keeps the buzz.)
 - **Window that wraps round the file's ends.** Mode 3's start and end stop
   at the ends of the file; letting the window carry on round from the end
   to the beginning would be cool.

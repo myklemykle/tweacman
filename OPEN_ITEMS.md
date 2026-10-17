@@ -181,6 +181,20 @@ fixed header), and Info (playback stats and the link log, folded away).
   only real lever is replacing CodeLess with custom DA14531 firmware (SDK6
   DSPS with a bigger MTU, data length extension and a faster UART) - a large
   project.
+- **Does the module's Bluetooth address change when it restarts?** Once
+  (2026-10-16), desktop Safari's pairing chooser listed two `CLv2-CodeLess`
+  entries with completely different addresses, though there's only one board
+  in range. The likely cause: the DA14531 SDK can generate a fresh "static
+  random" address at each boot, and the module restarts on every power cycle
+  and every Binary-mode disconnect, so the Mac briefly still lists the old
+  one. (macOS shows browsers a made-up identifier per device rather than
+  the real address, so the listed addresses may not be the real ones.) To test:
+  `AT+BDADDR`, restart (`AT+R` or a reset), `AT+BDADDR` again. A small `BDADDR`
+  passthrough in `SDResampleDemo`'s Serial console would do it. Harmless for
+  the web page, which finds the board by name and service, but it would break
+  anything that remembers a device (saved Web Bluetooth permissions,
+  automatic reconnection). If it does change, check CodeLess's AT command
+  reference for a way to set a fixed address.
 
 ## PCB / hardware
 

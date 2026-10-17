@@ -886,6 +886,16 @@ const float GRAIN_LENGTH_SAMPLES = 2048.0f;
 // comb filter, so unity pitch has to be a special case rather than a limit.
 const float PITCH_BYPASS_EPSILON = 0.001f;
 
+// The shifter doesn't switch in and out of that bypass instantly: the grains
+// trail the cursor while the single tap reads right at it, so an instant
+// switch jumps the sound back or forward by up to a grain - a glitch heard
+// every time a time-stretch passed through the held pitch (1x, unless the
+// pitch knob has moved it). shiftMix glides between the two over
+// SHIFT_FADE_TICKS instead - 0 the single tap, 1 the grains - reading both
+// only while it's in between.
+const float SHIFT_FADE_TICKS = 480.0f;  // 10ms at 48kHz
+float shiftMix = 0.0f;                  // ISR-owned
+
 volatile float pitchRatio = 1.0f;   // written by loop(), read by the audio ISR
 
 // For time-stretch: when zero or more, the grains read at exactly this many
@@ -1004,7 +1014,9 @@ AUDIO_HOT inline bool readGrains(Voice &v, int32_t idx, float frac, float step, 
   return true;
 }
 
-// One voice's output for this tick, pitch-shifted or not.
+// One voice's output for this tick: the single tap, the pitch shifter's
+// grains, or a blend of the two by `mix` while gliding between them (see
+// shiftMix).
 //
 // The pitch shifter's grain taps move through the copy at speed x pitch,
 // but they're read at full bandwidth regardless. The copy is chosen to keep
@@ -1013,19 +1025,26 @@ AUDIO_HOT inline bool readGrains(Voice &v, int32_t idx, float frac, float step, 
 // would mean two stretched-kernel reads a tick, each up to twice the cost of
 // an ordinary one - and the audio interrupt's budget is being kept free for
 // other processing. The shifter is a lo-fi effect with its own warble anyway.
-AUDIO_HOT inline bool renderVoice(Voice &v, float step, float pitch, bool shifting,
-                                  float out[2]) {
+AUDIO_HOT inline bool renderVoice(Voice &v, float step, float mix, float out[2]) {
   int32_t idx = v.resampler.index;
   float frac = v.resampler.frac;
   float rate = step * v.levelScale;  // samples of this copy per tick
-  bool ok = shifting ? readGrains(v, idx, frac, step, 1.0f, out)
-                     : readAt(v, idx, frac, 0.0f, bandwidthFor(rate), out);
+  if (mix <= 0.0f) return readAt(v, idx, frac, 0.0f, bandwidthFor(rate), out);
+
   // A tap can reach past the start of the buffer in the moments right
   // after a rewind, when there is little history behind position 0 yet.
   // Falling back to the unpitched read costs a brief pitch glitch there
   // and nothing else, which beats reporting an underrun that isn't one.
-  if (!ok && shifting) ok = readAt(v, idx, frac, 0.0f, bandwidthFor(rate), out);
-  return ok;
+  if (!readGrains(v, idx, frac, step, 1.0f, out)) {
+    return readAt(v, idx, frac, 0.0f, bandwidthFor(rate), out);
+  }
+  if (mix >= 1.0f) return true;
+
+  float plain[2];
+  if (!readAt(v, idx, frac, 0.0f, bandwidthFor(rate), plain)) return true;
+  out[0] = plain[0] + mix * (out[0] - plain[0]);
+  out[1] = plain[1] + mix * (out[1] - plain[1]);
+  return true;
 }
 
 // -- Echo --------------------------------------------------------------------
@@ -1181,10 +1200,17 @@ AUDIO_HOT void audioCallback(timer_callback_args_t *args) {
         ? __builtin_fabsf(tapRate - stepSize) >= PITCH_BYPASS_EPSILON * tapRate
         : __builtin_fabsf(p - 1.0f) >= PITCH_BYPASS_EPSILON;
 
+    float mix = shiftMix;
+    if (shifting ? mix < 1.0f : mix > 0.0f) {
+      mix += (shifting ? 1.0f : -1.0f) / SHIFT_FADE_TICKS;
+      mix = (mix > 1.0f) ? 1.0f : (mix < 0.0f) ? 0.0f : mix;
+      shiftMix = mix;
+    }
+
     Voice &active = voices[activeVoice];
 
     float frame[2];
-    bool ok = renderVoice(active, step, p, shifting, frame);
+    bool ok = renderVoice(active, step, mix, frame);
 
     if (ok) {
       outLeft = clampToSample(frame[0]);
@@ -1197,8 +1223,8 @@ AUDIO_HOT void audioCallback(timer_callback_args_t *args) {
       // the offset, so they read at |step| minus its rate of growth: at
       // pitchRatio times the step, or at a fixed rate when time-stretching -
       // which works even at a step of zero, where the grains keep playing in
-      // place (a freeze).
-      if (shifting) {
+      // place (a freeze). Kept moving while the grains fade out too.
+      if (mix > 0.0f) {
         float o = grainOffset + (stretching ? stepSize - tapRate : (1.0f - p) * stepSize);
         if (o >= GRAIN_LENGTH_SAMPLES) o -= GRAIN_LENGTH_SAMPLES;
         else if (o < 0.0f) o += GRAIN_LENGTH_SAMPLES;

@@ -126,6 +126,11 @@ fixed header), and Info (playback stats and the link log, folded away).
 - **USB disk mode: speed.** With the core's `UsbMsd` library as it is,
   copying onto the card runs at about 115KB/s and reading off it about
   550KB/s (4MB each way, 2026-10-16); full-speed USB allows about 1MB/s.
+  A Finder copy of 12MB of files off the card took about 30s (~400KB/s),
+  so many files cost a little more than one big one. Not copying `cache/`
+  avoids most of that - the board rebuilds it - and marking it hidden on
+  the card would keep Finder from showing or copying it (untested whether
+  the core's FATFileSystem lets the sketch set that attribute).
   Writes are slow because the library gets 512 bytes at a time from the
   computer and, for each sector, reads it back from the card and writes it
   again as its own command - the worst case for an SD card. The plan, if

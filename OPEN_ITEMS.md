@@ -133,6 +133,11 @@ fixed header), and Info (playback stats and the link log, folded away).
   sectors into a ~32KB buffer and write them as one multi-sector command
   through `RA6M5FastSD`, flushed when the computer jumps elsewhere, asks
   for a sync, or ejects. Reads could go through the multi-sector path too.
+  Test first, to see where the time really goes: Finder copies of a real
+  sample folder both ways (many small files as well as a few big ones),
+  the card's own write speed in large pieces (a small benchmark sketch -
+  the 0.35MB/s figure in CLAUDE.md was measured with 8KB writes), and how
+  long the mount takes, including macOS's checks.
 - **USB disk mode: Spotlight holds up ejecting.** Soon after the card
   mounts, macOS's Spotlight indexer (`mds_stores`) starts reading it, and
   ejecting is refused until it's done - 40 seconds once, at USB disk mode's

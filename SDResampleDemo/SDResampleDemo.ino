@@ -210,6 +210,10 @@
                          from 20 to 20480 (both at the ends is wide open,
                          no filter; both together, it screams) - see
                          "Filter"; `RESET:FILTER` opens it
+    `RESET:CACHE`        throw away the current file's cached copies and
+                         build them again - for a copy suspected of being
+                         damaged, since they're otherwise kept up to date
+                         on their own
     `PROFILE`            print, over USB Serial, how often each stage of
                          loop() did work since the last PROFILE and how long
                          it took - see "loop() profiling" further down
@@ -2682,6 +2686,28 @@ void deleteFromCard(const String &nameArg) {
   if (wasCurrent) recueAfterLosingFile();
 }
 
+// RESET:CACHE - deletes the current file's cached copies and loads the
+// file again, which starts building them afresh, just as the first time it
+// was played. The file has to be unloaded first: the builder holds its
+// copies open. Playback goes back to the top, still latched if it was.
+void rebuildCache() {
+  if (!fileLoaded) return;
+  String name = currentFilename;
+  bool latched = transportLatched;
+  unloadFile();
+  MipCache::removeFor(name);
+  Serial.print("Deleted the cached copies of ");
+  Serial.print(name);
+  Serial.println(" - building them again.");
+  String err;
+  if (loadFile(name, err)) {
+    transportLatched = latched;
+  } else {
+    Serial.println("...but it wouldn't load again: " + err);
+    recueAfterLosingFile();
+  }
+}
+
 // Whether a line is one of the commands handleBLECommand() takes - the
 // web page's words, which can only ever reach this sketch through an open
 // Binary mode pipe. See handleBLELine() for why that matters.
@@ -2754,6 +2780,8 @@ void handleBLECommand(String line) {
     setFilterFromCommand(line.substring(7));
   } else if (line == "RESET:FILTER") {
     resetFilter();
+  } else if (line == "RESET:CACHE") {
+    rebuildCache();
   } else if (line.startsWith("PUT:")) {
     startUpload(line.substring(4));
   } else if (line.startsWith("REN:")) {

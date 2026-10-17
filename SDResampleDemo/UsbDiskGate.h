@@ -22,7 +22,12 @@
   again. Open, every call goes straight through to the card.
 
   UsbMsd calls init() before every single request, so that's where a closed
-  gate says no; it never reaches the card at all.
+  gate says no; it never reaches the card at all. An open gate doesn't pass
+  init() on to the card either: those calls come from inside the USB
+  interrupt, and starting up the card there hung the board (confirmed live
+  - it dropped off USB for good the moment the computer first asked about
+  the disk). The sketch starts the card up itself, in loop(), before it
+  opens the gate.
 
   Also here: fixUsbDiskPacketSize(), a workaround for a bug in the core
   that otherwise stops the board working over USB at all - see below.
@@ -74,7 +79,7 @@ class UsbDiskGate : public BlockDevice {
   void setOpen(bool open) { open_ = open; }
   bool isOpen() const { return open_; }
 
-  int init() override { return open_ ? card_.init() : BD_ERROR_DEVICE_ERROR; }
+  int init() override { return open_ ? 0 : BD_ERROR_DEVICE_ERROR; }
   int deinit() override { return 0; }  // the sketch decides when the card closes
   bool available() override { return open_; }
 

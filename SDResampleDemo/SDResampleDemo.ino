@@ -380,9 +380,12 @@
   computer, or unplugging the cable, closes the gate again; the sketch
   mounts the card, tidies up after any files deleted or renamed there (as
   at boot) and cues the remembered file. (DISK:OFF also takes it back, but
-  the computer isn't told, so it's an emergency exit only.) Only one side may ever have the card: each keeps its own
-  copy of the file table in memory, and two writers would corrupt it. The
-  USB serial port keeps working throughout. It needs the core's UsbMsd
+  the computer isn't told, so it's an emergency exit only. Dropping off USB
+  and reconnecting, to make the computer look again, was tried - with
+  tud_disconnect()/tud_connect() - and hung the board.) Only one side may
+  ever have the card: each keeps its own copy of the file table in memory,
+  and two writers would corrupt it. The USB serial port keeps working
+  throughout. It needs the core's UsbMsd
   library plus a workaround for a bug in it on this board's full-speed USB
   port, without which the board doesn't come up on USB at all - see
   fixUsbDiskPacketSize(). macOS leaves a hidden "._" file beside every file
@@ -609,7 +612,8 @@
 #include <RA6M5FastSD.h>  // the core's SD driver, but reading and writing many sectors per command
 #include "FATFileSystem.h"
 #include "UsbMsd.h"
-#include "tusb.h"  // tud_mounted()
+#include "tusb.h"  // tud_mounted(), tud_task()
+#include "device/dcd.h"  // dcd_event_bus_signal() - see watchUsbCable()
 #include "UsbDiskGate.h"
 #include "bsp_api.h"   // for R_DAC - the audio ISR writes it directly, same as DACAudioTest
 #include "FspTimer.h"  // for the audio-rate interrupt driving that ISR
@@ -3972,6 +3976,47 @@ void printProfile() {
 // back. See "USB disk mode" in the header comment, and UsbDiskGate.h for why
 // the two can never share it.
 
+// ---- RA6M5-specific ----
+// Whether the USB cable is plugged in and powered, from the USB peripheral's
+// VBUS sense (P407 on this board). TinyUSB's own tud_mounted() can't be
+// used for this: when the cable comes out the core's driver only stops
+// presenting the device, without telling TinyUSB, so tud_mounted() stays
+// true - on battery - until a cable goes back in. Confirmed live: pulling
+// the cable in USB disk mode left the board stuck in it until replugged.
+bool usbCablePresent() {
+  return R_USB_FS0->INTSTS0_b.VBSTS;
+}
+// ---- end RA6M5-specific ----
+
+// How long the cable has to be gone before it counts as unplugged, so a
+// glitch on the sense pin can't end USB disk mode.
+const unsigned long USB_CABLE_GONE_MS = 200;
+unsigned long usbCableSeenMillis = 0;
+bool usbCableGone = false;
+
+// Called every pass of loop(). When the cable comes out, tells TinyUSB so,
+// since the core's driver doesn't (see usbCablePresent()). Without it the
+// board could hang on battery: the core's Serial goes on believing the
+// computer that had the port open is still listening, and once its buffer
+// fills, the next print waits for room forever. With it, Serial knows
+// nobody's there and quietly drops what's printed, as it does at boot.
+void watchUsbCable() {
+  unsigned long now = millis();
+  if (usbCablePresent()) {
+    usbCableSeenMillis = now;
+    usbCableGone = false;
+  } else if (!usbCableGone && now - usbCableSeenMillis >= USB_CABLE_GONE_MS) {
+    usbCableGone = true;
+    // Queued and handled right here, with interrupts held off: the USB
+    // interrupt that would normally run tud_task() has nothing left to
+    // fire it.
+    noInterrupts();
+    dcd_event_bus_signal(BOARD_TUD_RHPORT, DCD_EVENT_UNPLUGGED, true);
+    tud_task();
+    interrupts();
+  }
+}
+
 // DISK:ON. Stops everything that uses the card, lets go of it, and opens the
 // gate - the computer notices within a second or two and mounts it.
 void enterUsbDiskMode() {
@@ -3981,7 +4026,7 @@ void enterUsbDiskMode() {
   }
   // Without a computer, nobody could ever eject it - only DISK:OFF would
   // bring the board back.
-  if (!tud_mounted()) {
+  if (!usbCablePresent() || !tud_mounted()) {
     blePrintLine("ERR:DISK:no computer on the USB port");
     return;
   }
@@ -4002,6 +4047,15 @@ void enterUsbDiskMode() {
   if (sdFs.unmount() != 0) {
     Serial.println("USB disk: couldn't unmount the card - staying put.");
     blePrintLine("ERR:DISK:couldn't let go of the card");
+    recueAfterLosingFile();
+    return;
+  }
+  // Unmounting shut the card down; start it up again here, in loop(), since
+  // the gate won't - see UsbDiskGate.h.
+  if (sdBlockDevice.init() != 0) {
+    Serial.println("USB disk: couldn't start the card up again.");
+    blePrintLine("ERR:DISK:couldn't start the card up");
+    sdFs.mount(&sdBlockDevice);
     recueAfterLosingFile();
     return;
   }
@@ -4057,7 +4111,8 @@ void leaveUsbDiskMode() {
 // and doubling as the Binary mode probe it normally is (see the status
 // block in loop()).
 void serviceUsbDiskMode() {
-  if (usbDiskEjected || !tud_mounted()) {
+  unsigned long now = millis();
+  if (usbDiskEjected || usbCableGone) {
     leaveUsbDiskMode();
     return;
   }
@@ -4070,7 +4125,6 @@ void serviceUsbDiskMode() {
   }
   digitalWrite(LED_BUILTIN, LOW);
 
-  unsigned long now = millis();
   if (now - previousStatusMillis < STATUS_INTERVAL) return;
   previousStatusMillis = now;
   bool probing = (linkMode == LINK_PENDING) &&
@@ -4262,6 +4316,8 @@ void loop() {
     linkMode = LINK_BINARY;
     Serial.println("Probe went unechoed - Binary mode is live.");
   }
+
+  watchUsbCable();
 
   // In USB disk mode the card belongs to the computer, so nothing below -
   // playback, the knobs, saving settings - can run. See "USB disk mode".

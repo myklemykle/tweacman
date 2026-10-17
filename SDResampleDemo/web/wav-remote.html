@@ -756,10 +756,20 @@
         <button class="smallBtn" id="uploadBtn" disabled>Upload</button>
         <button class="smallBtn recordBtn" id="recordBtn" hidden disabled>Hold to record</button>
         <button class="smallBtn" id="refreshBtn" disabled>Refresh</button>
+        <button class="smallBtn" id="diskBtn" disabled>USB disk</button>
       </div>
     </div>
     <p class="hint">Tap a name to cue it for the touch pads; &#9654; plays it and latches.</p>
     <input type="file" id="fileInput" class="visuallyHidden" accept=".wav,audio/wav,audio/x-wav" tabindex="-1">
+
+    <!-- USB disk mode: the card is on the computer at the other end of the
+         board's USB cable, until it's ejected there - see the sketch's
+         "USB disk mode". -->
+    <div class="uploadPanel" id="diskPanel" hidden>
+      <div class="prompt">The card is a USB disk on the computer the board is plugged into.
+        Copy WAVs on or off it there, then <strong>eject it</strong> (or unplug the cable)
+        to bring the board back. Playback is off until then.</div>
+    </div>
 
     <div class="uploadPanel" id="uploadPanel" hidden>
       <div class="prompt" id="uploadPrompt"></div>
@@ -881,6 +891,8 @@
   const resetAllBtns = [...document.querySelectorAll(".resetAllBtn")];  // one above the tweaks, one below
   const logPanel = $("logPanel");
   const refreshBtn = $("refreshBtn");
+  const diskBtn = $("diskBtn");
+  const diskPanel = $("diskPanel");
   const uploadBtn = $("uploadBtn");
   const recordBtn = $("recordBtn");
   const recordPanel = $("recordPanel");
@@ -970,6 +982,9 @@
   // board is reading raw file data rather than commands, so every other
   // command is held back (see sendCommand()).
   let upload = null;
+  // True while the card is a USB disk on a computer (DISKMODE:ON from the board),
+  // when nothing that touches the card or playback can work.
+  let diskMode = false;
 
   // Which row, if any, is showing its rename box or delete confirmation:
   // { name, kind: "rename" | "delete" }.
@@ -1037,8 +1052,9 @@
 
   // Enables and disables everything that talks to the board, in one place.
   function updateControls() {
-    const ready = connected && !upload;
+    const ready = connected && !upload && !diskMode;
     refreshBtn.disabled = !ready;
+    diskBtn.disabled = !ready;
     uploadBtn.disabled = !ready;
     // Not while a take is being recorded - a disabled button stops getting
     // the pointer events that end the recording.
@@ -2280,6 +2296,23 @@
   // key:value telemetry parser - FILES:/PLAYING:/ERR:/... are structurally
   // different (a multi-line block, or a payload that itself may contain
   // a colon) from the flat SPD:/BUF:/UND:/... stats line.
+  // DISKMODE:ON and DISKMODE:OFF. The board repeats DISKMODE:ON in place of its status
+  // line while the card is a USB disk, so a page that connects meanwhile
+  // finds out too.
+  function setDiskMode(on) {
+    if (on === diskMode) return;
+    diskMode = on;
+    diskPanel.hidden = !on;
+    fileListEl.hidden = on;
+    if (on) {
+      showTab("files");
+    } else {
+      notice("The card is back on the board.");
+      requestFileList();
+    }
+    updateControls();
+  }
+
   function handleLine(line) {
     if (line === "FILES:BEGIN") {
       clearTimeout(listRetryTimer);  // a response is actually coming - stop retrying
@@ -2304,6 +2337,8 @@
     }
     if (collectingFiles) { fileListBuffer.push(line); return; }
     if (line.startsWith("PLAYING:")) { setNowPlaying(line.slice(8)); return; }
+    if (line === "DISKMODE:ON") { setDiskMode(true); return; }
+    if (line === "DISKMODE:OFF") { setDiskMode(false); return; }
     if (line.startsWith("ERR:")) { showError(line.slice(4)); return; }
 
     // Upload replies - see runUpload().
@@ -2604,6 +2639,7 @@
 
   connectBtn.addEventListener("click", connect);
   refreshBtn.addEventListener("click", requestFileList);
+  diskBtn.addEventListener("click", () => sendCommand("DISK:ON"));
   uploadBtn.addEventListener("click", () => fileInput.click());
   if (CAN_RECORD) {
     uploadBtn.hidden = true;

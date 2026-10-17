@@ -123,6 +123,42 @@ fixed header), and Info (playback stats and the link log, folded away).
 
 ## SDResampleDemo - known issues
 
+- **USB disk mode: speed.** With the core's `UsbMsd` library as it is,
+  copying onto the card runs at about 115KB/s and reading off it about
+  550KB/s (4MB each way, 2026-10-16); full-speed USB allows about 1MB/s.
+  Writes are slow because the library gets 512 bytes at a time from the
+  computer and, for each sector, reads it back from the card and writes it
+  again as its own command - the worst case for an SD card. The plan, if
+  it's worth it: our own `tud_msc_*` handlers that gather consecutive
+  sectors into a ~32KB buffer and write them as one multi-sector command
+  through `RA6M5FastSD`, flushed when the computer jumps elsewhere, asks
+  for a sync, or ejects. Reads could go through the multi-sector path too.
+  Test first, to see where the time really goes: Finder copies of a real
+  sample folder both ways (many small files as well as a few big ones),
+  the card's own write speed in large pieces (a small benchmark sketch -
+  the 0.35MB/s figure in CLAUDE.md was measured with 8KB writes), and how
+  long the mount takes, including macOS's checks.
+- **USB disk mode: Spotlight holds up ejecting.** Soon after the card
+  mounts, macOS's Spotlight indexer (`mds_stores`) starts reading it, and
+  ejecting is refused until it's done - 40 seconds once, at USB disk mode's
+  ~550KB/s. A `.metadata_never_index` file in the card's root used to stop
+  that; whether current macOS still honours it is untested (the file list
+  would skip it, being a dot-file). Otherwise it's `mdutil -i off` on the
+  Mac, per volume.
+- **USB disk mode: try it on Windows (and Linux).** Only tested on macOS
+  so far. Worth checking: how long the card takes to appear, that "Safely
+  remove" brings the board back as Finder's eject does, and what hidden
+  files Windows leaves on the card (names starting with a dot are already
+  skipped; folders such as `System Volume Information` aren't listed
+  anyway, since only files are).
+- **USB disk mode: the BLE link hiccups while the computer is busy with the
+  card.** The computer's requests are served inside the USB interrupt, so
+  loop() is starved while it reads or writes; a Binary mode probe's echo
+  then arrives after `BINARY_PROBE_TIMEOUT`, the link is wrongly promoted,
+  and the next echo demotes it again (seen as "Unrecognized BLE command"
+  lines on Serial). It recovers by itself, and only matters with no phone
+  connected; the real fix is the probe noticing bytes waiting before it
+  gives up.
 - **Other pot sketches relearn calibration every boot.** Since 2026-10-09
   `RV112FF` reports nothing until a pot's calibration is complete (about two
   turns). SDResampleDemo saves it; AudioKnobsDemo, AudioKnobsWebBLEDemo,
@@ -163,6 +199,20 @@ fixed header), and Info (playback stats and the link log, folded away).
   only real lever is replacing CodeLess with custom DA14531 firmware (SDK6
   DSPS with a bigger MTU, data length extension and a faster UART) - a large
   project.
+- **Does the module's Bluetooth address change when it restarts?** Once
+  (2026-10-16), desktop Safari's pairing chooser listed two `CLv2-CodeLess`
+  entries with completely different addresses, though there's only one board
+  in range. The likely cause: the DA14531 SDK can generate a fresh "static
+  random" address at each boot, and the module restarts on every power cycle
+  and every Binary-mode disconnect, so the Mac briefly still lists the old
+  one. (macOS shows browsers a made-up identifier per device rather than
+  the real address, so the listed addresses may not be the real ones.) To test:
+  `AT+BDADDR`, restart (`AT+R` or a reset), `AT+BDADDR` again. A small `BDADDR`
+  passthrough in `SDResampleDemo`'s Serial console would do it. Harmless for
+  the web page, which finds the board by name and service, but it would break
+  anything that remembers a device (saved Web Bluetooth permissions,
+  automatic reconnection). If it does change, check CodeLess's AT command
+  reference for a way to set a fixed address.
 
 ## PCB / hardware
 

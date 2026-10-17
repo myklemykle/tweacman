@@ -228,6 +228,19 @@
                          calibration - see "Knob calibration" further down
     `RECAL`              forget both knobs' saved calibration and learn it
                          again
+    `DISK:ON`            make the card a USB disk on the computer the board
+                         is plugged into - answered `DISKMODE:ON`, repeated
+                         in place of the status line until it's ejected
+                         there, then `DISKMODE:OFF`; see "USB disk mode".
+                         (Not DISK:ON back: in command mode the module
+                         echoes everything, and the board would take its
+                         own reply for the command again)
+    `DISK:OFF`           take the card back without waiting for the eject -
+                         an emergency exit only: the computer isn't told,
+                         keeps the disk mounted with its own (soon stale)
+                         copy of the file table, and could corrupt the card
+                         with it the next time DISK:ON opens it up. Eject
+                         it on the computer first, or unplug the cable
   Any of them can fail with the same `ERR:<name>:<reason>` as PLAY:. Names
   the page creates must end in .WAV, since those are the only files LIST
   shows. Touching the file that is playing closes it first (FatFs can't
@@ -357,6 +370,27 @@
   otherwise. The blue STAT LED shows the transport: dark when stopped,
   blinking while running from a held finger, steady when latched. (One LED used to do both jobs, by colour and by blinking, which
   left the mode invisible whenever the transport was stopped.)
+
+  USB disk mode: DISK:ON (the web page's "USB disk" button) hands the SD
+  card to the computer at the other end of the USB cable, where it appears
+  as a drive - far quicker than uploading over BLE for moving WAVs on and
+  off. The board stops playing, saves the file's settings, unmounts the
+  card and then opens UsbDiskGate (UsbDiskGate.h), which until then has
+  told the computer there's no card in the drive. Ejecting the drive on the
+  computer, or unplugging the cable (or the computer going to sleep - see
+  watchUsbHost()), closes the gate again; the sketch
+  mounts the card, tidies up after any files deleted or renamed there (as
+  at boot) and cues the remembered file. (DISK:OFF also takes it back, but
+  the computer isn't told, so it's an emergency exit only. Dropping off USB
+  and reconnecting, to make the computer look again, was tried - with
+  tud_disconnect()/tud_connect() - and hung the board.) Only one side may
+  ever have the card: each keeps its own copy of the file table in memory,
+  and two writers would corrupt it. The USB serial port keeps working
+  throughout. It needs the core's UsbMsd
+  library plus a workaround for a bug in it on this board's full-speed USB
+  port, without which the board doesn't come up on USB at all - see
+  fixUsbDiskPacketSize(). macOS leaves a hidden "._" file beside every file
+  it copies onto a FAT card; names starting with a dot are never listed.
 
   File formats: mono or stereo, at any sample rate, in 8-, 16-, 24- or
   32-bit PCM or 32- or 64-bit float, with plain or WAVE_FORMAT_EXTENSIBLE
@@ -558,6 +592,16 @@
        rise about 12% while the filter is narrowed, and drop back a moment
        after it's wide open. Pick another file and come back, or reboot:
        the filter is restored.
+    19. USB disk mode: with the board's USB cable in a computer, tap "USB
+       disk" on the web page's Files tab (or type DISK:ON in the Serial
+       Monitor). Playback stops, the LED goes a dim white, and within a
+       few seconds the card appears as a drive. Copy a WAV onto it and
+       eject it: the LED comes back in the mode's colour, the remembered
+       file is cued again, and the new WAV is in the page's file list
+       (but no "._" twin of it). Do it again and unplug the cable instead
+       of ejecting: about two seconds later the board comes back the
+       same way. DISK:ON with no
+       computer on the USB port is refused.
 */
 
 #include <RV112FF.h>
@@ -569,6 +613,9 @@
 #include <EEPROM.h>       // the Data Flash, for saving the knobs' calibration
 #include <RA6M5FastSD.h>  // the core's SD driver, but reading and writing many sectors per command
 #include "FATFileSystem.h"
+#include "UsbMsd.h"
+#include "tusb.h"  // tud_mounted(), tud_suspended()
+#include "UsbDiskGate.h"
 #include "bsp_api.h"   // for R_DAC - the audio ISR writes it directly, same as DACAudioTest
 #include "FspTimer.h"  // for the audio-rate interrupt driving that ISR
 #include "RingBuffer.h"
@@ -757,6 +804,19 @@ void resetVirtualKnobToNative() {
 FastSDCardBlockDevice sdBlockDevice(PIN_SDHI_CLK, PIN_SDHI_CMD, PIN_SDHI_D0, PIN_SDHI_D1,
                                     PIN_SDHI_D2, PIN_SDHI_D3, PIN_SDHI_CD, PIN_SDHI_WP);
 FATFileSystem sdFs("sd");
+
+// The card as a USB disk, behind a gate that keeps it hidden from the
+// computer except in USB disk mode - see "USB disk mode" and UsbDiskGate.h.
+// (The list form of USBMSD's constructor: its single-device one writes past
+// the end of a zero-length array.)
+UsbDiskGate usbDiskGate(sdBlockDevice);
+USBMSD usbDisk({&usbDiskGate});
+// Runs fixUsbDiskPacketSize() before main() starts USB - see UsbDiskGate.h.
+struct UsbDiskPacketSizeFix {
+  UsbDiskPacketSizeFix() { fixUsbDiskPacketSize(); }
+} usbDiskPacketSizeFix;
+bool usbDiskMode = false;
+volatile bool usbDiskEjected = false;  // set by the USB interrupt
 MipCache cache;  // builds and tracks the current file's lower-rate copies - see MipCache.h
 
 // volatile because audioCallback() reads it - see the idle branch there.
@@ -2180,6 +2240,17 @@ bool cueRememberedFile() {
   return cueFirstPlayableFile();
 }
 
+// Whether a name on the card is one of the WAVs this demo lists and plays.
+// Not a name starting with a dot: macOS leaves a hidden "._name.wav" beside
+// every file it copies onto a FAT card (see "USB disk mode"), which ends in
+// .wav but holds Finder metadata, not audio.
+bool isWavName(const String &name) {
+  if (name.startsWith(".")) return false;
+  String upper = name;
+  upper.toUpperCase();
+  return upper.endsWith(".WAV");
+}
+
 bool cueFirstPlayableFile() {
   DIR *dir = opendir("/sd");
   if (!dir) {
@@ -2191,9 +2262,7 @@ bool cueFirstPlayableFile() {
   while ((ent = readdir(dir)) != nullptr) {
     if (ent->d_type != DT_REG) continue;
     String name(ent->d_name);
-    String upper = name;
-    upper.toUpperCase();
-    if (!upper.endsWith(".WAV")) continue;
+    if (!isWavName(name)) continue;
 
     String err;
     if (loadFile(name, err)) {
@@ -2389,9 +2458,7 @@ void pumpFileList() {
   while ((ent = readdir(fileListDir)) != nullptr) {
     if (ent->d_type != DT_REG) continue;
     String name(ent->d_name);
-    String upper = name;
-    upper.toUpperCase();
-    if (upper.endsWith(".WAV")) {
+    if (isWavName(name)) {
       blePrintLine(name);
       nextFileLineMillis = millis() + FILE_LIST_LINE_INTERVAL;
       return;
@@ -2413,9 +2480,7 @@ bool isValidWavName(const String &name) {
     char c = name[i];
     if (c < 32 || strchr("/\\:*?\"<>|", c) != nullptr) return false;
   }
-  String upper = name;
-  upper.toUpperCase();
-  return upper.endsWith(".WAV");
+  return isWavName(name);
 }
 
 bool fileExists(const String &name) {
@@ -2713,7 +2778,7 @@ void rebuildCache() {
 // Binary mode pipe. See handleBLELine() for why that matters.
 bool isBoardCommand(const String &line) {
   static const char *const COMMANDS[] = {
-    "LIST", "PLAY:", "LATCH:", "STOP", "RESET:", "PROFILE", "SPEED:", "PITCH:", "WINDOW:", "ECHO:", "FILTER:", "PUT:", "REN:", "DEL:",
+    "LIST", "PLAY:", "LATCH:", "STOP", "RESET:", "PROFILE", "SPEED:", "PITCH:", "WINDOW:", "ECHO:", "FILTER:", "PUT:", "REN:", "DEL:", "DISK:",
     "MODE:", "HEARD:", "STRETCH:", "TAPE:",
     "CAL", "RECAL"
   };
@@ -2725,6 +2790,21 @@ bool isBoardCommand(const String &line) {
 
 void handleBLECommand(String line) {
   line.trim();
+  if (line == "DISK:ON") {
+    enterUsbDiskMode();
+    return;
+  }
+  if (line == "DISK:OFF") {
+    leaveUsbDiskMode();
+    return;
+  }
+  // Everything else touches the card or the playback that reads it, and the
+  // card belongs to the computer for now.
+  if (usbDiskMode) {
+    blePrintLine("ERR:DISK:the card is a USB disk until it's ejected");
+    return;
+  }
+
   if (line == "LIST") {
     startFileList();
   } else if (line.startsWith("PLAY:") || line.startsWith("LATCH:")) {
@@ -3554,9 +3634,7 @@ bool nextWavName(DIR *dir, String &name) {
   while ((ent = readdir(dir)) != nullptr) {
     if (ent->d_type != DT_REG) continue;
     name = ent->d_name;
-    String upper = name;
-    upper.toUpperCase();
-    if (upper.endsWith(".WAV")) return true;
+    if (isWavName(name)) return true;
   }
   return false;
 }
@@ -3893,6 +3971,164 @@ void printProfile() {
   profileStartMillis = millis();
 }
 
+// -- USB disk mode -------------------------------------------------------------
+// DISK:ON hands the card to the computer at the other end of the USB cable,
+// where it appears as a drive; ejecting it there (or DISK:OFF) hands it
+// back. See "USB disk mode" in the header comment, and UsbDiskGate.h for why
+// the two can never share it.
+
+// Whether the computer has gone - the cable pulled out. USB has no "unplugged"
+// signal this sketch can use: the core's driver never passes one to TinyUSB,
+// and the RA6M5's VBUS sense (P407) stayed high with the cable out on
+// battery, measured. What does change, within a fraction of a second, is
+// that the bus goes quiet and TinyUSB reports it suspended - which is
+// also what a computer going to sleep looks like, so a sleeping computer
+// counts as gone too. That's safe for the card: once the gate closes,
+// nothing the computer does can reach it, and when the computer wakes its
+// requests fail and it drops the disk (complaining it wasn't ejected).
+//
+// Serial needs nothing extra: the core's Serial counts a suspended bus as
+// nobody listening, and drops what's printed rather than waiting for room.
+// (Telling TinyUSB the cable was unplugged, by raising the event and
+// running tud_task() with interrupts held off, was tried - and hung the
+// board on the spot.)
+const unsigned long USB_GONE_MS = 2000;  // longer than a passing glitch
+unsigned long usbSeenMillis = 0;
+bool usbGone = false;
+
+// Called every pass of loop() to keep usbGone up to date.
+void watchUsbHost() {
+  unsigned long now = millis();
+  if (tud_mounted() && !tud_suspended()) {
+    usbSeenMillis = now;
+    usbGone = false;
+  } else if (now - usbSeenMillis >= USB_GONE_MS) {
+    usbGone = true;
+  }
+}
+
+// DISK:ON. Stops everything that uses the card, lets go of it, and opens the
+// gate - the computer notices within a second or two and mounts it.
+void enterUsbDiskMode() {
+  if (usbDiskMode) {
+    blePrintLine("DISKMODE:ON");
+    return;
+  }
+  // Without a computer, nobody could ever eject it - only DISK:OFF would
+  // bring the board back.
+  if (!tud_mounted() || tud_suspended()) {
+    blePrintLine("ERR:DISK:no computer on the USB port");
+    return;
+  }
+  if (uploadInProgress()) {
+    blePrintLine("ERR:DISK:an upload is in progress");
+    return;
+  }
+
+  abortFileList();
+  transportLatched = false;
+  unloadFile();  // saves the file's settings and stops building its copies
+  // Silence the echo and the filter's scream: loop() stops looking after
+  // their fade-out while in this mode.
+  echo.setFade(0.0f);
+  echo.setDamped(true);
+  filter.setLevel(0.0f);
+
+  if (sdFs.unmount() != 0) {
+    Serial.println("USB disk: couldn't unmount the card - staying put.");
+    blePrintLine("ERR:DISK:couldn't let go of the card");
+    recueAfterLosingFile();
+    return;
+  }
+  // Unmounting shut the card down; start it up again here, in loop(), since
+  // the gate won't - see UsbDiskGate.h.
+  if (sdBlockDevice.init() != 0) {
+    Serial.println("USB disk: couldn't start the card up again.");
+    blePrintLine("ERR:DISK:couldn't start the card up");
+    sdFs.mount(&sdBlockDevice);
+    recueAfterLosingFile();
+    return;
+  }
+  usbDiskEjected = false;
+  usbDiskGate.setOpen(true);
+  usbDiskMode = true;
+  Serial.println("USB disk mode: the card is on the computer now. Eject it there to come back.");
+  blePrintLine("DISKMODE:ON");
+}
+
+// The computer ejected the disk: Finder's eject button, or the equivalent.
+// Called by TinyUSB, inside the USB interrupt, so it only raises a flag for
+// loop(). Overrides TinyUSB's weak default.
+extern "C" bool tud_msc_start_stop_cb(uint8_t lun, uint8_t powerCondition, bool start,
+                                      bool loadEject) {
+  (void)lun;
+  (void)powerCondition;
+  if (loadEject && !start) usbDiskEjected = true;
+  return true;
+}
+
+// After an eject, the cable coming out, or DISK:OFF: closes the gate, mounts the card again and
+// picks up whatever changed on it - files deleted or renamed on the computer
+// leave cached copies and settings behind, cleared here just as at boot.
+void leaveUsbDiskMode() {
+  if (!usbDiskMode) {
+    blePrintLine("DISKMODE:OFF");
+    return;
+  }
+  usbDiskGate.setOpen(false);
+  usbDiskMode = false;
+  usbDiskEjected = false;
+  if (sdFs.mount(&sdBlockDevice) != 0) {
+    Serial.println("USB disk: couldn't mount the card again - is it still FAT32?");
+    blePrintLine("ERR:DISK:couldn't mount the card again");
+    return;
+  }
+  MipCache::removeOrphans();
+  FileSettings::removeOrphans();
+  cueRememberedFile();
+  // The knobs went unread meanwhile: whatever they turned through then
+  // shouldn't arrive all at once, as one big turn.
+  knob1NeedsBaseline = true;
+  scrubPrevAngle = -1.0f;
+  Serial.println("USB disk mode over: the card is back.");
+  blePrintLine("DISKMODE:OFF");
+}
+
+// loop()'s whole job while in USB disk mode: notice the eject (or the
+// computer going - see watchUsbHost() - after which nobody is left to eject
+// it, and the card is in the same state as any USB stick pulled out without
+// ejecting), light the LED
+// a dim white, and tell the web page - in place of the usual status line,
+// and doubling as the Binary mode probe it normally is (see the status
+// block in loop()).
+void serviceUsbDiskMode() {
+  unsigned long now = millis();
+  if (usbDiskEjected || usbGone) {
+    leaveUsbDiskMode();
+    return;
+  }
+
+  uint8_t white = (uint8_t)(255u * RGBLED_BRIGHTNESS / 100u / 2u);
+  CRGB wanted(white, white, white);
+  if (wanted != leds[0]) {
+    leds[0] = wanted;
+    FastLED.show();
+  }
+  digitalWrite(LED_BUILTIN, LOW);
+
+  if (now - previousStatusMillis < STATUS_INTERVAL) return;
+  previousStatusMillis = now;
+  bool probing = (linkMode == LINK_PENDING) &&
+                 (now - probeSentMillis >= BINARY_PROBE_INTERVAL);
+  if (linkMode == LINK_BINARY || probing) {
+    if (probing) {
+      probeSentMillis = now;
+      awaitingProbeEcho = true;
+    }
+    blePrintLine("DISKMODE:ON");
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   unsigned long start = millis();
@@ -4070,6 +4306,15 @@ void loop() {
     awaitingProbeEcho = false;
     linkMode = LINK_BINARY;
     Serial.println("Probe went unechoed - Binary mode is live.");
+  }
+
+  watchUsbHost();
+
+  // In USB disk mode the card belongs to the computer, so nothing below -
+  // playback, the knobs, saving settings - can run. See "USB disk mode".
+  if (usbDiskMode) {
+    serviceUsbDiskMode();
+    return;
   }
 
   // SD refill, for whichever voices are playing. Direction-aware: each

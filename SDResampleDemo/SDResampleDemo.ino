@@ -160,7 +160,9 @@
   AudioKnobsWebBLEDemo - see that sketch and the codeless-binary-mode-
   dsps-protocol memory for the handshake itself. On top of that
   transport, this sketch speaks a small plain-text line protocol:
-  `LIST` requests a `FILES:BEGIN`/one-name-per-line/`FILES:END` block;
+  `LIST` requests a `FILES:BEGIN`/one-name-per-line/`FILES:END` block,
+  in the order the file knob steps through them (natural, case-blind -
+  see WavList.h), so a client shows them as they come;
   `PLAY:<name>` requests a switch, answered with `PLAYING:<name>` on
   success or `ERR:<name>:<reason>` on failure - a bad or unsupported
   file is a normal, reported failure, not a hang. The periodic stats line
@@ -627,6 +629,7 @@
 #include "SincInterpolator.h"
 #include "EchoDelay.h"
 #include "BandFilter.h"
+#include "WavList.h"  // the card's WAVs, in the order the page and the file knob share
 #include <utility>  // for std::move in loadFile()
 
 // -- Speed range and knob mapping ----------------------------------------
@@ -2240,33 +2243,11 @@ bool cueRememberedFile() {
   return cueFirstPlayableFile();
 }
 
-// Whether a name on the card is one of the WAVs this demo lists and plays.
-// Not a name starting with a dot: macOS leaves a hidden "._name.wav" beside
-// every file it copies onto a FAT card (see "USB disk mode"), which ends in
-// .wav but holds Finder metadata, not audio.
-bool isWavName(const String &name) {
-  if (name.startsWith(".")) return false;
-  String upper = name;
-  upper.toUpperCase();
-  return upper.endsWith(".WAV");
-}
-
+// The first playable WAV in the list's order (see WavList.h).
 bool cueFirstPlayableFile() {
-  DIR *dir = opendir("/sd");
-  if (!dir) {
-    Serial.println("Could not open /sd to look for a file to cue.");
-    return false;
-  }
-
-  struct dirent *ent;
-  while ((ent = readdir(dir)) != nullptr) {
-    if (ent->d_type != DT_REG) continue;
-    String name(ent->d_name);
-    if (!isWavName(name)) continue;
-
+  for (const String &name : sortedWavNames()) {
     String err;
     if (loadFile(name, err)) {
-      closedir(dir);
       Serial.print("Cued ");
       Serial.println(name);
       return true;
@@ -2277,7 +2258,6 @@ bool cueFirstPlayableFile() {
     Serial.println(err);
   }
 
-  closedir(dir);
   Serial.println("No playable file found on the card - waiting for a BLE PLAY command.");
   return false;
 }
@@ -2405,8 +2385,10 @@ unsigned long telemetrySuppressedUntilMillis = 0;
 // draining the ring buffer the whole time, playback audibly drops out - right
 // at connect, because clients request LIST as soon as they attach.
 //
-// So: one name per pumpFileList() call, at the same 40ms spacing, with the
-// directory handle held open in between. Same rate on the wire, no blocking.
+// So: one name per pumpFileList() call, at the same 40ms spacing. Same rate
+// on the wire, no blocking. The names are read and sorted up front (see
+// WavList.h) - reading the folder takes a few milliseconds, not 40 per name -
+// so the page gets them in the order the file knob steps through them.
 // Telemetry is suppressed for the duration rather than relying on a fixed
 // cooldown afterwards, which is also strictly more correct - a long list can
 // legitimately take longer to drain than any fixed window.
@@ -2414,24 +2396,26 @@ const unsigned long FILE_LIST_LINE_INTERVAL = 40;  // ms between names
 
 void finishFileList();
 
-DIR *fileListDir = nullptr;
+std::vector<String> fileListNames;  // what's left to send, in order
+size_t fileListNext = 0;
+bool fileListSending = false;
 unsigned long nextFileLineMillis = 0;
 
-bool fileListInProgress() { return fileListDir != nullptr; }
+bool fileListInProgress() { return fileListSending; }
 
 void abortFileList() {
-  if (fileListDir) {
-    closedir(fileListDir);
-    fileListDir = nullptr;
-  }
+  fileListSending = false;
+  fileListNames.clear();
+  fileListNames.shrink_to_fit();  // give the names' memory back between lists
 }
 
 void startFileList() {
   abortFileList();  // a second LIST mid-send restarts cleanly
   blePrintLine("FILES:BEGIN");
-  fileListDir = opendir("/sd");
+  fileListNames = sortedWavNames();
+  fileListNext = 0;
+  fileListSending = true;
   nextFileLineMillis = millis() + FILE_LIST_LINE_INTERVAL;
-  if (!fileListDir) finishFileList();
 }
 
 void finishFileList() {
@@ -2451,20 +2435,15 @@ void finishFileList() {
 // Emits at most one name per call. Cheap and returns immediately when no
 // list is in flight, so loop() can call it unconditionally.
 void pumpFileList() {
-  if (!fileListDir) return;
+  if (!fileListSending) return;
   if ((long)(millis() - nextFileLineMillis) < 0) return;
 
-  struct dirent *ent;
-  while ((ent = readdir(fileListDir)) != nullptr) {
-    if (ent->d_type != DT_REG) continue;
-    String name(ent->d_name);
-    if (isWavName(name)) {
-      blePrintLine(name);
-      nextFileLineMillis = millis() + FILE_LIST_LINE_INTERVAL;
-      return;
-    }
+  if (fileListNext < fileListNames.size()) {
+    blePrintLine(fileListNames[fileListNext++]);
+    nextFileLineMillis = millis() + FILE_LIST_LINE_INTERVAL;
+    return;
   }
-  finishFileList();  // directory exhausted
+  finishFileList();  // all sent
 }
 
 // -- Card management over BLE (upload, rename, delete) --------------------
@@ -3628,42 +3607,18 @@ void turnModeSelector(float turned) {
   selectMode((knobMode + MODE_COUNT + steps % MODE_COUNT) % MODE_COUNT);
 }
 
-// The next name in an open folder that looks like a WAV. False at the end.
-bool nextWavName(DIR *dir, String &name) {
-  struct dirent *ent;
-  while ((ent = readdir(dir)) != nullptr) {
-    if (ent->d_type != DT_REG) continue;
-    name = ent->d_name;
-    if (isWavName(name)) return true;
-  }
-  return false;
-}
-
 // The WAV `steps` places on from the current file (back, if negative) in
-// the card's own order - the order LIST gives - going round at the ends.
-// Empty if the card has none. Reads the folder twice: once to count the
-// WAVs and find the current one among them, once to fetch the one wanted.
+// the list's order - the order LIST gives, see WavList.h - going round at
+// the ends. Empty if the card has none.
 String wavAtOffset(int steps) {
-  DIR *dir = opendir("/sd");
-  if (!dir) return "";
-  String name;
-  int count = 0;
-  int current = 0;
-  while (nextWavName(dir, name)) {
-    if (isCurrentFile(name)) current = count;
-    count++;
-  }
-  closedir(dir);
+  std::vector<String> names = sortedWavNames();
+  int count = names.size();
   if (count == 0) return "";
-
-  int wanted = ((current + steps) % count + count) % count;
-  dir = opendir("/sd");
-  if (!dir) return "";
-  for (int i = 0; i <= wanted; i++) {
-    if (!nextWavName(dir, name)) name = "";
+  int current = 0;
+  for (int i = 0; i < count; i++) {
+    if (isCurrentFile(names[i])) current = i;
   }
-  closedir(dir);
-  return name;
+  return names[((current + steps) % count + count) % count];
 }
 
 // Knob2 while selecting: steps through the card's WAVs. Each one it lands

@@ -133,6 +133,13 @@ fixed header), and Info (playback stats and the link log, folded away).
   sectors into a ~32KB buffer and write them as one multi-sector command
   through `RA6M5FastSD`, flushed when the computer jumps elsewhere, asks
   for a sync, or ejects. Reads could go through the multi-sector path too.
+- **USB disk mode: Spotlight holds up ejecting.** Soon after the card
+  mounts, macOS's Spotlight indexer (`mds_stores`) starts reading it, and
+  ejecting is refused until it's done - 40 seconds once, at USB disk mode's
+  ~550KB/s. A `.metadata_never_index` file in the card's root used to stop
+  that; whether current macOS still honours it is untested (the file list
+  would skip it, being a dot-file). Otherwise it's `mdutil -i off` on the
+  Mac, per volume.
 - **USB disk mode: try it on Windows (and Linux).** Only tested on macOS
   so far. Worth checking: how long the card takes to appear, that "Safely
   remove" brings the board back as Finder's eject does, and what hidden

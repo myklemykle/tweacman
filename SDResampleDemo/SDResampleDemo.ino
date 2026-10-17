@@ -377,7 +377,8 @@
   off. The board stops playing, saves the file's settings, unmounts the
   card and then opens UsbDiskGate (UsbDiskGate.h), which until then has
   told the computer there's no card in the drive. Ejecting the drive on the
-  computer, or unplugging the cable, closes the gate again; the sketch
+  computer, or unplugging the cable (or the computer going to sleep - see
+  watchUsbHost()), closes the gate again; the sketch
   mounts the card, tidies up after any files deleted or renamed there (as
   at boot) and cues the remembered file. (DISK:OFF also takes it back, but
   the computer isn't told, so it's an emergency exit only. Dropping off USB
@@ -598,7 +599,8 @@
        eject it: the LED comes back in the mode's colour, the remembered
        file is cued again, and the new WAV is in the page's file list
        (but no "._" twin of it). Do it again and unplug the cable instead
-       of ejecting: the board comes back the same way. DISK:ON with no
+       of ejecting: about two seconds later the board comes back the
+       same way. DISK:ON with no
        computer on the USB port is refused.
 */
 
@@ -612,8 +614,7 @@
 #include <RA6M5FastSD.h>  // the core's SD driver, but reading and writing many sectors per command
 #include "FATFileSystem.h"
 #include "UsbMsd.h"
-#include "tusb.h"  // tud_mounted(), tud_task()
-#include "device/dcd.h"  // dcd_event_bus_signal() - see watchUsbCable()
+#include "tusb.h"  // tud_mounted(), tud_suspended()
 #include "UsbDiskGate.h"
 #include "bsp_api.h"   // for R_DAC - the audio ISR writes it directly, same as DACAudioTest
 #include "FspTimer.h"  // for the audio-rate interrupt driving that ISR
@@ -3976,44 +3977,33 @@ void printProfile() {
 // back. See "USB disk mode" in the header comment, and UsbDiskGate.h for why
 // the two can never share it.
 
-// ---- RA6M5-specific ----
-// Whether the USB cable is plugged in and powered, from the USB peripheral's
-// VBUS sense (P407 on this board). TinyUSB's own tud_mounted() can't be
-// used for this: when the cable comes out the core's driver only stops
-// presenting the device, without telling TinyUSB, so tud_mounted() stays
-// true - on battery - until a cable goes back in. Confirmed live: pulling
-// the cable in USB disk mode left the board stuck in it until replugged.
-bool usbCablePresent() {
-  return R_USB_FS0->INTSTS0_b.VBSTS;
-}
-// ---- end RA6M5-specific ----
+// Whether the computer has gone - the cable pulled out. USB has no "unplugged"
+// signal this sketch can use: the core's driver never passes one to TinyUSB,
+// and the RA6M5's VBUS sense (P407) stayed high with the cable out on
+// battery, measured. What does change, within a fraction of a second, is
+// that the bus goes quiet and TinyUSB reports it suspended - which is
+// also what a computer going to sleep looks like, so a sleeping computer
+// counts as gone too. That's safe for the card: once the gate closes,
+// nothing the computer does can reach it, and when the computer wakes its
+// requests fail and it drops the disk (complaining it wasn't ejected).
+//
+// Serial needs nothing extra: the core's Serial counts a suspended bus as
+// nobody listening, and drops what's printed rather than waiting for room.
+// (Telling TinyUSB the cable was unplugged, by raising the event and
+// running tud_task() with interrupts held off, was tried - and hung the
+// board on the spot.)
+const unsigned long USB_GONE_MS = 2000;  // longer than a passing glitch
+unsigned long usbSeenMillis = 0;
+bool usbGone = false;
 
-// How long the cable has to be gone before it counts as unplugged, so a
-// glitch on the sense pin can't end USB disk mode.
-const unsigned long USB_CABLE_GONE_MS = 200;
-unsigned long usbCableSeenMillis = 0;
-bool usbCableGone = false;
-
-// Called every pass of loop(). When the cable comes out, tells TinyUSB so,
-// since the core's driver doesn't (see usbCablePresent()). Without it the
-// board could hang on battery: the core's Serial goes on believing the
-// computer that had the port open is still listening, and once its buffer
-// fills, the next print waits for room forever. With it, Serial knows
-// nobody's there and quietly drops what's printed, as it does at boot.
-void watchUsbCable() {
+// Called every pass of loop() to keep usbGone up to date.
+void watchUsbHost() {
   unsigned long now = millis();
-  if (usbCablePresent()) {
-    usbCableSeenMillis = now;
-    usbCableGone = false;
-  } else if (!usbCableGone && now - usbCableSeenMillis >= USB_CABLE_GONE_MS) {
-    usbCableGone = true;
-    // Queued and handled right here, with interrupts held off: the USB
-    // interrupt that would normally run tud_task() has nothing left to
-    // fire it.
-    noInterrupts();
-    dcd_event_bus_signal(BOARD_TUD_RHPORT, DCD_EVENT_UNPLUGGED, true);
-    tud_task();
-    interrupts();
+  if (tud_mounted() && !tud_suspended()) {
+    usbSeenMillis = now;
+    usbGone = false;
+  } else if (now - usbSeenMillis >= USB_GONE_MS) {
+    usbGone = true;
   }
 }
 
@@ -4026,7 +4016,7 @@ void enterUsbDiskMode() {
   }
   // Without a computer, nobody could ever eject it - only DISK:OFF would
   // bring the board back.
-  if (!usbCablePresent() || !tud_mounted()) {
+  if (!tud_mounted() || tud_suspended()) {
     blePrintLine("ERR:DISK:no computer on the USB port");
     return;
   }
@@ -4104,15 +4094,16 @@ void leaveUsbDiskMode() {
   blePrintLine("DISKMODE:OFF");
 }
 
-// loop()'s whole job while in USB disk mode: notice the eject (or the cable
-// coming out - then nobody is left to eject it, and the card is in the
-// same state as any USB stick pulled out without ejecting), light the LED
+// loop()'s whole job while in USB disk mode: notice the eject (or the
+// computer going - see watchUsbHost() - after which nobody is left to eject
+// it, and the card is in the same state as any USB stick pulled out without
+// ejecting), light the LED
 // a dim white, and tell the web page - in place of the usual status line,
 // and doubling as the Binary mode probe it normally is (see the status
 // block in loop()).
 void serviceUsbDiskMode() {
   unsigned long now = millis();
-  if (usbDiskEjected || usbCableGone) {
+  if (usbDiskEjected || usbGone) {
     leaveUsbDiskMode();
     return;
   }
@@ -4317,7 +4308,7 @@ void loop() {
     Serial.println("Probe went unechoed - Binary mode is live.");
   }
 
-  watchUsbCable();
+  watchUsbHost();
 
   // In USB disk mode the card belongs to the computer, so nothing below -
   // playback, the knobs, saving settings - can run. See "USB disk mode".

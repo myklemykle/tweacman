@@ -133,6 +133,12 @@ fixed header), and Info (playback stats and the link log, folded away).
   sectors into a ~32KB buffer and write them as one multi-sector command
   through `RA6M5FastSD`, flushed when the computer jumps elsewhere, asks
   for a sync, or ejects. Reads could go through the multi-sector path too.
+- **USB disk mode: try it on Windows (and Linux).** Only tested on macOS
+  so far. Worth checking: how long the card takes to appear, that "Safely
+  remove" brings the board back as Finder's eject does, and what hidden
+  files Windows leaves on the card (names starting with a dot are already
+  skipped; folders such as `System Volume Information` aren't listed
+  anyway, since only files are).
 - **USB disk mode: the BLE link hiccups while the computer is busy with the
   card.** The computer's requests are served inside the USB interrupt, so
   loop() is starved while it reads or writes; a Binary mode probe's echo

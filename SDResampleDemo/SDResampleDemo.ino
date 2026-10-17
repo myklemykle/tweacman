@@ -119,7 +119,7 @@
   has no mechanical center detent or home position (see RV112FF.h - it's
   an endless-rotation part with no absolute "zero" a hobbyist could
   return it to), so an absolute mapping would make "start every file at
-  native speed" impossible to hit reliably by hand. See angleForRatio()/resetVirtualKnobToNative() and
+  native speed" impossible to hit reliably by hand. See knobForSpeed()/resetVirtualKnobToNative() and
   the control-rate block in loop() for the implementation - a small
   virtual position that starts anchored at native speed and accumulates
   the pot's own physical deltas from then on, the same idea as a
@@ -579,84 +579,91 @@
 #include <utility>  // for std::move in loadFile()
 
 // -- Speed range and knob mapping ----------------------------------------
-// knobAngle() (below) is reused unchanged from AudioKnobsDemo's pitch-
-// mapping pattern - it already produces a continuous, unbounded-turn-
-// aware [0,360) angle with a discontinuity only at its own 360->0 seam
-// (an fmodf wraparound artifact). AudioKnobsDemo's angleToFrequency()
-// deliberately FOLDED that angle around its 180-degree midpoint, to
-// smooth the seam over into a symmetric back-and-forth sweep. This
-// sketch wants the opposite: a bipolar speed that sweeps smoothly
-// through zero in the middle of the range, with the only allowed
-// discontinuity being an instant "hop" exactly at that 360->0 seam (the
-// knob's own physical wrap point) - so angleToSpeedRatio() below maps
-// the angle directly, with no fold.
+// The speed dial: a virtual dial the speed knob turns (see "Relative speed
+// control" in the header comment), running from +MAX_RATIO at one end,
+// smoothly through zero (stopped) in the middle, to -MAX_RATIO (full speed
+// backward) at the other. It's a loop - turning on past either end hops
+// straight to the other - which is the only discontinuity anywhere on it.
+// Positions on it are measured in degrees of knob rotation out from the
+// middle: positive forward, negative backward.
 
 const float MAX_RATIO = 1024.0f;  // magnitude at both extremes - enough to sweep a 20Hz tone up
                                   // past 20kHz, which the cached copies make possible (MipCache.h)
-const float NATIVE_SPEED_T = 0.27f;  // how far out from the middle 1x sits, as a fraction of
-                                     // the half-sweep - where it sat on the older curve below
 
-// The speed curve: ratio = SPEED_CURVE_R0 * (e^(SPEED_CURVE_K * t) - 1), for
-// t from 0 (the middle of the dial) to 1 (either end), mirrored for reverse.
+// The curve has two pieces, meeting at 1x.
 //
-// Exponential for most of its range - a linear version was tried and
-// confirmed live to feel too twitchy below 1x, since a linear mapping spends
-// the same rotation on every equal-sized ratio step, leaving only a sliver of
-// the knob's travel for everything under 1x. An exponential spends equal
+// Above 1x the speed doubles every SPEED_DEGREES_PER_DOUBLING of rotation:
+// from 1x, half a turn reaches 2x, a turn 4x, two turns 16x, and five turns
+// MAX_RATIO. It used to climb about three and a half times as steeply
+// (roughly 7 octaves a turn, so one turn from 1x was already about 140x),
+// which was confirmed live to be too twitchy at high speeds.
+//
+// Below 1x: ratio = SPEED_CURVE_R0 * (e^(SPEED_CURVE_K * degrees) - 1).
+// Mostly exponential - a linear version was tried and confirmed live to
+// feel too twitchy below 1x, since a linear mapping spends the same
+// rotation on every equal-sized ratio step, leaving only a sliver of the
+// knob's travel for everything under 1x. An exponential spends equal
 // rotation on equal *ratios* instead, which is what fine control at low
 // speed needs.
 //
 // But a pure exponential never reaches zero, which is why this used to need
 // a dead band in the middle: a flat "paused" stretch filling the gap between
 // -0.1x and +0.1x, with a jump from 0 straight to 0.1x at its edges. The
-// "- 1" fixes that: near t = 0 the curve flattens into a straight line
+// "- 1" fixes that: near the middle the curve flattens into a straight line
 // through zero, so the speed slows smoothly through 0.05x, 0.01x, 0.001x...
 // to exactly 0 in the middle and on into reverse, with no jump anywhere.
 // (Stopping outright is the transport's job now - release the touch pad.)
-//
-// The two constants are whatever puts MAX_RATIO at the end of the sweep and
-// 1x at NATIVE_SPEED_T - solved once at startup by initSpeedCurve(), since
-// there's no closed form. Above about 0.2x this matches the old curve
-// closely, so the knob's feel there is unchanged.
-float SPEED_CURVE_K = 1.0f;
+// SPEED_CURVE_K sets how sharply it bends (it's the value an older,
+// single-curve dial used, kept because it felt right); SPEED_CURVE_R0 is
+// whatever puts 1x at NATIVE_SPEED_DEGREES, worked out by initSpeedCurve().
+const float NATIVE_SPEED_DEGREES = 194.4f;       // how far out from the middle 1x sits
+const float SPEED_DEGREES_PER_DOUBLING = 180.0f;
+const float SPEED_CURVE_K = 0.01303f;            // per degree
 float SPEED_CURVE_R0 = 1.0f;
+// How far out from the middle each end of the dial is, also worked out by
+// initSpeedCurve(): 194.4 + 10 doublings * 180 = 1994.4 degrees, about 5.5
+// turns.
+float speedDialEndDegrees = 1.0f;
 
 void initSpeedCurve() {
-  // Find k where (e^k - 1) / (e^(k * NATIVE_SPEED_T) - 1) == MAX_RATIO, by
-  // bisection: the ratio grows steadily with k, so halving the interval
-  // forty times pins it down far past float precision.
-  float lo = 0.01f, hi = 50.0f;
-  for (int i = 0; i < 40; i++) {
-    float k = 0.5f * (lo + hi);
-    float spread = (expf(k) - 1.0f) / (expf(k * NATIVE_SPEED_T) - 1.0f);
-    if (spread < MAX_RATIO) lo = k; else hi = k;
-  }
-  SPEED_CURVE_K = 0.5f * (lo + hi);
-  SPEED_CURVE_R0 = 1.0f / (expf(SPEED_CURVE_K * NATIVE_SPEED_T) - 1.0f);
+  SPEED_CURVE_R0 = 1.0f / (expf(SPEED_CURVE_K * NATIVE_SPEED_DEGREES) - 1.0f);
+  speedDialEndDegrees = NATIVE_SPEED_DEGREES + log2f(MAX_RATIO) * SPEED_DEGREES_PER_DOUBLING;
 }
 
-// Maps knobAngle()'s continuous [0,360) angle directly onto a SIGNED
-// ratio: wrapped=0 -> +MAX_RATIO, wrapped=180 -> 0, wrapped approaching
-// (but never reaching) 360 -> -MAX_RATIO. Continuous everywhere, straight
-// through zero in the middle included - the only discontinuity is exactly
-// at wrapped's own 360/0 seam, which is the knob's own physical wrap point,
-// not anything this function branches on.
-float angleToSpeedRatio(float wrappedAngle) {
-  float t = 1.0f - (wrappedAngle / 180.0f);  // +1 .. -1 across the full sweep - the
-                                              // 1.0f-(...) order (not (...)-1.0f) is
-                                              // what reverses the direction sense:
-                                              // confirmed live the un-reversed mapping
-                                              // spun opposite the intuitive way.
-  float magnitude = SPEED_CURVE_R0 * (expf(SPEED_CURVE_K * fabsf(t)) - 1.0f);
-  return copysignf(magnitude, t);
+// The speed at a position on the dial, in degrees from the middle.
+float speedForDial(float degrees) {
+  float d = fabsf(degrees);
+  float magnitude = (d <= NATIVE_SPEED_DEGREES)
+      ? SPEED_CURVE_R0 * (expf(SPEED_CURVE_K * d) - 1.0f)
+      : exp2f((d - NATIVE_SPEED_DEGREES) / SPEED_DEGREES_PER_DOUBLING);
+  return copysignf(fminf(magnitude, MAX_RATIO), degrees);
 }
 
-// Inverse of angleToSpeedRatio() - used to find where a given speed lives
-// on the dial, so the virtual-knob tracking below can (re-)anchor itself
-// there: native speed on every file load, or whatever SPEED: asked for.
-float angleForRatio(float ratio) {
-  float t = logf(1.0f + fabsf(ratio) / SPEED_CURVE_R0) / SPEED_CURVE_K;
-  return (1.0f - copysignf(t, ratio)) * 180.0f;
+// The inverse - where a given speed lives on the dial, so the virtual knob
+// below can (re-)anchor itself there: native speed on every file load, or
+// whatever SPEED: asked for.
+float dialForSpeed(float ratio) {
+  float r = fminf(fabsf(ratio), MAX_RATIO);
+  float d = (r <= 1.0f)
+      ? logf(1.0f + r / SPEED_CURVE_R0) / SPEED_CURVE_K
+      : NATIVE_SPEED_DEGREES + log2f(r) * SPEED_DEGREES_PER_DOUBLING;
+  return copysignf(d, ratio);
+}
+
+// The virtual knob below keeps an unbounded running total of degrees turned;
+// this folds that onto the dial's loop. A total of 0 is the +MAX_RATIO end,
+// and turning the knob up (a growing total) lowers the speed - confirmed
+// live that the opposite sense spun the wrong way.
+float dialForKnob(float knobDegrees) {
+  float loop = 2.0f * speedDialEndDegrees;
+  float wrapped = fmodf(knobDegrees, loop);
+  if (wrapped < 0) wrapped += loop;
+  return speedDialEndDegrees - wrapped;
+}
+
+// The knob total that puts the dial at a given speed.
+float knobForSpeed(float ratio) {
+  return speedDialEndDegrees - dialForSpeed(ratio);
 }
 
 // The pitch knob is relative, like the speed and scrub knobs: each turn
@@ -680,28 +687,16 @@ const float PITCH_OCTAVES_PER_TURN = 2.0f;
 // malfunction, so the limit is taste.
 const float PITCH_OCTAVE_LIMIT = 10.0f;
 
-// Retained from when touch1 gated a fast/slow sweep; touch1 is the mode
-// button now, so one rate serves both modes.
-const float TURNS_PER_SWEEP = 2.0f;
-
-float knobAngle(float accumulatedDegrees, float turnsPerSweep) {
-  if (accumulatedDegrees == -1.0f) return -1;
-  float wrapped = fmodf(accumulatedDegrees / (turnsPerSweep * 2.0f), 360.0f);
-  if (wrapped < 0) wrapped += 360.0f;
-  return wrapped;
-}
-
 // -- Relative ("virtual knob") speed control -------------------------------
 // The physical knob is absolute (its position directly maps to a
 // point on the dial) but the speed control is relative: pot1's
 // MOVEMENT, not its position, is what moves a separate virtual dial
-// position - virtualKnobDegrees below - through the exact same mapping
-// above. This means the real knob's physical position at any moment is
+// position - speedKnobDegrees below - through the speed dial above.
+// This means the real knob's physical position at any moment is
 // meaningless on its own; only how far it's turned since the last tick
-// matters. virtualKnobAnchored tracks "no baseline yet" explicitly,
-// rather than testing lastPhysicalKnobDegrees's sign the way
-// knobAngle() tests for MultiTurnKnob's own -1 not-ready sentinel -
-// unlike that single-turn [0,360) reading, MultiTurnKnob::read()'s
+// matters. speedKnobAnchored tracks "no baseline yet" explicitly,
+// rather than testing lastPhysicalKnobDegrees's sign for MultiTurnKnob's
+// -1 not-ready sentinel - unlike a single-turn [0,360) reading, MultiTurnKnob::read()'s
 // accumulated multi-turn position legitimately goes negative during
 // perfectly ordinary counterclockwise turns, so a negative value here
 // can't be trusted to mean "not calibrated yet" (a real bug caught on
@@ -736,9 +731,8 @@ const float KNOB1_BACKLASH_DEGREES = 0.3f;
 // baseline - native speed, except after a SPEED: command picks another.
 float speedAnchorRatio = 1.0f;
 
-// Doesn't touch virtualKnobDegrees directly - just clears the baseline
-// so the control-rate block (which alone knows the current
-// touch-gated turnsPerSweep) re-anchors it at native speed on its very
+// Doesn't touch speedKnobDegrees directly - just clears the baseline
+// so the control-rate block re-anchors it at native speed on its very
 // next tick. Safe to call from anywhere, at any time.
 void resetVirtualKnobToNative() {
   // Speed only. Pitch deliberately survives a file change: it is a setting
@@ -1955,19 +1949,16 @@ bool isCurrentFile(const String &name) {
 // real knob happens to be sitting doesn't matter.
 void turnSpeedDial(float delta) {
   if (!speedKnobAnchored) {
-    speedKnobDegrees = angleForRatio(speedAnchorRatio) * TURNS_PER_SWEEP * 2.0f;
+    speedKnobDegrees = knobForSpeed(speedAnchorRatio);
     speedKnobAnchored = true;
   } else {
     speedKnobDegrees += delta;
   }
 
-  float angle = knobAngle(speedKnobDegrees, TURNS_PER_SWEEP);
-  if (angle >= 0) {
-    float ratio = angleToSpeedRatio(angle);
-    lastKnownRatio = ratio;
-    if (ratio < minRatioSeen) minRatioSeen = ratio;
-    if (ratio > maxRatioSeen) maxRatioSeen = ratio;
-  }
+  float ratio = speedForDial(dialForKnob(speedKnobDegrees));
+  lastKnownRatio = ratio;
+  if (ratio < minRatioSeen) minRatioSeen = ratio;
+  if (ratio > maxRatioSeen) maxRatioSeen = ratio;
 }
 
 // Speed and pitch back to their defaults, from the BLE RESET: command.

@@ -164,6 +164,49 @@
     letter-spacing: 0.08em;
   }
   .connectBtn:active:not(:disabled) { background: var(--accent-strong); }
+  /* In a browser without Web Bluetooth the button can never work, so it
+     goes grey rather than just faded, to read as off rather than busy. */
+  .connectBtn.unsupported {
+    background: var(--surface);
+    color: var(--text-dim);
+    border-color: var(--border);
+    border-style: dashed;
+  }
+
+  /* On iOS without Web Bluetooth: links that reopen this page in an app
+     that has it. Links, not buttons, since all they do is navigate. */
+  .openInApp {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .appBtn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface-2);
+    color: var(--text-dim);
+    font-family: "Oswald", "Arial Narrow", sans-serif;
+    font-size: 0.9rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    text-decoration: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .appBtn.primary {
+    min-height: 56px;
+    font-size: 1.2rem;
+    background: var(--accent);
+    border-color: var(--accent-strong);
+    color: var(--surface-2);
+  }
+  .appBtn.primary:active { background: var(--accent-strong); }
+  .about a { color: var(--accent); }
   .about {
     font-size: 0.72rem;
     color: var(--text-dim);
@@ -734,6 +777,16 @@
   <div class="connectScreen" id="connectScreen">
     <button class="connectBtn" id="connectBtn">Connect</button>
     <p class="about" id="browserNote">On iOS, open this page in Bluefy or WebBLE - Safari has no Web Bluetooth support.</p>
+    <!-- Shown on iOS when this browser has no Web Bluetooth. The hrefs are
+         filled in at startup, from this page's own address. -->
+    <div class="openInApp" id="openInApp" hidden>
+      <a class="appBtn primary" id="openBluefy">Open in Bluefy</a>
+      <a class="appBtn" id="openWebBLE">Open in WebBLE</a>
+      <p class="about">Don't have either? Get
+        <a href="https://apps.apple.com/app/id1492822055">Bluefy</a> or
+        <a href="https://apps.apple.com/app/id1193531073">WebBLE</a>
+        from the App Store, then scan the code again.</p>
+    </div>
     <div id="logSlotConnect"></div>
   </div>
 
@@ -919,6 +972,11 @@
   const logBody = $("logBody");
   const copyLogBtn = $("copyLogBtn");
   const browserNote = $("browserNote");
+  const openInApp = $("openInApp");
+
+  // Safari and Chrome on iOS have no Web Bluetooth; only third-party
+  // browser apps like Bluefy and WebBLE do. Without it, Connect can't work.
+  const HAS_BLUETOOTH = !!navigator.bluetooth;
 
   // The log is also kept in sessionStorage, which survives a reload of the
   // same tab. On iOS a browser that crashes the page reloads it with no
@@ -1013,8 +1071,9 @@
 
   function setLinkState(state) {
     linkState = state;
-    connectBtn.disabled = state === "connecting";
-    connectBtn.textContent = state === "connecting" ? "Connecting…" : "Connect";
+    connectBtn.disabled = !HAS_BLUETOOTH || state === "connecting";
+    connectBtn.textContent = !HAS_BLUETOOTH ? "No Bluetooth"
+      : state === "connecting" ? "Connecting…" : "Connect";
     renderStatus();
   }
 
@@ -2678,9 +2737,24 @@
     }, 1500);
   });
 
-  if (!navigator.bluetooth) {
-    browserNote.textContent = "Web Bluetooth isn't available in this browser - on iOS, open this page in Bluefy or WebBLE instead of Safari.";
+  // No Web Bluetooth: grey out Connect, and on iOS offer to reopen this
+  // page in an app that has it. A page can't tell whether an app is
+  // installed, and in Safari a link to a missing app gets an "address is
+  // invalid" alert - so these are links to tap, not an automatic redirect.
+  // Each app has its own link format: Bluefy's (found by trial - it isn't
+  // documented) takes the whole address as a parameter; WebBLE's (from its
+  // release notes) swaps "https://" for "webble://".
+  if (!HAS_BLUETOOTH) {
+    connectBtn.classList.add("unsupported");
     browserNote.classList.add("bad");
+    if (IS_IOS) {
+      browserNote.textContent = "Safari and Chrome on iOS can't use Bluetooth from a web page. Open this page in Bluefy or WebBLE, browsers that can.";
+      $("openBluefy").href = "bluefy://open?url=" + encodeURIComponent(location.href);
+      $("openWebBLE").href = location.href.replace(/^https?:\/\//, "webble://");
+      openInApp.hidden = false;
+    } else {
+      browserNote.textContent = "This browser has no Web Bluetooth - try Chrome or Edge.";
+    }
   }
 
   buildTweaks();

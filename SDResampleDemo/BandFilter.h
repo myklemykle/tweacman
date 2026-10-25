@@ -13,9 +13,10 @@
          +--> high-pass --> low-pass --> limit --- x wet ---+
               (cutoff A)    (cutoff B, resonant)
 
-  It's played with its two cutoffs, the bottom and the top of the band,
-  as the Traveler is: one knob for each. How it sounds depends on the
-  band's width - the distance between them, in octaves.
+  It's set by its two cutoffs, the bottom and the top of the band (the
+  sketch's knobs play them as a width and a centre - see its
+  setFilterBand()). How it sounds depends on the band's width - the
+  distance between them, in octaves.
 
     - Wide open (FILTER_MIN_HZ to FILTER_MAX_HZ, ten octaves, 20Hz to
       20kHz) the band covers everything you can hear. Over the last octave
@@ -29,8 +30,7 @@
       known for.
 
   The cutoffs can meet but not cross: setCutoffs() keeps the top at or
-  above the bottom. (The sketch makes one push the other along - see its
-  turnFilterLow() and turnFilterHigh().)
+  above the bottom.
 
   Each filter is a 12dB-per-octave stage, the MS-20's slope: a state
   variable filter in its "zero-delay feedback" form - two integrators in a

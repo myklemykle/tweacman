@@ -172,8 +172,10 @@
   speed knob's requested ratio, which survives being stopped, so a client
   can show what the transport *would* run at; `PIT:` is the pitch ratio,
   1.000 meaning unshifted; `ECT:` and `ECA:` are the echo's delay in seconds
-  and its amount; `FLL:` and `FLH:` the filter's bottom and top cutoffs in
-  Hz (20 and 20480 is wide open, no filter); `LAT:0|1` is whether the transport is latched;
+  and its amount; `FLC:` and `FLW:` the filter's centre in Hz and its width
+  in octaves, as the knobs set them (wide open, no filter, once both edges
+  of the band reach the ends of the range - ten octaves at 640Hz, more
+  further from the middle; see setFilterBand()); `LAT:0|1` is whether the transport is latched;
   `LVL:` is which copy is playing (0 the original, k the cached copy at
   1/2^k its rate); `CACHE:` is how far building those copies has got, in
   percent. For the page's tweaks tab there are also `MODE:`, the knob mode
@@ -212,6 +214,8 @@
                          from 20 to 20480 (both at the ends is wide open,
                          no filter; both together, it screams) - see
                          "Filter"; `RESET:FILTER` opens it
+    `BAND:<centre>,<oct>` the same, as the knobs set it: the band's centre
+                         in Hz and its width in octaves
     `RESET:CACHE`        throw away the current file's cached copies and
                          build them again - for a copy suspected of being
                          damaged, since they're otherwise kept up to date
@@ -2221,11 +2225,19 @@ float filterMaxWidth(float centreHz) {
 // band there is narrower than its width says, and lopsided round the
 // centre. The width can go on growing until the other edge reaches its end
 // too (filterMaxWidth()), which is wide open.
+// (Within a hundredth of an octave of that counts as there: rounding would
+// otherwise leave an edge a hair short of its end, and the filter running.)
 void setFilterBand(float centreHz, float widthOctaves) {
   filterCentreHz = constrain(centreHz, FILTER_MIN_HZ, FILTER_MAX_HZ);
-  filterWidthOctaves = constrain(widthOctaves, 0.0f, filterMaxWidth(filterCentreHz));
-  float half = exp2f(filterWidthOctaves / 2.0f);
-  filter.setCutoffs(filterCentreHz / half, filterCentreHz * half);
+  float widest = filterMaxWidth(filterCentreHz);
+  filterWidthOctaves = constrain(widthOctaves, 0.0f, widest);
+  if (filterWidthOctaves >= widest - 0.01f) {
+    filterWidthOctaves = widest;
+    filter.setCutoffs(FILTER_MIN_HZ, FILTER_MAX_HZ);
+  } else {
+    float half = exp2f(filterWidthOctaves / 2.0f);
+    filter.setCutoffs(filterCentreHz / half, filterCentreHz * half);
+  }
   filterLowHz = filter.lowHz();
   filterHighHz = filter.highHz();
 }
@@ -2247,6 +2259,15 @@ void setFilterFromCommand(const String &args) {
   int comma = args.indexOf(',');
   if (comma == -1) return;
   setFilter(args.substring(0, comma).toFloat(), args.substring(comma + 1).toFloat());
+  printFilter();
+}
+
+// BAND:<centre Hz>,<width octaves> - the filter as the knobs play it; the
+// web page's way of setting it.
+void setFilterBandFromCommand(const String &args) {
+  int comma = args.indexOf(',');
+  if (comma == -1) return;
+  setFilterBand(args.substring(0, comma).toFloat(), args.substring(comma + 1).toFloat());
   printFilter();
 }
 
@@ -2795,7 +2816,7 @@ void rebuildCache() {
 // Binary mode pipe. See handleBLELine() for why that matters.
 bool isBoardCommand(const String &line) {
   static const char *const COMMANDS[] = {
-    "LIST", "PLAY:", "LATCH:", "STOP", "RESET:", "PROFILE", "SPEED:", "PITCH:", "WINDOW:", "ECHO:", "FILTER:", "PUT:", "REN:", "DEL:", "DISK:",
+    "LIST", "PLAY:", "LATCH:", "STOP", "RESET:", "PROFILE", "SPEED:", "PITCH:", "WINDOW:", "ECHO:", "FILTER:", "BAND:", "PUT:", "REN:", "DEL:", "DISK:",
     "MODE:", "HEARD:", "STRETCH:", "TAPE:",
     "CAL", "RECAL"
   };
@@ -2875,6 +2896,8 @@ void handleBLECommand(String line) {
     resetEcho();
   } else if (line.startsWith("FILTER:")) {
     setFilterFromCommand(line.substring(7));
+  } else if (line.startsWith("BAND:")) {
+    setFilterBandFromCommand(line.substring(5));
   } else if (line == "RESET:FILTER") {
     resetFilter();
   } else if (line == "RESET:CACHE") {
@@ -4635,7 +4658,7 @@ void loop() {
                      ",REQ:" + String(lastKnownRatio, fabsf(lastKnownRatio) < 1.0f ? 4 : 2) +
                      ",PIT:" + String(pitchRatio, 3) +
                      ",ECT:" + String(echoSeconds, 3) + ",ECA:" + String(echoAmount, 2) +
-                     ",FLL:" + String(filterLowHz, 0) + ",FLH:" + String(filterHighHz, 0) +
+                     ",FLC:" + String(filterCentreHz, 0) + ",FLW:" + String(filterWidthOctaves, 2) +
                      ",BUF:" + String((int)fillPercent) + ",UND:" + String(underrunTicks) +
                      ",RUN:" + String(transportRunning ? 1 : 0) +
                      ",LAT:" + String(transportLatched ? 1 : 0) +

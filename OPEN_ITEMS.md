@@ -252,16 +252,18 @@ fixed header), and Info (playback stats and the link log, folded away).
 - **Publish the libraries to the Library Manager, so the Arduino IDE can
   find and install them.**
   Plan approved 2026-09-26, postponed until after a code review of the
-  libraries. Written for `RV112FF`, `RA6M5CapTouch`, `MultiTurnKnob` and
+  libraries. `RV112FF` and `MultiTurnKnob` were reviewed on 2026-10-26:
+  their comments no longer refer to this project, and both build for
+  RP2040, Teensy and AVR as well (step 1's `architectures=*` is done). Written for `RV112FF`, `RA6M5CapTouch`, `MultiTurnKnob` and
   `RA6M5AnalogTuning`; `RA6M5FastSD` came later and is experimental (it
   reaches into the core class's private members), so it probably shouldn't
   be published. The Library Manager needs each library in its own repository
   with `library.properties` at the top, so the plan keeps developing
   everything in this repo and publishes each library folder from it with
   `git subtree split`:
-  1. Prep: set `architectures=*` for `RV112FF` and `MultiTurnKnob`, which
-     aren't chip-specific; run `arduino-lint --library-manager submit` on
-     each; merge to main.
+  1. Prep: ~~set `architectures=*` for `RV112FF` and `MultiTurnKnob`~~
+     (done); run `arduino-lint --library-manager submit` on each; merge to
+     main.
   2. Create a public GitHub repo per library, then fill in each library's
      empty `url=`.
   3. For each library: `git subtree split --prefix=<Library> main`, push the

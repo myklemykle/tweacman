@@ -6,18 +6,16 @@
 #include <math.h>
 
 RV112FF::RV112FF(uint8_t wiperPinA, uint8_t wiperPinB,
-                  float smoothTau, float minCalibrationRange,
-                  float rpmSmoothTau)
+                  float smoothTau, float rpmSmoothTau)
   : _pinA(wiperPinA), _pinB(wiperPinB),
-    _smoothTau(smoothTau), _minCalibrationRange(minCalibrationRange),
-    _rpmSmoothTau(rpmSmoothTau) {
+    _smoothTau(smoothTau), _rpmSmoothTau(rpmSmoothTau) {
   _smooth[0] = _smooth[1] = 0.5;
   _minVal[0] = _minVal[1] = 1.0;
   _maxVal[0] = _maxVal[1] = 0.0;
   restartTurnCount();
   // Deliberately no hardware access here - a global "RV112FF pot(A2, A3);"
-  // runs its constructor before setup(), and this board's ADC isn't
-  // guaranteed ready yet at that point. analogReadResolution() below is
+  // runs its constructor before setup(), and on some cores the ADC isn't
+  // ready yet at that point. analogReadResolution() below is
   // called lazily instead, from the first real read().
 }
 
@@ -54,7 +52,7 @@ float RV112FF::readWiper(uint8_t pin, uint8_t channel, float dtSeconds) {
   // Throwaway conversions first, to let the ADC settle on this pin - see
   // setSettlingReads() in RV112FF.h for why, and when to change how many.
   //
-  // Measured on the bench with two RV112FFs on one board: without them,
+  // Measured on a Renesas RA6M5 with two RV112FFs: without them,
   // turning one pot biased the *other* pot's reported speed in the opposite
   // direction - mean -0.304 RPM while turning one way and +0.407 the other,
   // with excursions to +/-2.5 RPM - which is audible when the second pot's
@@ -98,12 +96,14 @@ float RV112FF::readWiper(uint8_t pin, uint8_t channel, float dtSeconds) {
 
 float RV112FF::read() {
   if (!_begun) {
-    // Best available precision on this hardware, regardless of what any
-    // other code in the sketch may have set analogReadResolution() to.
-    // Safe to call more than once (e.g. with two RV112FF instances) -
-    // it's a board-wide setting, and re-asserting the same value is a
-    // no-op.
-    analogReadResolution(12);
+    // Every bit the ADC has, regardless of what any other code in the
+    // sketch may have set analogReadResolution() to - see the class
+    // comment. Safe to call more than once (e.g. with two RV112FF
+    // instances) - it's a board-wide setting, and re-asserting the same
+    // value is a no-op.
+#ifndef RV112FF_FIXED_ADC_RESOLUTION
+    analogReadResolution(RV112FF_ADC_BITS);
+#endif
     _begun = true;
   }
 

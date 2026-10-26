@@ -14,6 +14,7 @@
     Pot 1 wipers -> A2, A3
     Pot 2 wipers -> A4, A5
     Both pots' track ends -> 3.3V and GND
+  On another board, use any four analog pins it has.
 
   Each angle briefly reads -1 right after power-on - that's the pot's
   self-calibration warm-up (see RV112FF.h); it clears after about two
@@ -35,8 +36,8 @@ void setup() {
 }
 
 void loop() {
-  // Same non-blocking pattern used throughout this project: compare the
-  // clock instead of delay(), so nothing here would ever stall - the
+  // The usual non-blocking pattern: compare the clock instead of
+  // delay(), so nothing here would ever stall - the
   // pots themselves are polled by read() at whatever rate loop() gets
   // to it, not on a hardware timer.
   unsigned long currentMillis = millis();

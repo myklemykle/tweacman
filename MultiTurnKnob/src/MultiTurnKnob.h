@@ -23,9 +23,9 @@
 
   This only works if read() is called often enough that the shaft can't
   plausibly turn more than 180 degrees between two calls - true at any
-  sane polling rate for a hand-turned knob (this project's own demos poll
-  at ~100Hz; even a fast flick of a small panel pot doesn't complete a
-  full revolution in under ~150ms).
+  sane polling rate for a hand-turned knob (e.g. polling at ~100Hz;
+  even a fast flick of a small panel pot doesn't complete a full
+  revolution in under ~150ms).
 
   Wraps an RV112FF by reference rather than owning one - construct your
   own RV112FF first (same as any other sketch would) and hand it to
@@ -50,7 +50,7 @@ class MultiTurnKnob {
   public:
     // pot: an already-constructed RV112FF to wrap. Kept by reference, not
     // copied or owned - the sketch is still responsible for constructing
-    // it (with begin()/pins as usual) and keeping it alive.
+    // it (with its pins) and keeping it alive.
     MultiTurnKnob(RV112FF &pot);
 
     // Samples the wrapped pot (calling its read() - see the class

@@ -12,13 +12,15 @@
   graph).
 
   Wiring (SparkFun Thing Plus RA6M5): pot wipers -> A2, A3; both track
-  ends -> 3.3V and GND (same as RV112FF's own SerialPlotterDemo).
+  ends -> 3.3V and GND (same as RV112FF's own SerialPlotterDemo). On
+  another board, use any two analog pins it has.
 
   Spin the knob past a full turn in either direction and watch
   accumulated keep counting past +-360, while angle keeps resetting to
   [0, 360) every revolution. Press USR_BTN to call write(0) and watch
   accumulated jump to wherever the shaft physically is right now, minus
-  nothing - i.e. "here" becomes the new zero.
+  nothing - i.e. "here" becomes the new zero. (On a board without a
+  USR_BTN, that part is simply left out.)
 */
 
 #include <RV112FF.h>
@@ -30,23 +32,29 @@ MultiTurnKnob knob(pot);
 const unsigned long PLOT_INTERVAL = 20;  // milliseconds (~50 Hz)
 unsigned long previousMillis = 0;
 
+#ifdef USR_BTN
 bool lastButtonState = HIGH;  // USR_BTN is active-low (INPUT_PULLUP)
+#endif
 
 void setup() {
   Serial.begin(115200);
+#ifdef USR_BTN
   pinMode(USR_BTN, INPUT_PULLUP);
+#endif
 }
 
 void loop() {
-  // Same non-blocking pattern used throughout this project: compare the
-  // clock instead of delay().
+  // The usual non-blocking pattern: compare the clock instead of
+  // delay().
   unsigned long currentMillis = millis();
 
+#ifdef USR_BTN
   bool buttonState = digitalRead(USR_BTN);
   if (buttonState == LOW && lastButtonState == HIGH) {
     knob.write(0);
   }
   lastButtonState = buttonState;
+#endif
 
   if (currentMillis - previousMillis >= PLOT_INTERVAL) {
     previousMillis = currentMillis;

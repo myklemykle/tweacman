@@ -1893,9 +1893,27 @@
   const windowCommand = () => `WINDOW:${num(tweaks.winStart, 3)},${num(tweaks.winEnd, 3)}`;
   const echoCommand = () => `ECHO:${num(tweaks.echoTime, 3)},${num(tweaks.echoAmount, 2)}`;
   const ECHO_MIN = 0.001, ECHO_MAX = 2.73, ECHO_MAX_AMOUNT = 0.95;
-  const FILTER_MIN = 20, FILTER_MAX = 20480, FILTER_CENTRE = 640;  // as in the sketch
+  const FILTER_CENTRE = 640;  // as in the sketch
+  // The centre reaches 15 octaves either way, far past hearing, so a band
+  // can slide right out of it to silence; the slider follows the knob's
+  // curve, filterCentreOctaves() in the sketch - 5 octaves a turn in the
+  // middle, faster toward the ends, two turns each way.
+  const CENTRE_REACH = 15, CENTRE_PER_TURN = 5, CENTRE_TURNS = 2;
+  const CENTRE_CUBE = (CENTRE_REACH - CENTRE_PER_TURN * CENTRE_TURNS) / CENTRE_TURNS ** 3;
+  const centreOctaves = (turns) => CENTRE_PER_TURN * turns + CENTRE_CUBE * turns ** 3;
+  const centreTurns = (octaves) => {  // solving the cubic, as the sketch does
+    const p = CENTRE_PER_TURN / CENTRE_CUBE / 3, q = octaves / CENTRE_CUBE / 2, d = Math.sqrt(q * q + p ** 3);
+    return Math.cbrt(q + d) + Math.cbrt(q - d);
+  };
+  const CENTRE_LOWEST = FILTER_CENTRE / 2 ** CENTRE_REACH, CENTRE_HIGHEST = FILTER_CENTRE * 2 ** CENTRE_REACH;
+  const formatHz = (v) =>
+    v < 10 ? [num(v, 3), "Hz"] : v < 1000 ? [String(Math.round(v)), "Hz"]
+      : v < 1e6 ? [num(v / 1000, v < 10000 ? 2 : 1), "kHz"] : [num(v / 1e6, 1), "MHz"];
   const FILTER_OPEN = 10;  // octaves: the whole range, and no filter
-  const filterCommand = () => `BAND:${Math.round(tweaks.filterCentre)},${num(tweaks.filterWidth, 3)}`;
+  const filterCommand = () => {
+    const c = tweaks.filterCentre;
+    return `BAND:${c < 10 ? num(c, 4) : Math.round(c)},${num(tweaks.filterWidth, 3)}`;
+  };
 
   // Each control: which setting it shows, how its slider maps onto it, how
   // the value reads, what typing a number means, and the command to send.
@@ -1983,14 +2001,15 @@
       command: filterCommand,
     },
     filterCentre: {
-      // Evenly in octaves, as the knob turns it. Moving it slides both edges
-      // of the band along, leaving the width alone.
+      // On the knob's curve - see centreOctaves(). Moving it slides both
+      // edges of the band along, leaving the width alone; far enough either
+      // way, the band slides out of hearing.
       setting: "filterCentre", label: "Centre", initial: () => FILTER_CENTRE,
-      fromPos: (p) => FILTER_MIN * 2 ** (p * 10),
-      toPos: (v) => Math.log2(clamp(v, FILTER_MIN, FILTER_MAX) / FILTER_MIN) / 10,
-      format: (v) => (v < 1000 ? [String(Math.round(v)), "Hz"] : [num(v / 1000, v < 10000 ? 2 : 1), "kHz"]),
-      typed: (n) => (n > 0 ? clamp(n, FILTER_MIN, FILTER_MAX) : null),  // typed in Hz
-      tolerance: 0.5,  // the board reports whole Hz
+      fromPos: (p) => FILTER_CENTRE * 2 ** centreOctaves((p * 2 - 1) * CENTRE_TURNS),
+      toPos: (v) => (centreTurns(Math.log2(clamp(v, CENTRE_LOWEST, CENTRE_HIGHEST) / FILTER_CENTRE)) / CENTRE_TURNS + 1) / 2,
+      format: formatHz,
+      typed: (n) => (n > 0 ? clamp(n, CENTRE_LOWEST, CENTRE_HIGHEST) : null),  // typed in Hz
+      tolerance: 0.5,  // the board reports whole Hz in the middle
       holds: ["filterCentre", "filterWidth"],
       command: filterCommand,
     },

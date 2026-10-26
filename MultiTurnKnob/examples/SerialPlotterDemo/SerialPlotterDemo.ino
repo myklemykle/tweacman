@@ -44,8 +44,8 @@ void setup() {
 }
 
 void loop() {
-  // Same non-blocking pattern used throughout this project: compare the
-  // clock instead of delay().
+  // The usual non-blocking pattern: compare the clock instead of
+  // delay().
   unsigned long currentMillis = millis();
 
 #ifdef USR_BTN

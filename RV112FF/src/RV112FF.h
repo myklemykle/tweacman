@@ -54,23 +54,13 @@
   ~112us conversions, and atan2() and exp() in software floating point.
   AVR support compiles but is untested on real hardware.
 
-  Ported from a working implementation on a different platform (Bela) -
-  see that project's notes for the original derivation and a specific
-  pitfall worth knowing about if you modify the calibration logic:
-  don't let the calibration envelope decay back toward the live signal.
-  It seems like a reasonable way to let the calibration "self-heal,"
-  but it makes an idle knob's reported angle drift, because the
-  envelope's center slides toward wherever the knob happens to be
-  sitting rather than staying anchored to the shaft's real range.
-
   A note on NVM wear, if you're persisting getCalibration()'s result
-  (e.g. with the built-in EEPROM library, which is backed by this
-  board's dedicated 8KB data flash rather than the much larger code
-  flash): that storage doesn't wear-level, and EEPROM.put() only skips
-  a write when the new bytes are byte-for-byte identical to what's
-  already there. That's no help here, since the calibration envelope
-  legitimately changes a little on almost every read() while a shaft is
-  actively being calibrated. Call getCalibration() and save its result
+  (e.g. with the EEPROM library, which on many boards is emulated in
+  flash): that storage often doesn't wear-level, and EEPROM.put() only
+  skips a write when the new bytes are byte-for-byte identical to
+  what's already there. That's no help here, since the calibration
+  envelope legitimately changes a little on almost every read() while a
+  shaft is actively being calibrated. Call getCalibration() and save its result
   deliberately - once calibration completes, on a button press, rate-
   limited - not on every read().
 */
@@ -196,11 +186,11 @@ class RV112FF {
     // to move. A throwaway conversion first is the standard portable
     // remedy, and costs a few microseconds per wiper.
     //
-    // Set it to 0 if your board fixes this properly in hardware - e.g.
-    // this project's RA6M5AnalogTuning library, which lengthens the ADC's
-    // sampling time instead and measured as removing it outright, making
-    // the extra conversion pure overhead. Raise it if you measure crosstalk
-    // left over on a board without such an option.
+    // Set it to 0 if your board fixes this properly in hardware - e.g. by
+    // lengthening the ADC's sampling time, on chips that allow it, which
+    // can remove it outright and make the extra conversion pure overhead.
+    // Raise it if you measure crosstalk left over on a board without such
+    // an option.
     void setSettlingReads(uint8_t reads) { _settlingReads = reads; }
     uint8_t getSettlingReads() const { return _settlingReads; }
 

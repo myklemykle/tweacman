@@ -36,8 +36,8 @@ void setup() {
 }
 
 void loop() {
-  // Same non-blocking pattern used throughout this project: compare the
-  // clock instead of delay(), so nothing here would ever stall - the
+  // The usual non-blocking pattern: compare the clock instead of
+  // delay(), so nothing here would ever stall - the
   // pots themselves are polled by read() at whatever rate loop() gets
   // to it, not on a hardware timer.
   unsigned long currentMillis = millis();

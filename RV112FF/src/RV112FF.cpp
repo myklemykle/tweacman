@@ -14,8 +14,8 @@ RV112FF::RV112FF(uint8_t wiperPinA, uint8_t wiperPinB,
   _maxVal[0] = _maxVal[1] = 0.0;
   restartTurnCount();
   // Deliberately no hardware access here - a global "RV112FF pot(A2, A3);"
-  // runs its constructor before setup(), and this board's ADC isn't
-  // guaranteed ready yet at that point. analogReadResolution() below is
+  // runs its constructor before setup(), and on some cores the ADC isn't
+  // ready yet at that point. analogReadResolution() below is
   // called lazily instead, from the first real read().
 }
 
@@ -52,7 +52,7 @@ float RV112FF::readWiper(uint8_t pin, uint8_t channel, float dtSeconds) {
   // Throwaway conversions first, to let the ADC settle on this pin - see
   // setSettlingReads() in RV112FF.h for why, and when to change how many.
   //
-  // Measured on the bench with two RV112FFs on one board: without them,
+  // Measured on a Renesas RA6M5 with two RV112FFs: without them,
   // turning one pot biased the *other* pot's reported speed in the opposite
   // direction - mean -0.304 RPM while turning one way and +0.407 the other,
   // with excursions to +/-2.5 RPM - which is audible when the second pot's

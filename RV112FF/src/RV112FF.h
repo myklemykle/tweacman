@@ -98,10 +98,6 @@ class RV112FF {
     // wiperPinA, wiperPinB: the two analog pins wired to the pot's wipers.
     // smoothTau: time constant (seconds) of the lowpass filter smoothing
     //   each wiper's raw reading - the main defense against ADC noise.
-    // minCalibrationRange: fraction (0-1) of full-scale each wiper's
-    //   smoothed signal must have swept before an angle can be worked out
-    //   at all - the point where counting the full turn that completes
-    //   calibration (see isCalibrated()) can begin.
     // rpmSmoothTau: time constant (seconds) of rpm()'s own separate
     //   smoothing filter (see that method's comment). The default
     //   (0.15s) was tuned for using this pot as a position control,
@@ -111,8 +107,7 @@ class RV112FF {
     //   noticeable "momentum" once rpm() itself is driving something
     //   audibly in real time.
     RV112FF(uint8_t wiperPinA, uint8_t wiperPinB,
-            float smoothTau = 0.02, float minCalibrationRange = 0.15,
-            float rpmSmoothTau = 0.15);
+            float smoothTau = 0.02, float rpmSmoothTau = 0.15);
 
     // Samples both wipers, updates calibration and the speed estimate,
     // and returns the current shaft angle in degrees [0, 360). Returns
@@ -200,10 +195,30 @@ class RV112FF {
     void setOversampling(uint8_t readings) { _oversampling = (readings < 1) ? 1 : readings; }
     uint8_t getOversampling() const { return _oversampling; }
 
+    // How much of the ADC's full scale (0.0-1.0) each wiper must have swept
+    // before the pot starts working out an angle at all. Default 0.15.
+    //
+    // Why: the angle comes from each wiper's reading as a fraction of the
+    // range it has swept so far. Over a tiny range, ADC noise alone would
+    // turn into wild swings of angle, and spoil the count of the full turn
+    // that completes calibration (see isCalibrated()) - so nothing is
+    // decoded until the range is big enough to trust. It doesn't set when
+    // calibration completes; that's the full turn. setCalibration() also
+    // refuses a saved range smaller than this, as bad data.
+    //
+    // You'd only lower it if a wiper can't swing that far on your wiring -
+    // say a series resistor in the track, or track ends on a voltage well
+    // below the ADC's reference. Then the pot never calibrates at all, and
+    // nothing says why: plot each wiper() while turning the knob to see
+    // its real swing, and set this comfortably below it. Set it before
+    // setCalibration(), which checks against it.
+    void setMinCalibrationRange(float fraction) { _minCalibrationRange = fraction; }
+    float getMinCalibrationRange() const { return _minCalibrationRange; }
+
   private:
     uint8_t _pinA, _pinB;
     float _smoothTau;
-    float _minCalibrationRange;
+    float _minCalibrationRange = 0.15;
     float _rpmSmoothTau;
     uint8_t _settlingReads = 1;
     uint8_t _oversampling = 1;

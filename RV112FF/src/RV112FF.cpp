@@ -6,11 +6,9 @@
 #include <math.h>
 
 RV112FF::RV112FF(uint8_t wiperPinA, uint8_t wiperPinB,
-                  float smoothTau, float minCalibrationRange,
-                  float rpmSmoothTau)
+                  float smoothTau, float rpmSmoothTau)
   : _pinA(wiperPinA), _pinB(wiperPinB),
-    _smoothTau(smoothTau), _minCalibrationRange(minCalibrationRange),
-    _rpmSmoothTau(rpmSmoothTau) {
+    _smoothTau(smoothTau), _rpmSmoothTau(rpmSmoothTau) {
   _smooth[0] = _smooth[1] = 0.5;
   _minVal[0] = _minVal[1] = 1.0;
   _maxVal[0] = _maxVal[1] = 0.0;

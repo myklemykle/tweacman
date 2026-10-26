@@ -13,10 +13,11 @@
          +--> high-pass --> low-pass --> limit --- x wet ---+
               (cutoff A)    (cutoff B, resonant)
 
-  It's set by its two cutoffs, the bottom and the top of the band (the
-  sketch's knobs play them as a width and a centre - see its
-  setFilterBand()). How it sounds depends on the band's width - the
-  distance between them, in octaves.
+  It's set by its two cutoffs, the bottom and the top of the band. How it
+  sounds depends on the band's width - the distance between them, in
+  octaves - or, if the caller says so, a width of its own: the sketch's
+  knobs set a width and a centre, and a band that runs off one end of the
+  range keeps the width it was given (see the sketch's setFilterBand()).
 
     - Wide open (FILTER_MIN_HZ to FILTER_MAX_HZ, ten octaves, 20Hz to
       20kHz) the band covers everything you can hear. Over the last octave
@@ -120,11 +121,14 @@ class BandFilter {
 
   // The band: its bottom and top cutoffs in Hz, each held within
   // FILTER_MIN_HZ to FILTER_MAX_HZ, and the top no lower than the bottom.
-  // Takes effect at the next update().
-  void setCutoffs(float lowHz, float highHz) {
+  // widthOctaves, if given, is the width that sets how much of the sound is
+  // filtered and how much it resonates - see the top of this file; by
+  // default it's the distance between the cutoffs. Takes effect at the
+  // next update().
+  void setCutoffs(float lowHz, float highHz, float widthOctaves = -1.0f) {
     lowHz_ = clampf(lowHz, FILTER_MIN_HZ, FILTER_MAX_HZ);
     highHz_ = clampf(highHz, lowHz_, FILTER_MAX_HZ);
-    width_ = log2f(highHz_ / lowHz_);
+    width_ = widthOctaves >= 0.0f ? clampf(widthOctaves, 0.0f, FILTER_OPEN_OCTAVES) : log2f(highHz_ / lowHz_);
     changed_ = true;
   }
 

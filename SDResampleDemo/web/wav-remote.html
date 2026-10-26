@@ -1871,8 +1871,7 @@
   // last set them: speed (a ratio, negative for backward), heard (the pitch
   // you hear, a ratio), the window's start and end and the file's length in
   // seconds, the echo's delay in seconds and its amount, and the filter's
-  // centre in Hz and the band's real width in octaves (10 is wide open).
-  // Each of those is as the board reports it.
+  // centre in Hz and its width in octaves (10 is wide open).
   const tweaks = {
     speed: null, heard: null, winStart: null, winEnd: null, length: null,
     echoTime: null, echoAmount: null, filterCentre: null, filterWidth: null,
@@ -1896,23 +1895,7 @@
   const ECHO_MIN = 0.001, ECHO_MAX = 2.73, ECHO_MAX_AMOUNT = 0.95;
   const FILTER_MIN = 20, FILTER_MAX = 20480, FILTER_CENTRE = 640;  // as in the sketch
   const FILTER_OPEN = 10;  // octaves: the whole range, and no filter
-  // The knob sets a width that's half either side of the centre; an edge
-  // that runs off the end of the range stops there, so the band's real
-  // width (what the board reports, and the page shows) can be less. It's
-  // wide open once both edges reach their ends: a knob width of
-  // filterMaxWidth(), ten octaves at 640Hz and more further out - see
-  // setFilterBand() in the sketch. These convert between the two.
-  const filterRoom = (c) => [Math.log2(c / FILTER_MIN), Math.log2(FILTER_MAX / c)];  // octaves below, above
-  const filterMaxWidth = (c) => 2 * Math.max(...filterRoom(c));
-  const filterRealWidth = (c, knob) =>
-    filterRoom(c).reduce((sum, room) => sum + Math.min(knob / 2, room), 0);
-  const filterKnobWidth = (c, real) => {
-    if (real >= FILTER_OPEN - 0.005) return filterMaxWidth(c);
-    const nearer = Math.min(...filterRoom(c));
-    return real / 2 <= nearer ? real : 2 * (real - nearer);  // with one edge stopped at its end
-  };
-  const filterCommand = () =>
-    `BAND:${Math.round(tweaks.filterCentre)},${num(filterKnobWidth(tweaks.filterCentre, tweaks.filterWidth), 3)}`;
+  const filterCommand = () => `BAND:${Math.round(tweaks.filterCentre)},${num(tweaks.filterWidth, 3)}`;
 
   // Each control: which setting it shows, how its slider maps onto it, how
   // the value reads, what typing a number means, and the command to send.
@@ -1985,11 +1968,14 @@
       command: echoCommand,
     },
     filterWidth: {
-      // The band's real width. The slider moves as the knob does, by the
-      // knob's width, so its top is wide open wherever the centre is.
+      // The space between the band's two edges, half either side of the
+      // centre. It stays what it's set to even when the centre pushes an
+      // edge off the end of the range. On the same curve as the knob: the
+      // slider's distance from the left, squared, so the widths you hear
+      // the most of get the most room.
       setting: "filterWidth", label: "Width", initial: () => FILTER_OPEN,
-      fromPos: (p) => filterRealWidth(tweaks.filterCentre, p * filterMaxWidth(tweaks.filterCentre)),
-      toPos: (v) => filterKnobWidth(tweaks.filterCentre, v) / filterMaxWidth(tweaks.filterCentre),
+      fromPos: (p) => FILTER_OPEN * p * p,
+      toPos: (v) => Math.sqrt(clamp(v, 0, FILTER_OPEN) / FILTER_OPEN),
       format: (v) => (v >= FILTER_OPEN - 0.005 ? ["Open", ""] : [num(v, 2), "oct"]),
       typed: (n) => (n >= 0 ? Math.min(n, FILTER_OPEN) : null),  // typed in octaves
       tolerance: 0.005,
@@ -1997,19 +1983,13 @@
       command: filterCommand,
     },
     filterCentre: {
-      // Evenly in octaves, as the knob turns it. Wide open, the band stays
-      // wide open as the centre moves, as on the board.
+      // Evenly in octaves, as the knob turns it. Moving it slides both edges
+      // of the band along, leaving the width alone.
       setting: "filterCentre", label: "Centre", initial: () => FILTER_CENTRE,
       fromPos: (p) => FILTER_MIN * 2 ** (p * 10),
       toPos: (v) => Math.log2(clamp(v, FILTER_MIN, FILTER_MAX) / FILTER_MIN) / 10,
       format: (v) => (v < 1000 ? [String(Math.round(v)), "Hz"] : [num(v / 1000, v < 10000 ? 2 : 1), "kHz"]),
       typed: (n) => (n > 0 ? clamp(n, FILTER_MIN, FILTER_MAX) : null),  // typed in Hz
-      apply: (v) => {
-        const knob = filterKnobWidth(tweaks.filterCentre, tweaks.filterWidth);
-        const open = tweaks.filterWidth >= FILTER_OPEN - 0.005;
-        tweaks.filterCentre = clamp(v, FILTER_MIN, FILTER_MAX);
-        tweaks.filterWidth = open ? FILTER_OPEN : filterRealWidth(tweaks.filterCentre, knob);
-      },
       tolerance: 0.5,  // the board reports whole Hz
       holds: ["filterCentre", "filterWidth"],
       command: filterCommand,

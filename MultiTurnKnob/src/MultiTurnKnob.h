@@ -55,10 +55,16 @@ class MultiTurnKnob {
 
     // Samples the wrapped pot (calling its read() - see the class
     // comment) and returns the accumulated position in degrees, free to
-    // go past +-360 as the shaft turns multiple times. Returns -1, like
-    // RV112FF::read() itself, until the wrapped pot has finished its own
-    // self-calibration.
+    // go past +-360 - and below 0 - as the shaft turns multiple times.
+    // Until the wrapped pot has finished its own self-calibration, the
+    // position just holds still (at 0, or wherever write() put it): check
+    // isCalibrated() to tell. Unlike RV112FF::read(), there's no -1 for
+    // "not ready", since -1 degrees is a real position here.
     float read();
+
+    // True once the wrapped pot has finished calibrating, so read() is
+    // tracking the shaft - the same as the pot's own isCalibrated().
+    bool isCalibrated() const { return _pot.isCalibrated(); }
 
     // Redefines the current physical position as this logical value -
     // matching Encoder::write(). Doesn't touch the wrapped RV112FF or

@@ -15,3 +15,4 @@ MultiTurnKnob	KEYWORD1
 read	KEYWORD2
 write	KEYWORD2
 lastAngle	KEYWORD2
+isCalibrated	KEYWORD2

@@ -40,9 +40,16 @@
   power-on. To skip that at every boot, save the calibration once with
   getCalibration() and restore it in setup() with setCalibration().
 
-  Written for boards with a 12-bit ADC (calls analogReadResolution(12)
-  on first use, regardless of what the rest of the sketch has set it
-  to, for the best angular precision this hardware can give).
+  Takes every bit the board's ADC has: on first use it calls
+  analogReadResolution(16), regardless of what the rest of the sketch
+  has set it to - that setting is board-wide, so other analogRead()s
+  get 16-bit values too. Arduino's convention is that this only scales
+  the result, padding a 12-bit reading with zeros, so it's right
+  whatever the ADC's real resolution: exact on a 12-bit ADC, all 14
+  bits of a 14-bit one. Teensy 4 is the exception - it stays at 12 bits
+  if asked for more - and is handled below (RV112FF_ADC_BITS). Classic
+  AVR boards (Uno R3, Mega, Teensy 2) have no analogReadResolution() at
+  all, so this library doesn't support them.
 
   Ported from a working implementation on a different platform (Bela) -
   see that project's notes for the original derivation and a specific
@@ -69,6 +76,16 @@
 #define RV112FF_h
 
 #include <Arduino.h>
+
+// The resolution this library asks analogReadResolution() for, and so the
+// full scale it divides each reading by - see the class comment.
+#if defined(__AVR__)
+#error "RV112FF needs analogReadResolution(), which classic AVR boards don't have."
+#elif defined(__IMXRT1062__)
+#define RV112FF_ADC_BITS 12  // Teensy 4: stays at 12 bits if asked for more
+#else
+#define RV112FF_ADC_BITS 16
+#endif
 
 // Snapshot of a pot's calibration state, for storing in NVM (e.g. via
 // EEPROM.put()/EEPROM.get() - see getCalibration()/setCalibration() below)
@@ -249,7 +266,7 @@ class RV112FF {
     bool _begun = false;
     unsigned long _lastMicros = 0;
 
-    static constexpr float ADC_MAX_VALUE = 4095.0;  // 2^12 - 1
+    static constexpr float ADC_MAX_VALUE = (1UL << RV112FF_ADC_BITS) - 1;
 
     static constexpr uint32_t CALIBRATION_MAGIC = 0x52563132;  // ASCII "RV12"
     static constexpr uint8_t CALIBRATION_VERSION = 2;

@@ -96,12 +96,12 @@ float RV112FF::readWiper(uint8_t pin, uint8_t channel, float dtSeconds) {
 
 float RV112FF::read() {
   if (!_begun) {
-    // Best available precision on this hardware, regardless of what any
-    // other code in the sketch may have set analogReadResolution() to.
-    // Safe to call more than once (e.g. with two RV112FF instances) -
-    // it's a board-wide setting, and re-asserting the same value is a
-    // no-op.
-    analogReadResolution(12);
+    // Every bit the ADC has, regardless of what any other code in the
+    // sketch may have set analogReadResolution() to - see the class
+    // comment. Safe to call more than once (e.g. with two RV112FF
+    // instances) - it's a board-wide setting, and re-asserting the same
+    // value is a no-op.
+    analogReadResolution(RV112FF_ADC_BITS);
     _begun = true;
   }
 

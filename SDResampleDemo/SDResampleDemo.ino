@@ -1173,6 +1173,31 @@ const float ECHO_AMOUNT_TURNS = 1.0f;
 // not in filter mode. So loop() fades it out along with the echo's tail,
 // over a few echo delay times - see "Echo". Playing again brings the scream
 // back.
+//
+// How the knobs play it was settled by trying the alternatives on the bench:
+//   - Width and centre, not bottom and top. The first version had one knob
+//     per cutoff, as the MiniKorg 700's Traveler does, each pushing the
+//     other along where they met. Width on knob1 and centre on knob2 plays
+//     better: one knob for how much you hear, one for where - and with the
+//     band narrowed to a scream, the centre knob plays its pitch.
+//   - Two shelves with a space between. The band is half its width either
+//     side of the centre, and the centre slides both edges together. The
+//     width is a setting of its own, kept as set, shown as set and saved as
+//     set - even when the centre has pushed an edge out of hearing. Tried
+//     and dropped: showing the band's real width once an edge had stopped
+//     at the end of the range (the reading changed under the centre knob,
+//     which was confusing), and having each edge cover the same fraction
+//     of the way to its end (the band went lopsided round the centre).
+//   - The width knob is the top of a hill at wide open, closing either way
+//     and stopping there on the way back - so wide open is always one easy
+//     place to find, whichever way the knob was turned last. And it's on a
+//     squared curve: in a straight line it took most of a turn before
+//     narrowing could be heard, where now a quarter turn does it.
+//   - The centre goes far past hearing both ways, on a curve, so even the
+//     widest band can be slid right out of hearing to silence. A digital
+//     filter can't put a cutoff out there; the filter fades the sound as
+//     its own slope would instead - see BandFilter.h. In the middle the
+//     curve keeps the plain five octaves a turn, for playing the scream.
 BandFilter filter;
 float filterLowHz = FILTER_MIN_HZ;   // the band's bottom; loop()'s copy of what `filter` was told
 float filterHighHz = FILTER_MAX_HZ;  // and its top: both at the ends is wide open, no filter

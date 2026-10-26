@@ -15,6 +15,7 @@ RV112FFCalibration	KEYWORD1
 
 read	KEYWORD2
 rpm	KEYWORD2
+wiper	KEYWORD2
 isCalibrated	KEYWORD2
 resetCalibration	KEYWORD2
 getCalibration	KEYWORD2

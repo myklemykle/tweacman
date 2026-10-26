@@ -55,6 +55,17 @@
   arbitrary tone from the moment the sketch boots, before the knob has
   ever been touched.
 
+  Serial Plotter: open Tools > Serial Plotter (115200 baud) to watch,
+  20 times a second, each knob's two wiper readings (knob1_ad1 and
+  knob1_ad2, the A/D readings its angle is decoded from), that angle
+  (knob1_angle) and the pitch it's playing (knob1_pitch) - and the
+  same for knob2. Everything shares one 0-360 vertical axis: the wiper
+  readings are scaled so 0 is 0V and 360 is the top of the ADC's range,
+  and each pitch is drawn so 0 is 50 Hz, 360 is 10 kHz, and equal steps
+  between are equal musical intervals (about 47 per octave) - see
+  plotPitch(). The wiper lines start at boot, so you can watch a pot
+  calibrate; its angle and pitch lines appear once it has.
+
   Why Faust: two independently-tuned oscillators that need mixing on
   every sample can't use analogWave (see DACAudioTest.ino) - it streams
   a fixed, precomputed waveform table via DMA with no CPU involvement,
@@ -127,6 +138,13 @@ float knobAngle(float accumulatedDegrees, float turnsPerSweep) {
   float wrapped = fmodf(accumulatedDegrees / (turnsPerSweep * 2.0f), 360.0f);
   if (wrapped < 0) wrapped += 360.0f;
   return wrapped;
+}
+
+// Where a frequency sits on the Serial Plotter: the same 0-360 scale as
+// the knob angles beside it, logarithmic like the pitch mapping above, so
+// 0 is MIN_FREQ, 360 is MAX_FREQ and each octave is the same height.
+float plotPitch(float freq) {
+  return 360.0 * log(freq / MIN_FREQ) / log(MAX_FREQ / MIN_FREQ);
 }
 
 // -- Faust engine and its controls --------------------------------------
@@ -211,6 +229,34 @@ CapTouch touch2(21);  // gates knob2's speed
 const unsigned long CONTROL_INTERVAL = 10;  // milliseconds (~100 Hz)
 unsigned long previousControlMillis = 0;
 
+// Plot every 5th control tick (20 lines a second): plenty to follow a
+// turning knob, without scrolling the plotter's window by too fast.
+const int PLOT_EVERY_TICKS = 5;
+int ticksSincePlot = 0;
+
+// Prints one knob's part of a Serial Plotter line, as label:value pairs:
+// its two wiper readings scaled to 0-360, then - once it's calibrated -
+// its shaft angle and its pitch on the matching scale (see plotPitch()).
+void plotKnob(const char *name, RV112FF &pot, MultiTurnKnob &knob, float freq) {
+  Serial.print(name); Serial.print("_ad1:");
+  Serial.print(pot.wiper(0) * 360.0);
+  Serial.print(","); Serial.print(name); Serial.print("_ad2:");
+  Serial.print(pot.wiper(1) * 360.0);
+  if (pot.isCalibrated()) {
+    Serial.print(","); Serial.print(name); Serial.print("_angle:");
+    Serial.print(knob.lastAngle());
+    Serial.print(","); Serial.print(name); Serial.print("_pitch:");
+    Serial.print(plotPitch(freq));
+  }
+}
+
+void plotKnobs(float freq1, float freq2) {
+  plotKnob("knob1", pot1, knob1, freq1);
+  Serial.print(",");
+  plotKnob("knob2", pot2, knob2, freq2);
+  Serial.println();
+}
+
 void setup() {
   Serial.begin(115200);
   unsigned long start = millis();
@@ -291,5 +337,10 @@ void loop() {
     float angle2 = knobAngle(knob2.read(), turnsPerSweep2);
     *freq2Ptr = angleToFrequency(angle2);
     *gain2Ptr = pot2.isCalibrated() ? 1.0 : 0.0;
+
+    if (++ticksSincePlot >= PLOT_EVERY_TICKS) {
+      ticksSincePlot = 0;
+      plotKnobs(*freq1Ptr, *freq2Ptr);
+    }
   }
 }

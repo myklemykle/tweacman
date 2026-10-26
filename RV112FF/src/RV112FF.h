@@ -128,6 +128,13 @@ class RV112FF {
     // more than position does. Returns 0 before calibration.
     float rpm();
 
+    // One wiper's reading as of the last read(), 0.0 to 1.0 of the ADC's
+    // range: channel 0 is wiperPinA, 1 is wiperPinB. These are the
+    // smoothed values the angle is decoded from, available even before
+    // calibration completes - handy for plotting, to see what the pot
+    // itself is doing.
+    float wiper(uint8_t channel) const { return _smooth[channel ? 1 : 0]; }
+
     // True once calibration is complete - the shaft has turned a full
     // revolution since either wiper's observed range last grew (see the
     // class comment) - or a complete calibration has been restored with

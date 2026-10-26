@@ -15,8 +15,7 @@ Modes are rows of the `MODES` table in the sketch, stepped through by
 touch1 (or picked with knob1 while it's held). Five are built: speed mode
 (knob1 speed, knob2 scrub), pitch mode (knob1 pitch, knob2 time-stretch),
 window mode (knob1 start, knob2 end), echo mode (knob1 delay time, knob2
-amount) and filter mode (knob1 the band's bottom, knob2 its top,
-Traveler-style). Each further mode gets its own feature branch, and its
+amount) and filter mode (knob1 the band's width, knob2 its centre). Each further mode gets its own feature branch, and its
 parameters should be added to the per-file settings (`FileSettings.h`),
 which hold speed, pitch, window, echo and filter so far, and to the web
 page's tweaks tab.

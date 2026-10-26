@@ -22,15 +22,22 @@ exactly --seconds, mid-cycle if need be: the worst case for SDResampleDemo's
 cached copies, whose loop points only line up exactly when the file's length
 divides evenly.
 
+With --pink, PINK.WAV: pink noise, equal energy in every octave - the
+sound to hear a filter by, since whichever octave a band covers there's as
+much to hear in it as any other. It loops seamlessly too: its last second
+is crossfaded into its first.
+
 Usage:
     python3 make_test_wav.py [output_path]
     python3 make_test_wav.py --sine HZ [--seconds S] [--exact] [output_path]
     python3 make_test_wav.py --saw HZ [--seconds S] [--exact] [output_path]
+    python3 make_test_wav.py --pink [--seconds S] [output_path]
 
 Copy the resulting file to the SD card's root.
 """
 import argparse
 import math
+import random
 import struct
 import wave
 
@@ -70,6 +77,38 @@ def tone_samples(hz, seconds, wave_fn, exact=False):
         yield AMPLITUDE * wave_fn((i * step) % 1.0)
 
 
+def pink_samples(seconds):
+    # White noise through Paul Kellet's pink-noise filter: seven one-pole
+    # filters at spread-out frequencies, summed, which tilts the spectrum
+    # down 3dB an octave to within half a dB from about 10Hz up. A fixed
+    # seed, so the file is the same every time.
+    rng = random.Random(1)
+    n_samples = round(seconds * SAMPLE_RATE)
+    fade = SAMPLE_RATE  # the crossfade at the loop point: one second
+    b = [0.0] * 7
+    noise = []
+    for _ in range(n_samples + fade):
+        white = rng.uniform(-1.0, 1.0)
+        b[0] = 0.99886 * b[0] + white * 0.0555179
+        b[1] = 0.99332 * b[1] + white * 0.0750759
+        b[2] = 0.96900 * b[2] + white * 0.1538520
+        b[3] = 0.86650 * b[3] + white * 0.3104856
+        b[4] = 0.55000 * b[4] + white * 0.5329522
+        b[5] = -0.7616 * b[5] - white * 0.0168980
+        noise.append(sum(b) + b[6] + white * 0.5362)
+        b[6] = white * 0.115926
+    # The noise carried on past the end fades out over the start as the
+    # start fades in, so the last sample leads on into the first just as it
+    # would have into the next. Equal-power fades, since the two don't
+    # correlate.
+    out = noise[:n_samples]
+    for i in range(fade):
+        x = i / fade
+        out[i] = noise[i] * math.sin(x * math.pi / 2) + noise[n_samples + i] * math.cos(x * math.pi / 2)
+    peak = max(abs(v) for v in out)
+    return [AMPLITUDE * v / peak for v in out]
+
+
 def sine(phase):
     return math.sin(2 * math.pi * phase)
 
@@ -85,6 +124,8 @@ def main():
                         help="a steady tone at HZ instead of the default sweep")
     parser.add_argument("--saw", type=float, metavar="HZ",
                         help="a sawtooth at HZ - bright, with harmonics all the way up")
+    parser.add_argument("--pink", action="store_true",
+                        help="pink noise, to hear a filter by")
     parser.add_argument("--seconds", type=float, default=DURATION_S,
                         help=f"length of a --sine/--saw tone (default {DURATION_S:g}) - shorter "
                              "uploads faster over BLE, and loops just as seamlessly")
@@ -94,7 +135,10 @@ def main():
     parser.add_argument("output_path", nargs="?")
     args = parser.parse_args()
 
-    if args.sine or args.saw:
+    if args.pink:
+        out_path = args.output_path or "PINK.WAV"
+        samples = pink_samples(args.seconds)
+    elif args.sine or args.saw:
         hz = args.sine or args.saw
         name = "SINE" if args.sine else "SAW"
         out_path = args.output_path or f"{name}{hz:g}{'X' if args.exact else ''}.WAV"

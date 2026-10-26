@@ -172,8 +172,8 @@
   speed knob's requested ratio, which survives being stopped, so a client
   can show what the transport *would* run at; `PIT:` is the pitch ratio,
   1.000 meaning unshifted; `ECT:` and `ECA:` are the echo's delay in seconds
-  and its amount; `FLL:` and `FLH:` the filter's bottom and top cutoffs in
-  Hz (20 and 20480 is wide open, no filter); `LAT:0|1` is whether the transport is latched;
+  and its amount; `FLC:` and `FLW:` the filter's centre in Hz and its width
+  in octaves, 0 to 10 (10.00 is wide open, no filter; see setFilterBand()); `LAT:0|1` is whether the transport is latched;
   `LVL:` is which copy is playing (0 the original, k the cached copy at
   1/2^k its rate); `CACHE:` is how far building those copies has got, in
   percent. For the page's tweaks tab there are also `MODE:`, the knob mode
@@ -212,6 +212,9 @@
                          from 20 to 20480 (both at the ends is wide open,
                          no filter; both together, it screams) - see
                          "Filter"; `RESET:FILTER` opens it
+    `BAND:<centre>,<oct>` the same, as the knobs set it: the band's centre
+                         in Hz and its width in octaves, 0 to 10 (10 is
+                         wide open)
     `RESET:CACHE`        throw away the current file's cached copies and
                          build them again - for a copy suspected of being
                          damaged, since they're otherwise kept up to date
@@ -344,16 +347,23 @@
   comes to rest. Both settings are saved per file.
 
   Filter: in the fifth mode (orange), the knobs play a resonant band-pass
-  filter, in the spirit of a Korg MS-20's, laid out like the MiniKorg 700's
-  Traveler: knob1 moves the bottom of the band (a high-pass cutoff) and
-  knob2 its top (a low-pass cutoff), each across the audible range, 20Hz to
-  20kHz, at five octaves per turn. It starts wide open, which is no filter
-  at all, so knob1 forward or knob2 back always does something. Closing
-  the band in, the sound thins to it, with a bump at each edge, and over
-  the last couple of octaves the resonance rises until the filter screams
-  by itself, as an analog one does. The cutoffs can meet but not cross:
-  push one into the other and both move, so with them together either
-  knob slides the band - and plays the scream's pitch. The scream is kept in
+  filter, in the spirit of a Korg MS-20's: knob1 sets the band's width, from
+  ten octaves - wide open, the whole audible range, no filter at all - down
+  to nothing, and knob2 its centre - five octaves per turn round the
+  middle, 640Hz, faster further out, two turns each way. Wide open is the
+  top of a hill for knob1: turning either way from it narrows the band,
+  quickly at first, so a quarter turn
+  is plain to hear, then more slowly, over a turn and a half in all;
+  turning back stops at wide open. Narrowing the band, the sound thins to
+  it, with a bump at each edge, and over the last couple of octaves the
+  resonance rises until the filter screams by itself, as an analog one
+  does - and knob2 then plays the scream's pitch. Moving the centre slides
+  both edges of the band together, keeping the width; even wide open, that
+  brings one edge into hearing. At the ends of its travel the whole band
+  has slid out past what you can hear - which a digital filter can't
+  really do, so the sound is faded instead as the filter's own slope would
+  fade it - and it's silent - see setFilterBand() and BandFilter.h. The
+  scream is kept in
   hand by soft clipping, as the MS-20's is by diodes, so it settles at a
   steady level rather than running away. When the transport stops it fades
   out with the echo, over three echo delay times - otherwise someone outside
@@ -581,15 +591,19 @@
        held while the other hand does anything at all. RESET:ALL does the
        same from Serial.
     18. Filter: latch a file playing, press D20 until the LED is orange,
-       and turn knob 1 forward - the bass goes. Turn knob 2 back - the
-       treble goes too, leaving a band. As the two close in the band rings,
-       then screams by itself; keep turning knob 2 back and it pushes knob
-       1's cutoff down ahead of it, playing the scream's pitch, as knob 1
-       does forward. Stop the transport: the scream fades away over three
+       and turn knob 1 a quarter turn either way - the bass and treble go,
+       leaving a band around 640Hz (PINK.WAV, from tools/make_test_wav.py
+       --pink, makes it easiest to hear). Turn knob 2 either way and the
+       band moves; the width the page shows doesn't change. Turn knob 2 two
+       turns either way and the sound fades away to nothing; bring it back
+       to 640Hz (RESET:FILTER, or tap Centre's reset on the page). Keep turning
+       knob 1 the same way: the band rings, then screams by itself, and knob
+       2 plays the scream's pitch.
+       Stop the transport: the scream fades away over three
        echo delay times (with the echo off, its delay is still set: 0.3
        seconds by default, so about a second); play again and it comes
-       back. Turn knob 1 back and knob 2 forward until the sound is
-       untouched. FILTER:500,1000 sets one exactly and RESET:FILTER opens
+       back. Turn knob 1 back until it stops at wide open and the sound is
+       untouched, wherever knob 2 is. FILTER:500,1000 sets one exactly and RESET:FILTER opens
        it again; the "isr" figures
        rise about 12% while the filter is narrowed, and drop back a moment
        after it's wide open. Pick another file and come back, or reboot:
@@ -1163,9 +1177,31 @@ BandFilter filter;
 float filterLowHz = FILTER_MIN_HZ;   // the band's bottom; loop()'s copy of what `filter` was told
 float filterHighHz = FILTER_MAX_HZ;  // and its top: both at the ends is wide open, no filter
 
-// Both knobs are relative and exponential: a turn moves a cutoff this many
-// octaves, so from one end of the range to the other is two turns.
+// The knobs play the band by its centre and width - see setFilterBand().
+// The centre starts in the middle of the range, in octaves: 640Hz.
+const float FILTER_CENTRE_HZ = 640.0f;
+float filterCentreHz = FILTER_CENTRE_HZ;
+float filterWidthOctaves = FILTER_OPEN_OCTAVES;  // 0 to 10, and 10 is wide open
+
+// The centre reaches this many octaves either way from FILTER_CENTRE_HZ:
+// far enough that even the widest band slides out past the end of what you
+// can hear, and fades away to silence - see BandFilter.h. That's from a
+// fiftieth of a Hz to 21MHz, which only means anything as a place to put
+// the band where it can't be heard.
+const float FILTER_CENTRE_REACH_OCTAVES = 15.0f;
+const float FILTER_CENTRE_LOWEST_HZ = FILTER_CENTRE_HZ / 32768.0f;   // 2^15
+const float FILTER_CENTRE_HIGHEST_HZ = FILTER_CENTRE_HZ * 32768.0f;
+
+// The centre knob is relative, on a curve: FILTER_OCTAVES_PER_TURN in the
+// middle, speeding up toward the ends, so the reach takes
+// FILTER_CENTRE_REACH_TURNS either way - see filterCentreOctaves().
 const float FILTER_OCTAVES_PER_TURN = 5.0f;
+const float FILTER_CENTRE_REACH_TURNS = 2.0f;
+
+// The width knob runs from wide open to closed in this many turns, either
+// way from open, on a curve - see turnFilterWidth().
+const float FILTER_WIDTH_TURNS = 1.5f;
+int8_t filterWidthSide = 1;  // which way from open the width knob was last turned
 
 // -- Audio interrupt timing (diagnostic) -------------------------------------
 // The audio interrupt should fire every 1/48000s exactly. If anything keeps
@@ -2186,25 +2222,72 @@ void resetEcho() {
   setEcho(echoSeconds, 0.0f);
 }
 
-// Sets the filter: the band's bottom and top cutoffs in Hz, held within
-// range and the top no lower than the bottom.
+// The centre knob's curve: from the knob's position, in turns either way
+// from the middle, to the centre in octaves either way from
+// FILTER_CENTRE_HZ. A straight line plus a cube: the line, at
+// FILTER_OCTAVES_PER_TURN, is all there is near the middle, so the audible
+// range plays much as it would without the curve; the cube takes over
+// further out, to cover the reach in the turns allowed.
+const float FILTER_CENTRE_CUBE =
+    (FILTER_CENTRE_REACH_OCTAVES - FILTER_OCTAVES_PER_TURN * FILTER_CENTRE_REACH_TURNS) /
+    (FILTER_CENTRE_REACH_TURNS * FILTER_CENTRE_REACH_TURNS * FILTER_CENTRE_REACH_TURNS);
+
+float filterCentreOctaves(float turns) {
+  return FILTER_OCTAVES_PER_TURN * turns + FILTER_CENTRE_CUBE * turns * turns * turns;
+}
+
+// ...and back: the knob position for a centre, solving the cubic directly
+// (Cardano's formula - this cubic always has exactly one real answer).
+float filterCentreTurns(float octaves) {
+  float p = FILTER_OCTAVES_PER_TURN / FILTER_CENTRE_CUBE / 3.0f;
+  float q = octaves / FILTER_CENTRE_CUBE / 2.0f;
+  float d = sqrtf(q * q + p * p * p);
+  return cbrtf(q + d) + cbrtf(q - d);
+}
+
+// Sets the filter from its centre (Hz) and width (octaves, 0 to 10), as
+// the knobs play it. Think of the band as two shelves - the high-pass below
+// it and the low-pass above it - with the width the space between them:
+// half of it either side of the centre. Moving the centre slides both
+// shelves together, and the width stays what it was set to. A shelf
+// outside the audible range does nothing you can hear; slid all the way
+// past the far end, it takes the sound with it - BandFilter.h fades it out
+// as the filter's slope would. At the full ten octaves, centred, the
+// filter is wide open, out of the circuit.
+void setFilterBand(float centreHz, float widthOctaves) {
+  filterCentreHz = constrain(centreHz, FILTER_CENTRE_LOWEST_HZ, FILTER_CENTRE_HIGHEST_HZ);
+  filterWidthOctaves = constrain(widthOctaves, 0.0f, FILTER_OPEN_OCTAVES);
+  float half = exp2f(filterWidthOctaves / 2.0f);
+  filterLowHz = filterCentreHz / half;
+  filterHighHz = filterCentreHz * half;
+  filter.setCutoffs(filterLowHz, filterHighHz);
+}
+
+// Hz to print: whole Hz, or a few decimals where the centre has gone far
+// below anything audible.
+int hzDecimals(float hz) { return hz < 10.0f ? 3 : 0; }
+
+// Sets the filter by its bottom and top cutoffs in Hz instead: the band
+// between them, centred.
 void setFilter(float lowHz, float highHz) {
-  filter.setCutoffs(lowHz, highHz);
-  filterLowHz = filter.lowHz();
-  filterHighHz = filter.highHz();
+  lowHz = constrain(lowHz, FILTER_MIN_HZ, FILTER_MAX_HZ);
+  highHz = constrain(highHz, lowHz, FILTER_MAX_HZ);
+  setFilterBand(sqrtf(lowHz * highHz), log2f(highHz / lowHz));
 }
 
 void printFilter() {
   Serial.print("Filter: ");
-  Serial.print(filterLowHz, 0);
+  Serial.print(filterLowHz, hzDecimals(filterLowHz));
   Serial.print("Hz to ");
-  Serial.print(filterHighHz, 0);
-  Serial.print("Hz, ");
-  Serial.print(filter.widthOctaves(), 2);
-  Serial.println(filter.isOpen() ? " octaves (open: no filter)" : " octaves");
+  Serial.print(filterHighHz, hzDecimals(filterHighHz));
+  Serial.print("Hz (centre ");
+  Serial.print(filterCentreHz, hzDecimals(filterCentreHz));
+  Serial.print("Hz), ");
+  Serial.print(filterWidthOctaves, 2);
+  Serial.println(filter.isOpen() ? " octaves wide (open: no filter)" : " octaves wide");
 }
 
-// FILTER:<low Hz>,<high Hz> - an exact filter, mostly for testing.
+// FILTER:<low Hz>,<high Hz> - an exact band, mostly for testing.
 void setFilterFromCommand(const String &args) {
   int comma = args.indexOf(',');
   if (comma == -1) return;
@@ -2212,9 +2295,18 @@ void setFilterFromCommand(const String &args) {
   printFilter();
 }
 
-// Filter off: wide open.
+// BAND:<centre Hz>,<width octaves> - the filter as the knobs play it; the
+// web page's way of setting it.
+void setFilterBandFromCommand(const String &args) {
+  int comma = args.indexOf(',');
+  if (comma == -1) return;
+  setFilterBand(args.substring(0, comma).toFloat(), args.substring(comma + 1).toFloat());
+  printFilter();
+}
+
+// Filter off: wide open, centred.
 void resetFilter() {
-  setFilter(FILTER_MIN_HZ, FILTER_MAX_HZ);
+  setFilterBand(FILTER_CENTRE_HZ, FILTER_OPEN_OCTAVES);
 }
 
 void rememberCurrentFile() {
@@ -2757,7 +2849,7 @@ void rebuildCache() {
 // Binary mode pipe. See handleBLELine() for why that matters.
 bool isBoardCommand(const String &line) {
   static const char *const COMMANDS[] = {
-    "LIST", "PLAY:", "LATCH:", "STOP", "RESET:", "PROFILE", "SPEED:", "PITCH:", "WINDOW:", "ECHO:", "FILTER:", "PUT:", "REN:", "DEL:", "DISK:",
+    "LIST", "PLAY:", "LATCH:", "STOP", "RESET:", "PROFILE", "SPEED:", "PITCH:", "WINDOW:", "ECHO:", "FILTER:", "BAND:", "PUT:", "REN:", "DEL:", "DISK:",
     "MODE:", "HEARD:", "STRETCH:", "TAPE:",
     "CAL", "RECAL"
   };
@@ -2837,6 +2929,8 @@ void handleBLECommand(String line) {
     resetEcho();
   } else if (line.startsWith("FILTER:")) {
     setFilterFromCommand(line.substring(7));
+  } else if (line.startsWith("BAND:")) {
+    setFilterBandFromCommand(line.substring(5));
   } else if (line == "RESET:FILTER") {
     resetFilter();
   } else if (line == "RESET:CACHE") {
@@ -3116,7 +3210,7 @@ void resetAllTweaks() {
   resetPitchToUnity();
   resetWindowToWholeFile();
   setEcho(defaults.echoTime, defaults.echoAmount);
-  setFilter(defaults.filterLow, defaults.filterHigh);
+  setFilterBand(defaults.filterCentre, defaults.filterWidth);
   resetFlashStartMillis = millis();
   resetFlashing = true;
   Serial.print("Reset: speed, pitch, window, echo and filter back to defaults for ");
@@ -3494,27 +3588,35 @@ void turnEchoAmount(float turned) {
   setEcho(echoSeconds, echoAmount - turned / 360.0f * ECHO_MAX_AMOUNT / ECHO_AMOUNT_TURNS);
 }
 
-// A cutoff moved by a knob turn - relative and exponential, see
-// FILTER_OCTAVES_PER_TURN. Forward raises it.
-float turnCutoff(float hz, float turned) {
-  return constrain(exp2f(log2f(hz) - turned / 360.0f * FILTER_OCTAVES_PER_TURN), FILTER_MIN_HZ, FILTER_MAX_HZ);
+// Knob1 in filter mode: the band's width. Wide open is the top of a hill:
+// turning either way from it narrows the band, down to nothing - and the
+// filter screaming - FILTER_WIDTH_TURNS later. Turned back, it stops at wide
+// open, and turning on from there narrows it again, on the other side.
+//
+// The knob's distance d from closed (0 to 1) sets the width as d squared:
+// fast at first, so the first quarter turn takes it from ten octaves to
+// about seven - 60Hz to 7kHz around the middle of the range, plain to hear
+// - and slower as it closes in, where the scream is played.
+void turnFilterWidth(float turned) {
+  if (turned == 0.0f) return;
+  float fromOpen = filterWidthSide * (1.0f - sqrtf(filterWidthOctaves / FILTER_OPEN_OCTAVES));
+  float next = constrain(fromOpen - turned / 360.0f / FILTER_WIDTH_TURNS, -1.0f, 1.0f);
+  if (fromOpen != 0.0f && (next > 0.0f) != (fromOpen > 0.0f)) next = 0.0f;  // stop at open
+  if (next != 0.0f) filterWidthSide = next > 0.0f ? 1 : -1;
+  float d = 1.0f - fabsf(next);
+  setFilterBand(filterCentreHz, FILTER_OPEN_OCTAVES * d * d);
 }
 
-// Knob1 in filter mode: the bottom of the band. Pushed up into the top, it
-// takes the top along with it, so the band slides up - and with the two
-// together the filter screams, and this knob plays its pitch.
-void turnFilterLow(float turned) {
+// Knob2 in filter mode: the band's centre - relative, on the curve of
+// filterCentreOctaves(). Forward raises it, sliding both edges of the band
+// along; the width stays as it is. With the band narrowed to a scream,
+// this plays its pitch; turned far enough either way, the band slides out
+// of hearing and the sound fades to silence.
+void turnFilterCentre(float turned) {
   if (turned == 0.0f) return;
-  float low = turnCutoff(filterLowHz, turned);
-  setFilter(low, fmaxf(filterHighHz, low));
-}
-
-// Knob2 in filter mode: the top of the band, pushing the bottom down ahead
-// of it the same way.
-void turnFilterHigh(float turned) {
-  if (turned == 0.0f) return;
-  float high = turnCutoff(filterHighHz, turned);
-  setFilter(fminf(filterLowHz, high), high);
+  float turns = filterCentreTurns(log2f(filterCentreHz / FILTER_CENTRE_HZ)) - turned / 360.0f;
+  turns = constrain(turns, -FILTER_CENTRE_REACH_TURNS, FILTER_CENTRE_REACH_TURNS);
+  setFilterBand(FILTER_CENTRE_HZ * exp2f(filterCentreOctaves(turns)), filterWidthOctaves);
 }
 
 struct KnobMode {
@@ -3540,7 +3642,7 @@ const KnobMode MODES[] = {
   {"pitch / time-stretch", 180.0f, 6, true, syncHeldPitch, turnPitch, stretchTime},  // aqua
   {"window start / end", 268.0f, RGBLED_BRIGHTNESS, false, printWindow, turnWindowStart, turnWindowEnd},  // purple
   {"echo time / amount", 335.0f, RGBLED_BRIGHTNESS, false, printEcho, turnEchoTime, turnEchoAmount},  // pink
-  {"filter low / high", 30.0f, RGBLED_BRIGHTNESS, false, printFilter, turnFilterLow, turnFilterHigh},  // orange
+  {"filter width / centre", 30.0f, RGBLED_BRIGHTNESS, false, printFilter, turnFilterWidth, turnFilterCentre},  // orange
 };
 const uint8_t MODE_COUNT = sizeof(MODES) / sizeof(MODES[0]);
 
@@ -3783,8 +3885,8 @@ FileSettings currentSettings() {
   s.windowEnd = (windowEnd >= fileFrames) ? 0 : (uint32_t)windowEnd;  // 0: the file's end
   s.echoTime = echoSeconds;
   s.echoAmount = echoAmount;
-  s.filterLow = filterLowHz;
-  s.filterHigh = filterHighHz;
+  s.filterCentre = filterCentreHz;
+  s.filterWidth = filterWidthOctaves;
   return s;
 }
 
@@ -3802,7 +3904,7 @@ void applySettings(const FileSettings &s) {
   windowEnd = s.windowEnd ? (double)s.windowEnd : (double)fileFrames;
   clampWindow(windowStart, windowEnd);
   setEcho(s.echoTime, s.echoAmount);
-  setFilter(s.filterLow, s.filterHigh);
+  setFilterBand(s.filterCentre, s.filterWidth);
   savedSettings = seenSettings = currentSettings();
 }
 
@@ -4130,7 +4232,7 @@ void setup() {
   echo.begin();
   setEcho(echoSeconds, echoAmount);
   filter.begin();
-  setFilter(filterLowHz, filterHighHz);
+  setFilterBand(filterCentreHz, filterWidthOctaves);
 
   // ---- RA6M5-specific ----
   // Start the Cortex-M33's cycle counter, which the audio interrupt uses to
@@ -4602,7 +4704,7 @@ void loop() {
                      ",REQ:" + String(lastKnownRatio, fabsf(lastKnownRatio) < 1.0f ? 4 : 2) +
                      ",PIT:" + String(pitchRatio, 3) +
                      ",ECT:" + String(echoSeconds, 3) + ",ECA:" + String(echoAmount, 2) +
-                     ",FLL:" + String(filterLowHz, 0) + ",FLH:" + String(filterHighHz, 0) +
+                     ",FLC:" + String(filterCentreHz, hzDecimals(filterCentreHz)) + ",FLW:" + String(filterWidthOctaves, 2) +
                      ",BUF:" + String((int)fillPercent) + ",UND:" + String(underrunTicks) +
                      ",RUN:" + String(transportRunning ? 1 : 0) +
                      ",LAT:" + String(transportLatched ? 1 : 0) +

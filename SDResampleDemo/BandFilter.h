@@ -13,15 +13,25 @@
          +--> high-pass --> low-pass --> limit --- x wet ---+
               (cutoff A)    (cutoff B, resonant)
 
-  It's played with its two cutoffs, the bottom and the top of the band,
-  as the Traveler is: one knob for each. How it sounds depends on the
-  band's width - the distance between them, in octaves.
+  It's set by the two edges of the band, its bottom and top, which can be
+  anywhere - even far outside what you can hear. How it sounds depends on
+  where they are:
 
-    - Wide open (FILTER_MIN_HZ to FILTER_MAX_HZ, ten octaves, 20Hz to
-      20kHz) the band covers everything you can hear. Over the last octave
-      before that the filtered sound is crossfaded into the untouched one,
-      so wide open means exactly no filter at all.
-    - Narrowing it, the low-pass filter's resonance rises - first a peak at
+    - With the bottom at or below FILTER_MIN_HZ (20Hz) and the top at or
+      above FILTER_MAX_HZ (20kHz) the band covers everything you can hear:
+      wide open. As an edge comes in over its first octave of the audible
+      range the filtered sound is crossfaded in from the untouched one, so
+      wide open means exactly no filter at all.
+    - An edge pushed past the far end - the bottom above 20kHz, or the top
+      below 20Hz - leaves nothing in the band you can hear, and the filter
+      can't put a cutoff out there anyway: its maths gives out short of
+      24kHz, half the sample rate. So the cutoff stays at the end, and the
+      sound is turned down instead, 12dB for every octave further out the
+      edge is - just what the filter's own slope, 12dB an octave, would do
+      if the cutoff could carry on. A band slid off either end fades
+      smoothly away to silence.
+    - Narrowing it - bringing the edges together - the low-pass filter's
+      resonance rises - first a peak at
       the top of the band, then, over the last stretch, enough to take it
       into oscillation: a sine-ish scream at the low-pass cutoff, which
       plays like a pitch control. Both filters keep a little resonance
@@ -29,8 +39,7 @@
       known for.
 
   The cutoffs can meet but not cross: setCutoffs() keeps the top at or
-  above the bottom. (The sketch makes one push the other along - see its
-  turnFilterLow() and turnFilterHigh().)
+  above the bottom.
 
   Each filter is a 12dB-per-octave stage, the MS-20's slope: a state
   variable filter in its "zero-delay feedback" form - two integrators in a
@@ -64,7 +73,7 @@
   resonance is taken down out of oscillation. Turned back up, playing
   again, the scream starts again.
 
-  Sitting wide open, as it does until the width knob is turned, the filter
+  Sitting wide open, as it does until a knob is turned, the filter
   isn't run at all, so it costs nothing in the other modes.
 
   update() and the setters are called from loop(); process() from the audio
@@ -118,13 +127,16 @@ class BandFilter {
     now_ = target_;  // start where the settings are, with nothing to glide
   }
 
-  // The band: its bottom and top cutoffs in Hz, each held within
-  // FILTER_MIN_HZ to FILTER_MAX_HZ, and the top no lower than the bottom.
-  // Takes effect at the next update().
+  // The band: its bottom and top edges in Hz, anywhere above 0, the top no
+  // lower than the bottom - see the top of this file. The cutoffs the
+  // filter actually uses are the edges held within FILTER_MIN_HZ to
+  // FILTER_MAX_HZ. Takes effect at the next update().
   void setCutoffs(float lowHz, float highHz) {
-    lowHz_ = clampf(lowHz, FILTER_MIN_HZ, FILTER_MAX_HZ);
-    highHz_ = clampf(highHz, lowHz_, FILTER_MAX_HZ);
-    width_ = log2f(highHz_ / lowHz_);
+    lowEdge_ = fmaxf(lowHz, 1e-6f);
+    highEdge_ = fmaxf(highHz, lowEdge_);
+    lowHz_ = clampf(lowEdge_, FILTER_MIN_HZ, FILTER_MAX_HZ);
+    highHz_ = clampf(highEdge_, FILTER_MIN_HZ, FILTER_MAX_HZ);
+    width_ = log2f(highEdge_ / lowEdge_);
     changed_ = true;
   }
 
@@ -139,10 +151,16 @@ class BandFilter {
   // interrupt reads whole; if it catches some updated and some not, the
   // glide smooths that over.)
   void update(float seconds) {
-    // How much of the sound is filtered, and how much isn't.
-    float filtered = clampf((FILTER_OPEN_OCTAVES - width_) / FILTER_DRY_OCTAVES, 0.0f, 1.0f);
+    // How much of the sound is filtered, and how much isn't: by how far
+    // the edges have come into the audible range, together.
+    float bottomIn = fmaxf(0.0f, log2f(lowEdge_ / FILTER_MIN_HZ));
+    float topIn = fmaxf(0.0f, log2f(FILTER_MAX_HZ / highEdge_));
+    float filtered = clampf((bottomIn + topIn) / FILTER_DRY_OCTAVES, 0.0f, 1.0f);
+    // And how far an edge is past the far end, 12dB an octave: a quarter
+    // as loud for each one.
+    float beyond = fmaxf(0.0f, log2f(lowEdge_ / FILTER_MAX_HZ)) + fmaxf(0.0f, log2f(FILTER_MIN_HZ / highEdge_));
     target_.dry = 1.0f - filtered;
-    target_.wet = filtered * level_;
+    target_.wet = filtered * level_ * exp2f(-2.0f * beyond);
 
     // Out of the circuit while wide open - see FILTER_BYPASS_SECONDS.
     if (filtered > 0.0f) {
@@ -206,7 +224,7 @@ class BandFilter {
   float lowHz() const { return lowHz_; }
   float highHz() const { return highHz_; }
   float widthOctaves() const { return width_; }
-  bool isOpen() const { return width_ >= FILTER_OPEN_OCTAVES; }
+  bool isOpen() const { return lowEdge_ <= FILTER_MIN_HZ && highEdge_ >= FILTER_MAX_HZ; }
 
  private:
   // What the audio interrupt filters with: each stage's coefficient g and
@@ -279,7 +297,9 @@ class BandFilter {
   State state_[2][2];    // [left/right][high-pass/low-pass]
   uint32_t seed_ = 12345;
 
-  float lowHz_ = FILTER_MIN_HZ;
+  float lowEdge_ = FILTER_MIN_HZ;   // the band's edges, anywhere...
+  float highEdge_ = FILTER_MAX_HZ;
+  float lowHz_ = FILTER_MIN_HZ;     // ...and the cutoffs, held within the audible range
   float highHz_ = FILTER_MAX_HZ;
   float width_ = FILTER_OPEN_OCTAVES;
   bool changed_ = false;

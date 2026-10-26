@@ -46,10 +46,13 @@
   get 16-bit values too. Arduino's convention is that this only scales
   the result, padding a 12-bit reading with zeros, so it's right
   whatever the ADC's real resolution: exact on a 12-bit ADC, all 14
-  bits of a 14-bit one. Teensy 4 is the exception - it stays at 12 bits
-  if asked for more - and is handled below (RV112FF_ADC_BITS). Classic
-  AVR boards (Uno R3, Mega, Teensy 2) have no analogReadResolution() at
-  all, so this library doesn't support them.
+  bits of a 14-bit one. Two exceptions are handled below
+  (RV112FF_ADC_BITS): Teensy 4 stays at 12 bits if asked for more, and
+  classic AVR boards (Uno R3, Mega, Teensy 2) have no
+  analogReadResolution() at all - their ADC is always 10 bits. On AVR,
+  expect each read() to take about half a millisecond: two or more
+  ~112us conversions, and atan2() and exp() in software floating point.
+  AVR support compiles but is untested on real hardware.
 
   Ported from a working implementation on a different platform (Bela) -
   see that project's notes for the original derivation and a specific
@@ -80,7 +83,8 @@
 // The resolution this library asks analogReadResolution() for, and so the
 // full scale it divides each reading by - see the class comment.
 #if defined(__AVR__)
-#error "RV112FF needs analogReadResolution(), which classic AVR boards don't have."
+#define RV112FF_ADC_BITS 10  // classic AVR: always 10 bits, can't be set (untested)
+#define RV112FF_FIXED_ADC_RESOLUTION
 #elif defined(__IMXRT1062__)
 #define RV112FF_ADC_BITS 12  // Teensy 4: stays at 12 bits if asked for more
 #else

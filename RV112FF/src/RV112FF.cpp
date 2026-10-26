@@ -101,7 +101,9 @@ float RV112FF::read() {
     // comment. Safe to call more than once (e.g. with two RV112FF
     // instances) - it's a board-wide setting, and re-asserting the same
     // value is a no-op.
+#ifndef RV112FF_FIXED_ADC_RESOLUTION
     analogReadResolution(RV112FF_ADC_BITS);
+#endif
     _begun = true;
   }
 

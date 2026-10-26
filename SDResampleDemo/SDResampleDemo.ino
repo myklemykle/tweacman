@@ -172,10 +172,10 @@
   speed knob's requested ratio, which survives being stopped, so a client
   can show what the transport *would* run at; `PIT:` is the pitch ratio,
   1.000 meaning unshifted; `ECT:` and `ECA:` are the echo's delay in seconds
-  and its amount; `FLC:` and `FLW:` the filter's centre in Hz and its width
-  in octaves, as the knobs set them (wide open, no filter, once both edges
-  of the band reach the ends of the range - ten octaves at 640Hz, more
-  further from the middle; see setFilterBand()); `LAT:0|1` is whether the transport is latched;
+  and its amount; `FLC:` and `FLW:` the filter's centre in Hz, as the
+  knobs set it, and how wide the band really is in octaves, once an edge
+  that runs off the end of the range has stopped there (10.00 is wide open,
+  no filter; see setFilterBand()); `LAT:0|1` is whether the transport is latched;
   `LVL:` is which copy is playing (0 the original, k the cached copy at
   1/2^k its rate); `CACHE:` is how far building those copies has got, in
   percent. For the page's tweaks tab there are also `MODE:`, the knob mode
@@ -4658,7 +4658,7 @@ void loop() {
                      ",REQ:" + String(lastKnownRatio, fabsf(lastKnownRatio) < 1.0f ? 4 : 2) +
                      ",PIT:" + String(pitchRatio, 3) +
                      ",ECT:" + String(echoSeconds, 3) + ",ECA:" + String(echoAmount, 2) +
-                     ",FLC:" + String(filterCentreHz, 0) + ",FLW:" + String(filterWidthOctaves, 2) +
+                     ",FLC:" + String(filterCentreHz, 0) + ",FLW:" + String(filter.widthOctaves(), 2) +
                      ",BUF:" + String((int)fillPercent) + ",UND:" + String(underrunTicks) +
                      ",RUN:" + String(transportRunning ? 1 : 0) +
                      ",LAT:" + String(transportLatched ? 1 : 0) +

@@ -12,10 +12,9 @@ float MultiTurnKnob::read() {
 
   if (angle < 0) {
     // Wrapped pot hasn't finished calibrating yet - nothing real to
-    // accumulate from. Match RV112FF::read()'s own not-ready signal
-    // rather than returning 0, which would be indistinguishable from a
-    // genuine logical position 0.
-    return -1;
+    // accumulate from, so the position holds still. isCalibrated() is
+    // how a sketch tells this apart from a knob at rest.
+    return _accumulated;
   }
 
   if (!_initialized) {

@@ -128,13 +128,9 @@ const float TURNS_PER_SWEEP_SLOW = 2.0;
 // of 1 (no scaling, matching the original single-turn behavior
 // exactly); at turnsPerSweep=2.0 it's a divisor of 4, i.e. a full
 // sweep now takes 4x the physical rotation the fast rate needs.
+// Negative positions are normal - the knob turned backward past where it
+// started - and wrap round like any other.
 float knobAngle(float accumulatedDegrees, float turnsPerSweep) {
-  // MultiTurnKnob::read()'s not-yet-calibrated sentinel is the exact
-  // value -1 (passed straight through from RV112FF before any
-  // accumulation begins) - not "any negative number," which is a
-  // perfectly normal, valid accumulated position once the knob's been
-  // turned backward past wherever calibration happened to complete.
-  if (accumulatedDegrees == -1.0f) return -1;
   float wrapped = fmodf(accumulatedDegrees / (turnsPerSweep * 2.0f), 360.0f);
   if (wrapped < 0) wrapped += 360.0f;
   return wrapped;
@@ -331,12 +327,12 @@ void loop() {
     float turnsPerSweep1 = touch1.isTouched() ? TURNS_PER_SWEEP_FAST : TURNS_PER_SWEEP_SLOW;
     float angle1 = knobAngle(knob1.read(), turnsPerSweep1);
     *freq1Ptr = angleToFrequency(angle1);
-    *gain1Ptr = pot1.isCalibrated() ? 1.0 : 0.0;
+    *gain1Ptr = knob1.isCalibrated() ? 1.0 : 0.0;
 
     float turnsPerSweep2 = touch2.isTouched() ? TURNS_PER_SWEEP_FAST : TURNS_PER_SWEEP_SLOW;
     float angle2 = knobAngle(knob2.read(), turnsPerSweep2);
     *freq2Ptr = angleToFrequency(angle2);
-    *gain2Ptr = pot2.isCalibrated() ? 1.0 : 0.0;
+    *gain2Ptr = knob2.isCalibrated() ? 1.0 : 0.0;
 
     if (++ticksSincePlot >= PLOT_EVERY_TICKS) {
       ticksSincePlot = 0;

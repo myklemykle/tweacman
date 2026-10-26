@@ -763,13 +763,12 @@ const float PITCH_OCTAVE_LIMIT = 10.0f;
 // This means the real knob's physical position at any moment is
 // meaningless on its own; only how far it's turned since the last tick
 // matters. speedKnobAnchored tracks "no baseline yet" explicitly,
-// rather than testing lastPhysicalKnobDegrees's sign for MultiTurnKnob's
-// -1 not-ready sentinel - unlike a single-turn [0,360) reading, MultiTurnKnob::read()'s
-// accumulated multi-turn position legitimately goes negative during
-// perfectly ordinary counterclockwise turns, so a negative value here
-// can't be trusted to mean "not calibrated yet" (a real bug caught on
-// the bench: turning one direction silently froze the ratio the moment
-// the accumulator crossed zero). "No baseline yet" is true at boot
+// rather than reading it off lastPhysicalKnobDegrees - unlike a
+// single-turn [0,360) reading, MultiTurnKnob::read()'s accumulated
+// multi-turn position legitimately goes negative during perfectly
+// ordinary counterclockwise turns, so no value of it can mean "none yet"
+// (a real bug caught on the bench: testing its sign silently froze the
+// ratio the moment the accumulator crossed zero). "No baseline yet" is true at boot
 // before pot1 first calibrates, and again briefly after every
 // resetVirtualKnobToNative() call (see loadFile()), which is what makes
 // native speed on every fresh sample and at boot come for free: the
@@ -3535,7 +3534,7 @@ bool knob1NeedsBaseline = true;  // and at boot, before knob1's first reading
 bool readKnob1(float &turned) {
   turned = 0.0f;
   float physicalNow = knob1.read();
-  if (physicalNow == -1.0f) return false;
+  if (!knob1.isCalibrated()) return false;
 
   if (knob1NeedsBaseline) {
     knob1Degrees = physicalNow;

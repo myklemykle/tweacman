@@ -119,6 +119,11 @@ fixed header), and Info (playback stats and the link log, folded away).
 - **Bottom tab bar: on trial.** Move it to the top if it doesn't suit.
 - **Normalize and compress recordings.** Audio recorded on the phone comes
   out too quiet.
+- **Measure the battery runtime.** The Info tab now shows the fuel gauge's
+  charge, voltage, drain rate and time left (`FuelGauge.h`); only checked
+  on USB power so far. Run on battery, playing with effects on, and note
+  the settled drain rate - estimated at 50-90mA, or 3-5 hours on a 350mAh
+  cell.
 
 ## SDResampleDemo - known issues
 

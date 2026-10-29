@@ -850,6 +850,22 @@
         <div class="label">Cache</div>
         <div class="value" id="cache">&mdash;<span class="unit">%</span></div>
       </div>
+      <div class="stat">
+        <div class="label">Battery</div>
+        <div class="value" id="battery">&mdash;<span class="unit">%</span></div>
+      </div>
+      <div class="stat">
+        <div class="label">Cell voltage</div>
+        <div class="value" id="batteryVolts">&mdash;<span class="unit">V</span></div>
+      </div>
+      <div class="stat">
+        <div class="label">Drain</div>
+        <div class="value" id="batteryRate">&mdash;<span class="unit">%/h</span></div>
+      </div>
+      <div class="stat">
+        <div class="label">Time left</div>
+        <div class="value" id="batteryLeft">&mdash;</div>
+      </div>
     </div>
     <div id="logSlotInfo">
       <details class="logPanel" id="logPanel">
@@ -948,6 +964,10 @@
   const underrunsEl = $("underruns");
   const levelEl = $("level");
   const cacheEl = $("cache");
+  const batteryEl = $("battery");
+  const batteryVoltsEl = $("batteryVolts");
+  const batteryRateEl = $("batteryRate");
+  const batteryLeftEl = $("batteryLeft");
   const fileListEl = $("fileList");
   const noticeEl = $("notice");
   const uploadPanel = $("uploadPanel");
@@ -1130,6 +1150,7 @@
       underrunsEl.classList.remove("bad");
       levelEl.textContent = "—";
       cacheEl.innerHTML = "&mdash;<span class=\"unit\">%</span>";
+      showBattery({});
       fileListEl.textContent = "";
       fileNames = [];
       rowMode = null;
@@ -2319,7 +2340,9 @@
 
   // The board sends a stats line like
   // "SPD:2.35,REQ:2.35,PIT:1.000,ECT:0.300,ECA:0.00,FLC:640,FLW:10.00,BUF:78,UND:0,RUN:1,LAT:0,
-  //  LVL:3,CACHE:100,MODE:0,HRD:1.000,WS:0.000,WE:10.000,LEN:10.000\n"
+  //  LVL:3,CACHE:100,MODE:0,HRD:1.000,WS:0.000,WE:10.000,LEN:10.000,
+  //  BAT:87.5,BV:3.912,BCR:-21.4\n"
+  // (the BAT:/BV:/BCR: battery fields only if the board's fuel gauge answers)
   // (see SDResampleDemo.ino's header comment) over the DSPS pipe once
   // Binary mode is active, twice a second.
   function handleTelemetry(line) {
@@ -2354,7 +2377,41 @@
       cacheEl.classList.toggle("quiet", parts.CACHE === "100");
     }
     if (parts.FILE !== undefined) setNowPlaying(parts.FILE);
+    if (parts.BAT !== undefined) showBattery(parts);
     tweaksFromBoard(parts);
+  }
+
+  // BAT:, BV: and BCR: come from the board's fuel gauge (see FuelGauge.h):
+  // the charge in percent, the cell's voltage, and how fast the charge is
+  // changing in percent per hour, negative while it runs down. The time
+  // left is just the one divided by the other. The gauge takes a few
+  // minutes to settle on a new rate after the load changes, and on USB
+  // power its numbers mean little. Called with {} to blank the readouts.
+  function showBattery(parts) {
+    const dash = (unit) => `&mdash;<span class="unit">${unit}</span>`;
+    if (parts.BAT === undefined) {
+      batteryEl.innerHTML = dash("%");
+      batteryVoltsEl.innerHTML = dash("V");
+      batteryRateEl.innerHTML = dash("%/h");
+      batteryLeftEl.textContent = "—";
+      batteryLeftEl.classList.remove("quiet");
+      return;
+    }
+    const percent = Number(parts.BAT);
+    const rate = Number(parts.BCR);
+    batteryEl.innerHTML = `${Math.min(100, percent).toFixed(0)}<span class="unit">%</span>`;
+    batteryEl.classList.toggle("bad", percent < 10);
+    batteryVoltsEl.innerHTML = `${Number(parts.BV).toFixed(2)}<span class="unit">V</span>`;
+    batteryRateEl.innerHTML = `${rate.toFixed(1)}<span class="unit">%/h</span>`;
+    // Below half a percent an hour the rate is mostly the gauge's noise.
+    if (rate < -0.5) {
+      const minutes = Math.round((percent / -rate) * 60);
+      batteryLeftEl.textContent = `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m`;
+      batteryLeftEl.classList.remove("quiet");
+    } else {
+      batteryLeftEl.textContent = rate > 0.5 ? "charging" : "—";
+      batteryLeftEl.classList.add("quiet");
+    }
   }
 
   // One line at a time, dispatched by prefix ahead of the plain

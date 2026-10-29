@@ -180,6 +180,10 @@
   (0 for the first row of MODES); `HRD:`, the pitch you hear (the shift
   times the speed, which is what the pitch knob sets); and `WS:`, `WE:` and
   `LEN:`, the window's start and end and the file's length, in seconds.
+  If the board's fuel gauge answers (see FuelGauge.h) there are also
+  `BAT:`, the battery's charge in percent; `BV:`, its voltage; and `BCR:`,
+  the rate the charge is changing in percent per hour, negative while
+  discharging - the page divides one by the other for the time left.
 
   The page can also drive the transport and manage the card:
     `LATCH:<name>`       load a file and latch the transport on - plays from
@@ -644,6 +648,7 @@
 #include "EchoDelay.h"
 #include "BandFilter.h"
 #include "WavList.h"  // the card's WAVs, in the order the page and the file knob share
+#include "FuelGauge.h"  // the board's MAX17048, for the battery readout
 #include <utility>  // for std::move in loadFile()
 
 // -- Speed range and knob mapping ----------------------------------------
@@ -3976,6 +3981,12 @@ unsigned long previousControlMillis = 0;
 const unsigned long STATUS_INTERVAL = 500;  // ms
 unsigned long previousStatusMillis = 0;
 
+// The battery's charge moves slowly, so the fuel gauge is read far less
+// often than the status line goes out (see FuelGauge.h).
+FuelGauge battery;
+const unsigned long BATTERY_INTERVAL = 5000;  // ms
+unsigned long previousBatteryMillis = 0;
+
 // -- loop() profiling -----------------------------------------------------
 // loop() isn't one job but about ten, each on its own schedule. The PROFILE
 // command (USB serial or BLE) prints how often each one actually did work
@@ -4235,6 +4246,8 @@ void setup() {
     pot2.setSettlingReads(0);
   }
   // ---- end RA6M5-specific ----
+
+  if (battery.begin()) battery.read();
 
   // Average four readings per wiper on the scrub knob. Its rpm() drives
   // the audio directly, and at rest its ADC noise was crossing the scrub
@@ -4645,6 +4658,10 @@ void loop() {
   t = DWT->CYCCNT;
   if (currentMillis - previousStatusMillis >= STATUS_INTERVAL) {
     previousStatusMillis = currentMillis;
+    if (currentMillis - previousBatteryMillis >= BATTERY_INTERVAL) {
+      previousBatteryMillis = currentMillis;
+      battery.read();
+    }
     float ratio = currentStep / rateFactor;
     float fillPercent = 100.0f * voices[activeVoice].ring.usedSpace() /
                         voices[activeVoice].ring.frameCapacity();
@@ -4687,7 +4704,17 @@ void loop() {
     Serial.print("% max ");
     Serial.print(100 * isrCyclesMax / cyclesPerTick);
     Serial.print("%  dropped ");
-    Serial.println(droppedTicks());
+    Serial.print(droppedTicks());
+    if (battery.present()) {
+      Serial.print("  battery ");
+      Serial.print(battery.percent, 1);
+      Serial.print("% ");
+      Serial.print(battery.volts, 3);
+      Serial.print("V ");
+      Serial.print(battery.percentPerHour, 1);
+      Serial.print("%/h");
+    }
+    Serial.println();
     isrCyclesMax = 0;
     isrCyclesSum = 0;
     isrCount = 0;
@@ -4738,6 +4765,10 @@ void loop() {
         stat += ",WS:" + String(windowStart / nativeRate, 3) +
                 ",WE:" + String(windowEnd / nativeRate, 3) +
                 ",LEN:" + String((double)fileFrames / nativeRate, 3);
+      }
+      if (battery.present()) {
+        stat += ",BAT:" + String(battery.percent, 1) + ",BV:" + String(battery.volts, 3) +
+                ",BCR:" + String(battery.percentPerHour, 1);
       }
       if (probing) {
         probeSentMillis = millis();

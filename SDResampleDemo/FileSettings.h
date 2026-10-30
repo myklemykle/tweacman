@@ -6,8 +6,9 @@
   FileSettings - each WAV's own playback settings, kept on the SD card so
   they come back when the file is picked again, and after a reboot.
 
-  One small text file per WAV, /sd/settings/<wav name>.txt, one setting per
-  line:
+  One small text file per WAV, /sd/settings/<wav name>.txt - or
+  /sd/settings/<set>/<wav name>.txt for one in a set (see WavList.h) - one
+  setting per line:
 
     speed=1.000000
     pitch=0.500000
@@ -28,8 +29,11 @@
   in step with the WAVs the same way it does the cache: renamed with the
   file, removed with it, and orphans cleared at boot.
 
-  The folder also holds current.txt, the name of the file that was cued
-  last, so the board comes back to it after a reboot.
+  The folder also holds current.txt, the path of the file that was cued
+  last, so the board comes back to it after a reboot, and set.txt, the
+  default set's own settings - just the gap a set leaves between its
+  tracks when it plays through, gap=10.000000. Each set's folder in there
+  has a set.txt of its own.
 
   Each file is written to a .tmp first and then renamed into place, so a
   power cut mid-write leaves the old settings rather than half of new ones.
@@ -67,4 +71,10 @@ struct FileSettings {
   // Which file was cued last - empty if none is recorded.
   static String loadCurrentName();
   static void saveCurrentName(const String &wavName);
+
+  // The silence a set leaves between its tracks, in seconds, when it plays
+  // through - see "Sets" in the sketch.
+  static const float DEFAULT_GAP_SECONDS;
+  static float loadGap(const String &set);
+  static void saveGap(const String &set, float seconds);
 };

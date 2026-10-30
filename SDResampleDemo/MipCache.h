@@ -21,7 +21,8 @@
   The copies halve in size at every step, so the whole ladder takes about as
   much space as the original file.
 
-  On the card: /sd/cache/<wav name>/ holds L01.raw ... L10.raw (raw 16-bit
+  On the card: /sd/cache/<wav name>/ - or /sd/cache/<set>/<wav name>/, for
+  a WAV in one of the card's sets (see WavList.h) - holds L01.raw ... L10.raw (raw 16-bit
   samples, no header - mono, or interleaved left/right for a stereo WAV) and
   info.txt, a one-line description of the WAV they were made from - its
   length, sample rate, channel count, and a hash of its first and last 4KB. This core can't read file timestamps, so content is the only way
@@ -63,7 +64,8 @@ class MipCache {
   static const uint8_t MAX_LEVELS = 10;   // copies down to 1/1024 the rate
   static const uint32_t MIN_LEVEL_SAMPLES = 64;  // a shorter copy isn't worth making
 
-  // Starts maintaining the cache for /sd/<wavName>: checks any existing
+  // Starts maintaining the cache for /sd/<wavName> (a path, if the WAV is
+  // in a set): checks any existing
   // cache still matches the WAV, discards it if not, and sets up to build
   // whatever copies are missing. Stops any build already in progress.
   void start(const String &wavName);
@@ -95,7 +97,8 @@ class MipCache {
   static void removeFor(const String &wavName);
   static void renameFor(const String &from, const String &to);
   // Removes cache folders whose WAV no longer exists - e.g. one deleted
-  // from a computer rather than through the sketch.
+  // from a computer rather than through the sketch - and the folders of
+  // sets left empty by that.
   static void removeOrphans();
 
  private:

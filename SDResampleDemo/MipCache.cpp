@@ -5,6 +5,7 @@
 #include "MipCache.h"
 
 #include "FATFileSystem.h"  // opendir()/mkdir() on the card
+#include "WavList.h"        // setOf(), for files in a set
 
 #include <cmath>
 #include <cstring>
@@ -145,38 +146,67 @@ void MipCache::removeFor(const String &wavName) {
   remove(dirFor(wavName).c_str());  // FatFs only removes an empty folder
 }
 
+// A file in a set has its cache folder inside a folder for the set, which
+// has to exist before the file's can be made.
+static void makeDirsFor(const String &wavName) {
+  mkdir("/sd/cache", 0777);  // fails harmlessly when it already exists
+  String set = setOf(wavName);
+  if (set.length()) mkdir(("/sd/cache/" + set).c_str(), 0777);
+}
+
 void MipCache::renameFor(const String &from, const String &to) {
   // A change of case alone is the same folder as far as FAT is concerned;
   // anything else must not land on top of a stale cache for the new name.
   if (!to.equalsIgnoreCase(from)) removeFor(to);
+  makeDirsFor(to);
   if (rename(dirFor(from).c_str(), dirFor(to).c_str()) != 0) {
     removeFor(from);  // couldn't move it, so don't leave it orphaned - it gets rebuilt
   }
 }
 
-void MipCache::removeOrphans() {
+// Removes the cache folders in /sd/cache/<set> (or /sd/cache itself, for
+// the root's files, set "") whose WAV is gone. The root's pass also lists
+// the sets' folders it finds, in setFolders, to be gone through next.
+static void removeOrphansIn(const String &set, std::vector<String> *setFolders) {
   // Collected first and removed after, rather than deleting while the
   // directory is still being read.
   const int BATCH = 16;
+  String folder = set.length() ? "/sd/cache/" + set : String("/sd/cache");
   while (true) {
     String orphans[BATCH];
     int found = 0;
-    DIR *dir = opendir("/sd/cache");
+    DIR *dir = opendir(folder.c_str());
     if (!dir) return;
     struct dirent *ent;
     while (found < BATCH && (ent = readdir(dir)) != nullptr) {
       if (ent->d_type != DT_DIR) continue;
       String name(ent->d_name);
       if (name == "." || name == "..") continue;
-      if (!exists("/sd/" + name)) orphans[found++] = name;
+      // In the root's pass, a folder not named for a WAV is a set's.
+      if (!isWavName(name)) {
+        if (setFolders) setFolders->push_back(name);
+        continue;
+      }
+      String wavName = pathInSet(set, name);
+      if (!exists("/sd/" + wavName)) orphans[found++] = wavName;
     }
     closedir(dir);
+    if (setFolders && found == BATCH) setFolders->clear();  // listed again next time round
     for (int i = 0; i < found; i++) {
       Serial.print("Cache: removing orphaned copies of ");
       Serial.println(orphans[i]);
-      removeFor(orphans[i]);
+      MipCache::removeFor(orphans[i]);
     }
     if (found < BATCH) return;
+  }
+}
+
+void MipCache::removeOrphans() {
+  std::vector<String> sets;
+  removeOrphansIn("", &sets);
+  for (const String &set : sets) {
+    removeOrphansIn(set, nullptr);
+    remove(("/sd/cache/" + set).c_str());  // gone too once it's empty - FatFs won't remove it otherwise
   }
 }
 
@@ -209,7 +239,7 @@ void MipCache::start(const String &wavName) {
            (unsigned long)fingerprint(wav));
   wav.close();
 
-  mkdir("/sd/cache", 0777);         // fails harmlessly when it already exists
+  makeDirsFor(wavName);
   mkdir(dirFor(wavName).c_str(), 0777);
 
   String infoPath = dirFor(wavName) + "/info.txt";

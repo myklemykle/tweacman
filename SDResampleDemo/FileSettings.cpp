@@ -5,12 +5,16 @@
 #include "FileSettings.h"
 
 #include "FATFileSystem.h"  // opendir()/mkdir() on the card
+#include "WavList.h"        // setOf(), for files in a set
 
 #include <cmath>
 
 static const char *const SETTINGS_DIR = "/sd/settings";
 static const char *const SETTINGS_SUFFIX = ".txt";
 static const char *const CURRENT_PATH = "/sd/settings/current.txt";
+static const char *const SET_LEAF = "set.txt";
+
+const float FileSettings::DEFAULT_GAP_SECONDS = 10.0f;
 
 static String pathFor(const String &wavName) {
   return String(SETTINGS_DIR) + "/" + wavName + SETTINGS_SUFFIX;
@@ -23,9 +27,16 @@ static bool exists(const String &path) {
   return true;
 }
 
+// The folder for a set's settings, "" being the root's.
+static String folderFor(const String &set) {
+  return set.length() ? String(SETTINGS_DIR) + "/" + set : String(SETTINGS_DIR);
+}
+
 // Writes `text` to `path` through a .tmp file - see the header comment.
-static bool writeReplacing(const String &path, const String &text) {
+// `set` is the set it belongs to, whose folder may need making first.
+static bool writeReplacing(const String &path, const String &text, const String &set = "") {
   mkdir(SETTINGS_DIR, 0777);  // fails harmlessly when it already exists
+  if (set.length()) mkdir(folderFor(set).c_str(), 0777);
   String temp = path + ".tmp";
   FILE *f = fopen(temp.c_str(), "w");
   if (!f) return false;
@@ -96,7 +107,7 @@ bool FileSettings::save(const String &wavName) const {
                 "echo_amount=" + String(echoAmount, 6) + "\n" +
                 "filter_centre=" + String(filterCentre, 6) + "\n" +
                 "filter_width=" + String(filterWidth, 6) + "\n";
-  return writeReplacing(pathFor(wavName), text);
+  return writeReplacing(pathFor(wavName), text, setOf(wavName));
 }
 
 void FileSettings::removeFor(const String &wavName) {
@@ -106,10 +117,18 @@ void FileSettings::removeFor(const String &wavName) {
 void FileSettings::renameFor(const String &from, const String &to) {
   // A change of case alone is the same file as far as FAT is concerned.
   if (!to.equalsIgnoreCase(from)) removeFor(to);
+  String set = setOf(to);
+  if (set.length()) {
+    mkdir(SETTINGS_DIR, 0777);
+    mkdir(folderFor(set).c_str(), 0777);
+  }
   rename(pathFor(from).c_str(), pathFor(to).c_str());
 }
 
-void FileSettings::removeOrphans() {
+// Removes the settings in one set's folder (the root's, for set "") whose
+// WAV is gone. The root's pass also lists the sets' folders it finds, in
+// setFolders, to be gone through next - the same scheme as MipCache's.
+static void removeOrphansIn(const String &set, std::vector<String> *setFolders) {
   // Collected first and removed after, rather than deleting while the
   // folder is still being read - same as MipCache::removeOrphans().
   const int BATCH = 16;
@@ -117,32 +136,54 @@ void FileSettings::removeOrphans() {
   while (true) {
     String orphans[BATCH];
     int found = 0;
-    DIR *dir = opendir(SETTINGS_DIR);
+    DIR *dir = opendir(folderFor(set).c_str());
     if (!dir) return;
     struct dirent *ent;
     while (found < BATCH && (ent = readdir(dir)) != nullptr) {
-      if (ent->d_type != DT_REG) continue;
       String name(ent->d_name);
+      if (ent->d_type == DT_DIR) {
+        if (setFolders && name != "." && name != "..") setFolders->push_back(name);
+        continue;
+      }
+      if (ent->d_type != DT_REG) continue;
       String lower = name;
       lower.toLowerCase();
-      if (!lower.endsWith(suffix)) continue;  // current.txt, or a stray .tmp
-      String wavName = name.substring(0, name.length() - strlen(SETTINGS_SUFFIX));
+      if (!lower.endsWith(suffix)) continue;  // current.txt, set.txt, or a stray .tmp
+      String wavName = pathInSet(set, name.substring(0, name.length() - strlen(SETTINGS_SUFFIX)));
       if (!exists("/sd/" + wavName)) orphans[found++] = wavName;
     }
     closedir(dir);
+    if (setFolders && found == BATCH) setFolders->clear();  // listed again next time round
     for (int i = 0; i < found; i++) {
       Serial.print("Settings: removing orphaned settings for ");
       Serial.println(orphans[i]);
-      removeFor(orphans[i]);
+      FileSettings::removeFor(orphans[i]);
     }
     if (found < BATCH) return;
+  }
+}
+
+void FileSettings::removeOrphans() {
+  std::vector<String> sets;
+  removeOrphansIn("", &sets);
+  for (const String &set : sets) {
+    removeOrphansIn(set, nullptr);
+    // A set whose folder is gone from the card altogether loses its gap too,
+    // and then its folder here, now empty.
+    DIR *dir = opendir(("/sd/" + set).c_str());
+    if (dir) {
+      closedir(dir);
+    } else {
+      remove((folderFor(set) + "/" + SET_LEAF).c_str());
+      remove(folderFor(set).c_str());
+    }
   }
 }
 
 String FileSettings::loadCurrentName() {
   FILE *f = fopen(CURRENT_PATH, "r");
   if (!f) return "";
-  char line[128];
+  char line[320];  // a path: a set's name, and a long filename in it
   String name = fgets(line, sizeof(line), f) ? String(line) : String();
   fclose(f);
   name.trim();
@@ -151,4 +192,25 @@ String FileSettings::loadCurrentName() {
 
 void FileSettings::saveCurrentName(const String &wavName) {
   writeReplacing(CURRENT_PATH, wavName + "\n");
+}
+
+float FileSettings::loadGap(const String &set) {
+  float gap = DEFAULT_GAP_SECONDS;
+  FILE *f = fopen((folderFor(set) + "/" + SET_LEAF).c_str(), "r");
+  if (!f) return gap;
+  char line[64];
+  while (fgets(line, sizeof(line), f)) {
+    String text(line);
+    text.trim();
+    if (text.startsWith("gap=")) {
+      float value = text.substring(4).toFloat();
+      if (value >= 0.0f) gap = value;
+    }
+  }
+  fclose(f);
+  return gap;
+}
+
+void FileSettings::saveGap(const String &set, float seconds) {
+  writeReplacing(folderFor(set) + "/" + SET_LEAF, "gap=" + String(seconds, 6) + "\n", set);
 }

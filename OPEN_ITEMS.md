@@ -2,7 +2,7 @@
 
 Things discussed but not yet done. Updated alongside the commits that finish
 or add items, so this should match the code on `main`; last reviewed
-2026-10-16. Roughly grouped, and within each group roughly in the order
+2026-10-30. Roughly grouped, and within each group roughly in the order
 they'd be worth doing.
 
 Design proposals large enough to have their own document are linked rather
@@ -178,6 +178,26 @@ fixed header), and Info (playback stats and the link log, folded away).
   turns). SDResampleDemo saves it; AudioKnobsDemo, AudioKnobsWebBLEDemo,
   NoiseMeter and the library examples don't, so their knobs need two turns
   after every power-on. Each could save it the same way if wanted.
+- **Playback cursor stranded outside its buffer.** The "This shouldn't
+  happen; please report it" warning came up twice on 2026-10-30, both times
+  just after moving the window (window mode) on a long, latched stereo
+  file - HALLOWEEN CLIPS/046, 13s, at 201s into a session. It recovers by
+  reloading at the cursor; the cause, presumably something in
+  `moveVoiceWindow()`'s re-anchoring, isn't found yet.
+- **BLE link going quiet.** Twice on 2026-10-30 the phone lost the board
+  mid-use while the firmware ran on; only a reset brought it back, and the
+  board logged nothing from the module (no Binary mode exit, no restart).
+  The file list was found that day to be outrunning the module - long
+  names at 2.5KB/s against its ~1.8KB/s - and dropping bytes, and is now
+  paced by length; whether that was also behind the hangs is unknown.
+  If it happens again: before resetting, have the sketch poke the module
+  and see if it answers at all.
+- **A byte lost on the way in.** One gap command arrived as
+  `GP:WERNER|5` ("Unrecognized BLE command"). Inbound writes are well
+  under the module's rate, so it isn't the same overrun; once so far.
+- **Prepare's count can step back.** While a set is prepared, `PREP:n/t`
+  goes back by one when the file being built is interrupted (cueing it
+  requeues it). Cosmetic.
 - **Cache-build stalls.** While `MipCache` is building, a single build step
   can stall `loop()` for up to ~35ms on an SD write - over this project's
   10ms limit for control latency, so the knobs and pads feel it during a

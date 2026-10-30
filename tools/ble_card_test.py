@@ -263,8 +263,8 @@ async def main():
         await board.wait_cache_ready()
 
         log("--- rename it (copies should move, not rebuild) ---")
-        await board.send("REN:CARDTEST.WAV/CARDTST2.WAV")
-        await board.expect("RENAMED:CARDTEST.WAV/CARDTST2.WAV")
+        await board.send("REN:CARDTEST.WAV|CARDTST2.WAV")
+        await board.expect("RENAMED:CARDTEST.WAV|CARDTST2.WAV")
         await board.expect("PLAYING:CARDTST2.WAV")
         await board.wait_cache_ready()
 
@@ -273,12 +273,14 @@ async def main():
         await board.expect("DELETED:CARDTST2.WAV")
         await board.expect("PLAYING:")
 
-        await board.send("LIST")
+        # LIST:/ - the card's root, where the test files went (see "Sets" in
+        # the sketch).
+        await board.send("LIST:/")
         names = []
         await board.expect("FILES:BEGIN")
         while True:
             line = await board.expect("")
-            if line == "FILES:END":
+            if line.startswith("FILES:END"):
                 break
             names.append(line)
         leftovers = [n for n in names if n.upper() in ("CARDTEST.WAV", "CARDTST2.WAV")]

@@ -635,6 +635,129 @@
     color: var(--text-dim);
   }
 
+  /* -- sets ------------------------------------------------------------
+     The card's folders are its sets (see WavList.h in the sketch). The set
+     tab plays one through, for performing; the files tab manages one. Both
+     look at the same set, picked with either tab's selector. */
+
+  .setPicker {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .setPicker .eyebrow { flex-shrink: 0; }
+  .setSelect {
+    flex: 1;
+    min-width: 0;
+    min-height: 44px;
+    font-family: "Public Sans", sans-serif;
+    font-size: 16px;  /* 16px or more stops iOS zooming the page on focus */
+    color: var(--text);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 10px;
+  }
+
+  #tab-set { overflow: hidden; padding-bottom: 0; }
+  .setNow {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 4px 12px;
+    align-items: baseline;
+  }
+  .setNow.playing { border-color: var(--good); border-left: 4px solid var(--good); }
+  .setNow.gap { border-color: var(--accent); border-left: 4px solid var(--accent); }
+  .setNowLabel {
+    font-family: "Oswald", "Arial Narrow", sans-serif;
+    font-size: 0.8rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+  .setNow.playing .setNowLabel { color: var(--good); }
+  .setNow.gap .setNowLabel { color: var(--accent-strong); }
+  .setNowTime {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 1.4rem;
+    font-variant-numeric: tabular-nums;
+    grid-row: span 2;
+    align-self: center;
+  }
+  .setNowName {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 0.9rem;
+    overflow-wrap: anywhere;
+  }
+
+  .setTransport {
+    display: grid;
+    grid-template-columns: 1fr 1.6fr 1fr;
+    gap: 8px;
+  }
+  .setBtn {
+    min-height: 56px;
+    background: var(--surface-2);
+    color: var(--text);
+    font-size: 0.95rem;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+  }
+  .setBtn svg { width: 20px; height: 20px; }
+  .setBtn:active:not(:disabled) { background: var(--surface); }
+  .setBtn.primary {
+    background: var(--good);
+    border-color: var(--good);
+    color: var(--surface-2);
+  }
+  .setBtn.primary.stops { background: var(--bad); border-color: var(--bad); }
+
+  .setOptions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .gapField {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.85rem;
+    color: var(--text-dim);
+  }
+  .gapField input {
+    width: 5.5em;
+    min-height: 44px;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 16px;
+    color: var(--text);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 8px;
+  }
+  .setOptions .hint { flex: 1; min-width: 8em; }
+
+  .trackNumber {
+    flex-shrink: 0;
+    width: 2.6em;
+    text-align: right;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+  }
+  .fileItem.playing .trackNumber { color: var(--surface-2); }
+  .setList .fileName { padding-left: 8px; }
+  .setList:empty::after { content: "No tracks in this set."; }
+
   /* -- upload panel --------------------------------------------------- */
 
   .uploadPanel {
@@ -788,10 +911,41 @@
     </div>
   </main>
 
+  <!-- Set: one of the card's sets, played through for performing - each
+       track once, with a gap between. See "Sets" in the sketch. -->
+  <main class="tabPanel" id="tab-set" hidden>
+    <div class="setPicker">
+      <label class="eyebrow" for="setSelect">Set</label>
+      <select class="setSelect" id="setSelect"></select>
+    </div>
+    <div class="setNow" id="setNow">
+      <div class="setNowLabel" id="setNowLabel">Setlist off</div>
+      <div class="setNowTime" id="setNowTime"></div>
+      <div class="setNowName" id="setNowName"></div>
+    </div>
+    <div class="setTransport">
+      <button class="setBtn" id="setPrevBtn" aria-label="Previous track" disabled></button>
+      <button class="setBtn primary" id="setPlayBtn" disabled></button>
+      <button class="setBtn" id="setNextBtn" aria-label="Next track" disabled></button>
+    </div>
+    <div class="setOptions">
+      <label class="gapField">Gap
+        <input type="number" id="gapInput" min="0" max="600" step="0.5" inputmode="decimal" disabled> s</label>
+      <button class="smallBtn" id="prepBtn" disabled>Prepare</button>
+      <span class="hint" id="prepStatus"></span>
+    </div>
+    <p class="hint">The setlist plays each track once. Whenever the deck is stopped and you're hands-off, it counts down the gap and starts the next; while you're playing, it stands by. Latch a track (&#9654; up top, or the pads) and it loops until you stop it. Tap a track to start the setlist there.</p>
+    <ol class="fileList setList" id="setList"></ol>
+  </main>
+
   <!-- Files: what's on the card. -->
   <main class="tabPanel" id="tab-files" hidden>
+    <div class="setPicker">
+      <label class="eyebrow" for="filesSetSelect">Set</label>
+      <select class="setSelect" id="filesSetSelect"></select>
+    </div>
     <div class="filesHeader">
-      <div class="eyebrow">Files on card</div>
+      <div class="eyebrow">Files in set</div>
       <div class="filesButtons">
         <button class="smallBtn" id="uploadBtn" disabled>Upload</button>
         <button class="smallBtn recordBtn" id="recordBtn" hidden disabled>Hold to record</button>
@@ -883,6 +1037,7 @@
 
   <nav class="tabBar" id="tabBar" hidden>
     <button data-tab="tweaks" aria-selected="true">Tweaks</button>
+    <button data-tab="set" aria-selected="false">Set</button>
     <button data-tab="files" aria-selected="false">Files</button>
     <button data-tab="info" aria-selected="false">Info</button>
   </nav>
@@ -969,6 +1124,19 @@
   const batteryRateEl = $("batteryRate");
   const batteryLeftEl = $("batteryLeft");
   const fileListEl = $("fileList");
+  const setSelect = $("setSelect");
+  const filesSetSelect = $("filesSetSelect");
+  const setNowEl = $("setNow");
+  const setNowLabel = $("setNowLabel");
+  const setNowTime = $("setNowTime");
+  const setNowName = $("setNowName");
+  const setPrevBtn = $("setPrevBtn");
+  const setPlayBtn = $("setPlayBtn");
+  const setNextBtn = $("setNextBtn");
+  const gapInput = $("gapInput");
+  const prepBtn = $("prepBtn");
+  const prepStatus = $("prepStatus");
+  const setListEl = $("setList");
   const noticeEl = $("notice");
   const uploadPanel = $("uploadPanel");
   const uploadPrompt = $("uploadPrompt");
@@ -1039,9 +1207,28 @@
   let heardFromBoard = false;  // any line at all on DSPS TX since the last openLink()
   let regranting = false;      // hanging up on purpose mid-handshake - see establishLink()
   let connected = false;
-  let currentFile = null;
+  let currentFile = null;  // a path: <set>/<name>, or just <name> for the card's root
   let latched = false;
-  let fileNames = [];
+  let fileNames = [];      // the names in viewSet, in the board's order
+
+  // The card's sets - see WavList.h in the sketch. A set is named as the
+  // board names it: its folder, or "/" for the WAVs at the card's root.
+  // Each has its gap between tracks, in seconds.
+  let sets = [];           // [{ name, gap }], in the board's order
+  let viewSet = null;      // the set both tabs are showing
+  const setOfPath = (path) => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "/");
+  const leafOfPath = (path) => path.slice(path.lastIndexOf("/") + 1);
+  const pathIn = (set, name) => (!set || set === "/" ? name : `${set}/${name}`);
+  const setLabel = (set) => (set === "/" ? "Card root" : set);
+
+  // From the stats line: whether a set is playing through, the seconds left
+  // in its gap (null when not in one), how far preparing a set has got
+  // ([done, total], or null), and where the cursor is in the window.
+  let setlistOn = false;
+  let looping = false;   // latched by hand in the setlist: loops until stopped, then the gap
+  let gapLeft = null;
+  let prepProgress = null;
+  let playhead = null;     // { cur, ws, we, spd } in seconds, and the speed
 
   // The upload in progress, if any - see runUpload(). While it is set the
   // board is reading raw file data rather than commands, so every other
@@ -1068,7 +1255,7 @@
   function renderStatus() {
     const showTrack = linkState === "ready" && currentFile;
     statusTrack.hidden = !showTrack;
-    statusTrack.textContent = showTrack ? currentFile : "";
+    statusTrack.textContent = showTrack ? leafOfPath(currentFile) : "";
     statusState.classList.toggle("playing", !!showTrack && running);
     if (showTrack) statusState.textContent = running ? ": playing" : ": stopped";
     else if (linkState === "ready") statusState.textContent = "no track";
@@ -1086,11 +1273,11 @@
 
   // -- tabs -----------------------------------------------------------------
   //
-  // Three tabs, one showing at a time, each scrolling by itself. Which one
+  // Four tabs, one showing at a time, each scrolling by itself. Which one
   // was up is remembered for next time (localStorage can be unavailable in
   // private browsing, hence the try).
   const TAB_KEY = "wav-remote-tab";
-  const TABS = ["tweaks", "files", "info"];
+  const TABS = ["tweaks", "set", "files", "info"];
   let currentTab = "tweaks";
   try {
     const saved = localStorage.getItem(TAB_KEY);
@@ -1131,6 +1318,8 @@
     transportBtn.setAttribute("aria-label", latched ? "Stop" : "Play");
     updateFilePlayButtons();
     for (const btn of fileListEl.querySelectorAll("button")) btn.disabled = !ready;
+    for (const select of [setSelect, filesSetSelect]) select.disabled = !ready;
+    updateSetControls();
     updateTweakControls(ready);
   }
 
@@ -1153,6 +1342,14 @@
       showBattery({});
       fileListEl.textContent = "";
       fileNames = [];
+      sets = [];
+      viewSet = null;
+      setlistOn = false;
+      gapLeft = null;
+      prepProgress = null;
+      playhead = null;
+      renderSetPickers();
+      renderSetList();
       rowMode = null;
       currentFile = null;
       latched = false;
@@ -1202,20 +1399,37 @@
   // handleTelemetry()'s one-line-at-a-time key:value parsing.
   let collectingFiles = false;
   let fileListBuffer = [];
+  let collectingSets = false;
+  let setsBuffer = [];
 
   // A safety net. establishLink() only reports a connection once the board
   // has been heard from through the pipe, so LIST should always be
   // answered - but if it isn't, retry a couple of times, then reconnect,
   // rather than hanging silently forever.
   let listRetryTimer = null;
+  let listShortRetries = 0;  // lists that came through short, asked for again in a row
   let listRetryCount = 0;
   const LIST_RETRY_TIMEOUT_MS = 1500;  // a working board answers near-instantly
   const LIST_MAX_RETRIES = 2;
 
+  // LIST brings the sets, and the tracks of the set the board's file is in;
+  // LIST:<set> the sets and that set's tracks - see startFileList() in the
+  // sketch. Refresh asks again for whichever set is in view.
   function requestFileList() {
     if (upload) return;  // the board is taking file data, not commands
     listRetryCount = 0;
     sendListWithRetry();
+  }
+
+  function requestSet(set) {
+    if (upload) return;
+    viewSet = set;
+    fileNames = [];
+    rowMode = null;
+    if (!prepProgress) prepStatus.textContent = "";
+    renderFileList();
+    renderSetPickers();
+    sendCommand("LIST:" + set);
   }
 
   function sendListWithRetry() {
@@ -1277,17 +1491,18 @@
           makeButton("smallBtn", "Cancel", () => setRowMode(null)),
           makeButton("smallBtn danger", "Delete", () => {
             setRowMode(null);
-            sendCommand("DEL:" + name);
+            sendCommand("DEL:" + pathIn(viewSet, name));
           })
         );
         li.append(prompt, buttons);
       } else {
-        li.classList.toggle("playing", sameName(name, currentFile));
+        const path = pathIn(viewSet, name);
+        li.classList.toggle("playing", sameName(path, currentFile));
         li.append(
-          makeButton("fileName", name, () => sendCommand("PLAY:" + name)),
+          makeButton("fileName", name, () => sendCommand("PLAY:" + path)),
           makeButton("iconBtn play", `Play and latch ${name}`, () => {
             // On the file that's playing, this is the stop button.
-            sendCommand(latched && sameName(name, currentFile) ? "STOP" : "LATCH:" + name);
+            sendCommand(latched && sameName(path, currentFile) ? "STOP" : "LATCH:" + path);
           }, ICONS.play),
           makeButton("iconBtn", `Rename ${name}`, () => setRowMode({ name, kind: "rename" }), ICONS.rename),
           makeButton("iconBtn", `Delete ${name}`, () => setRowMode({ name, kind: "delete" }), ICONS.delete)
@@ -1295,6 +1510,7 @@
       }
       fileListEl.appendChild(li);
     }
+    renderSetList();
     updateControls();
 
     // Focus the rename box once it is in the page, selecting the name but
@@ -1313,7 +1529,7 @@
       const btn = li.querySelector(".iconBtn.play");
       if (!btn) continue;
       const name = li.dataset.name;
-      const stops = latched && sameName(name, currentFile);
+      const stops = latched && sameName(pathIn(viewSet, name), currentFile);
       if (btn.dataset.stops === String(stops)) continue;
       btn.dataset.stops = String(stops);
       btn.innerHTML = stops ? ICONS.stop : ICONS.play;
@@ -1344,7 +1560,7 @@
         notice(`${newName} is already on the card.`, true);
         return;
       }
-      sendCommand(`REN:${name}/${newName}`);
+      sendCommand(`REN:${pathIn(viewSet, name)}|${pathIn(viewSet, newName)}`);
     };
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter") save();
@@ -1369,21 +1585,31 @@
   // Makes a name the board will accept: the characters FAT forbids become
   // "_", and it must end in .wav - the board only lists .wav files, so a
   // file saved under any other name would vanish from this page. Mirrors
-  // isValidWavName() in the sketch.
+  // isValidWavName() in the sketch. A name within a set - the set is added
+  // separately.
   function cleanWavName(raw) {
     let name = raw.trim().replace(/[\/\\:*?"<>|\x00-\x1f]/g, "_");
     if (!name || name === ".wav") return "";
     if (!/\.wav$/i.test(name)) name += ".wav";
-    if (name.length > 64) name = name.slice(0, 60) + name.slice(-4);
+    if (name.length > 200) name = name.slice(0, 196) + name.slice(-4);
     return name;
   }
 
-  function setNowPlaying(name) {
-    currentFile = name === "NONE" ? null : name;
+  // PLAYING:<path>. A file in another set than the last one brings that set
+  // into view - the board moved there, so the page follows.
+  function setNowPlaying(path) {
+    const previous = currentFile;
+    currentFile = path === "NONE" ? null : path;
     renderStatus();
-    for (const li of fileListEl.children) {
-      li.classList.toggle("playing", !rowMode && sameName(li.dataset.name, currentFile));
+    if (currentFile && viewSet !== null &&
+        (!previous || setOfPath(previous) !== setOfPath(currentFile)) &&
+        setOfPath(currentFile) !== viewSet) {
+      requestSet(setOfPath(currentFile));
     }
+    for (const li of fileListEl.children) {
+      li.classList.toggle("playing", !rowMode && sameName(pathIn(viewSet, li.dataset.name), currentFile));
+    }
+    renderSetList();
     updateControls();
   }
 
@@ -1402,6 +1628,184 @@
     } else {
       notice(`${filename}: ${reason}`, true);
     }
+  }
+
+  // -- sets ---------------------------------------------------------------
+  //
+  // The set tab plays one of the card's sets through, for performing: each
+  // track once, then the set's gap, then the next - see "Sets" in the
+  // sketch. It and the files tab share the set in view.
+
+  const SET_ICONS = {
+    prev: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 5h2v14H6zM20 5v14L9 12z"/></svg>',
+    next: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16 5h2v14h-2zM4 5v14l11-7z"/></svg>',
+  };
+  setPrevBtn.innerHTML = SET_ICONS.prev + "Prev";
+  setNextBtn.innerHTML = "Next" + SET_ICONS.next;
+
+  function renderSetPickers() {
+    for (const select of [setSelect, filesSetSelect]) {
+      select.textContent = "";
+      const names = sets.map((set) => set.name);
+      // The set in view, even before the list of sets is in.
+      if (viewSet !== null && !names.includes(viewSet)) names.push(viewSet);
+      for (const name of names) {
+        select.append(new Option(setLabel(name), name, false, name === viewSet));
+      }
+    }
+    renderGap();
+  }
+
+  // The gap shown is the set in view's - unless it's being typed into.
+  function renderGap() {
+    if (document.activeElement === gapInput) return;
+    const set = sets.find((x) => x.name === viewSet);
+    gapInput.value = set ? String(set.gap) : "";
+  }
+
+  function onSetPicked(event) {
+    const set = event.target.value;
+    if (set !== viewSet) requestSet(set);
+  }
+
+  function onGapChanged() {
+    if (gapInput.value.trim() === "") return;  // still being typed
+    const seconds = Number(gapInput.value);
+    const set = sets.find((x) => x.name === viewSet);
+    if (!set || !Number.isFinite(seconds) || seconds < 0) {
+      renderGap();
+      return;
+    }
+    const gap = Math.min(600, seconds);
+    set.gap = gap;
+    // Once the tapping stops: each GAP: is a write to the board's card. The
+    // board's stats line goes on reporting the old gap meanwhile, and for a
+    // moment after - it's not let back over this one until then.
+    clearTimeout(gapSendTimer);
+    const name = viewSet;
+    gapSendTimer = setTimeout(() => sendCommand(`GAP:${name}|${gap}`), GAP_SEND_DELAY_MS);
+    gapTypedUntil = performance.now() + GAP_SEND_DELAY_MS + GAP_ECHO_MS;
+  }
+  const GAP_SEND_DELAY_MS = 700;
+  const GAP_ECHO_MS = 2000;  // for the board to save it and say so
+  let gapSendTimer = null;
+  let gapTypedUntil = 0;  // performance.now() until which the board's GAP: is ignored
+
+  // Where the playing track is in the set in view: 0-based, or -1.
+  function currentTrackIndex() {
+    if (!currentFile || viewSet === null || setOfPath(currentFile) !== viewSet) return -1;
+    return fileNames.findIndex((n) => sameName(n, leafOfPath(currentFile)));
+  }
+
+  function renderSetList() {
+    setListEl.textContent = "";
+    const playingAt = currentTrackIndex();
+    fileNames.forEach((name, i) => {
+      const li = document.createElement("li");
+      li.className = "fileItem";
+      li.classList.toggle("playing", i === playingAt);
+      const number = document.createElement("span");
+      number.className = "trackNumber";
+      number.textContent = String(i + 1);
+      li.append(number, makeButton("fileName", name, () => sendCommand("SETPLAY:" + pathIn(viewSet, name))));
+      setListEl.appendChild(li);
+    });
+    renderSetNow();
+  }
+
+  function formatTime(seconds) {
+    const whole = Math.max(0, Math.ceil(seconds));
+    return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
+  }
+
+  // The panel at the top: what the setlist and the deck are doing, the
+  // track, and its time - the time left at the speed it's playing, or the gap
+  // counting down.
+  function renderSetNow() {
+    const at = currentTrackIndex();
+    const position = at >= 0 ? `Track ${at + 1} of ${fileNames.length}` : "";
+    const inGap = setlistOn && gapLeft !== null;
+    setNowEl.classList.toggle("playing", setlistOn && running && !inGap);
+    setNowEl.classList.toggle("gap", inGap);
+    if (inGap) {
+      const next = at >= 0 ? fileNames[at + 1] : null;
+      setNowLabel.textContent = next ? `Setlist counting down · then track ${at + 2}` : "Setlist counting down · then the end";
+      setNowName.textContent = next || (currentFile ? leafOfPath(currentFile) : "");
+      setNowTime.textContent = gapLeft.toFixed(1);
+      return;
+    }
+    if (setlistOn) {
+      // Not counting down means you have the deck: it's playing, or a pad or
+      // scrub is in use, so the setlist stands by.
+      const deck = looping ? "Deck looping" : running ? "Deck playing" : "Setlist standing by";
+      setNowLabel.textContent = [position, deck].filter(Boolean).join(" · ");
+    } else {
+      setNowLabel.textContent = currentFile ? "Setlist off · track cued" : "Setlist off";
+    }
+    setNowName.textContent = currentFile ? leafOfPath(currentFile) : "";
+    // Time left: what's between the cursor and the window's far edge, at the
+    // speed it's going.
+    let time = "";
+    if (looping) {
+      time = "";  // it loops - there's no end to count to
+    } else if (playhead && running && Math.abs(playhead.spd) > 0.001) {
+      const ahead = playhead.spd > 0 ? playhead.we - playhead.cur : playhead.cur - playhead.ws;
+      time = formatTime(ahead / Math.abs(playhead.spd));
+    } else if (playhead) {
+      time = formatTime(playhead.we - playhead.ws);
+    }
+    setNowTime.textContent = time;
+  }
+
+  // SET:, GAP:, GL:, PREP: and CUR: from the stats line - see the sketch's
+  // header comment.
+  function setFromBoard(parts) {
+    setlistOn = parts.SET === "1";
+    looping = parts.HLD === "1";
+    gapLeft = parts.GL !== undefined ? Number(parts.GL) : null;
+    if (parts.GAP !== undefined && currentFile && performance.now() >= gapTypedUntil) {
+      const set = sets.find((x) => x.name === setOfPath(currentFile));
+      if (set) set.gap = Number(parts.GAP);
+      renderGap();
+    }
+    if (parts.PREP !== undefined) {
+      const [done, total] = parts.PREP.split("/").map(Number);
+      prepProgress = [done, total];
+      prepStatus.textContent = `Preparing ${Math.max(1, done)} of ${total}…`;
+    } else if (prepProgress) {
+      prepProgress = null;
+      prepStatus.textContent = "Set prepared.";
+    }
+    playhead = parts.CUR === undefined ? null : {
+      cur: Number(parts.CUR), ws: Number(parts.WS), we: Number(parts.WE), spd: Number(parts.SPD),
+    };
+    renderSetNow();
+    updateSetControls();
+  }
+
+  function updateSetControls() {
+    const ready = connected && !upload && !diskMode;
+    const hasTracks = fileNames.length > 0;
+    setPlayBtn.disabled = !ready || (!setlistOn && !hasTracks);
+    setPlayBtn.classList.toggle("stops", setlistOn);
+    setPlayBtn.innerHTML = setlistOn ? ICONS.stop + "Stop setlist" : ICONS.play + "Start setlist";
+    setPrevBtn.disabled = !ready || !currentFile;
+    setNextBtn.disabled = !ready || !currentFile;
+    gapInput.disabled = !ready || viewSet === null;
+    prepBtn.disabled = !ready || !hasTracks || !!prepProgress;
+    for (const btn of setListEl.querySelectorAll("button")) btn.disabled = !ready;
+  }
+
+  // Start setlist: from the cued track, if it's in the set in view, otherwise from
+  // the top.
+  function onSetPlay() {
+    if (setlistOn) {
+      sendCommand("SETSTOP");
+      return;
+    }
+    const at = currentTrackIndex();
+    const name = fileNames[at >= 0 ? at : 0];
+    if (name) sendCommand("SETPLAY:" + pathIn(viewSet, name));
   }
 
   // -- upload -------------------------------------------------------------
@@ -1438,14 +1842,14 @@
     const existing = fileNames.find((n) => sameName(n, name));
     if (existing) {
       showUploadPanel({
-        prompt: [code(existing), " is already on the card. Replace it?"],
+        prompt: [code(existing), " is already in this set. Replace it?"],
         buttons: [
           makeButton("smallBtn", "Cancel", hideUploadPanel),
-          makeButton("smallBtn danger", "Replace", () => runUpload(file, existing)),
+          makeButton("smallBtn danger", "Replace", () => runUpload(file, pathIn(viewSet, existing))),
         ],
       });
     } else {
-      runUpload(file, name);
+      runUpload(file, pathIn(viewSet, name));
     }
   }
 
@@ -1852,7 +2256,7 @@
     stopTakePlayback();
     recordPanel.hidden = true;
     const saving = take;
-    if (await runUpload(saving.wav, name)) {
+    if (await runUpload(saving.wav, pathIn(viewSet, name))) {
       if (take === saving) take = null;
     } else if (take === saving) {
       showTake();
@@ -2378,6 +2782,7 @@
     }
     if (parts.FILE !== undefined) setNowPlaying(parts.FILE);
     if (parts.BAT !== undefined) showBattery(parts);
+    if (parts.SET !== undefined) setFromBoard(parts);
     tweaksFromBoard(parts);
   }
 
@@ -2436,14 +2841,44 @@
   }
 
   function handleLine(line) {
-    if (line === "FILES:BEGIN") {
+    if (line === "SETS:BEGIN") {
       clearTimeout(listRetryTimer);  // a response is actually coming - stop retrying
-      collectingFiles = true;
-      fileListBuffer = [];
+      collectingSets = true;
+      setsBuffer = [];
       return;
     }
-    if (line === "FILES:END") {
+    if (line === "SETS:END") {
+      collectingSets = false;
+      sets = setsBuffer;
+      renderSetPickers();
+      return;
+    }
+    if (collectingSets) {
+      const sep = line.lastIndexOf("|");
+      setsBuffer.push(sep === -1 ? { name: line, gap: 10 } : { name: line.slice(0, sep), gap: Number(line.slice(sep + 1)) });
+      return;
+    }
+    if (line.startsWith("FILES:BEGIN")) {
+      clearTimeout(listRetryTimer);
+      collectingFiles = true;
+      fileListBuffer = [];
+      viewSet = line.startsWith("FILES:BEGIN:") ? line.slice(12) : "/";
+      renderSetPickers();
+      return;
+    }
+    if (line === "FILES:END" || line.startsWith("FILES:END:")) {
       collectingFiles = false;
+      // FILES:END:<n> says how many names the board sent. Fewer arriving
+      // means the link lost some on the way - two names can even run
+      // together into one that isn't on the card - so ask again.
+      const sent = line.length > 10 ? Number(line.slice(10)) : fileListBuffer.length;
+      if (fileListBuffer.length !== sent && listShortRetries < LIST_MAX_RETRIES) {
+        listShortRetries++;
+        log(`File list came through short (${fileListBuffer.length} of ${sent}) - asking again`);
+        sendCommand("LIST:" + viewSet);
+        return;
+      }
+      listShortRetries = 0;
       // Already sorted by the board, in the order its file knob steps
       // through them (see WavList.h) - kept as it comes, so the two agree.
       fileNames = fileListBuffer;
@@ -2470,14 +2905,14 @@
     if (line.startsWith("SAVED:")) { if (upload) upload.saved = true; return; }
 
     if (line.startsWith("RENAMED:")) {
-      const [from, to] = line.slice(8).split("/");
-      notice(`Renamed ${from} to ${to}.`);
-      requestFileList();
+      const [from, to] = line.slice(8).split("|");
+      notice(`Renamed ${leafOfPath(from)} to ${leafOfPath(to)}.`);
+      requestSet(viewSet);
       return;
     }
     if (line.startsWith("DELETED:")) {
-      notice(`Deleted ${line.slice(8)}.`);
-      requestFileList();
+      notice(`Deleted ${leafOfPath(line.slice(8))}.`);
+      requestSet(viewSet);
       return;
     }
     handleTelemetry(line);
@@ -2544,7 +2979,22 @@
 
   // duringUpload is only for runUpload()'s own PUT: - once the board has
   // said READY:, anything else sent would be written into the file.
-  async function sendCommand(text, duringUpload = false) {
+  //
+  // A command longer than one Bluetooth write - one naming a long path,
+  // say - goes in pieces of UPLOAD_PACKET_BYTES, since a write too big for
+  // a packet is dropped without an error (see UPLOAD_PACKET_BYTES). The
+  // board puts the pieces back together (see pumpBLEInput() in the
+  // sketch). Commands go one at a time, in order, so two long ones can't
+  // have their pieces interleaved.
+  let commandChain = Promise.resolve();
+
+  function sendCommand(text, duringUpload = false) {
+    const sent = commandChain.then(() => writeCommand(text, duringUpload));
+    commandChain = sent.catch(() => {});
+    return sent;
+  }
+
+  async function writeCommand(text, duringUpload) {
     if (!dspsRxChar) return;
     if (upload && !duringUpload) {
       log(`(held back "${text}" - an upload is in progress)`);
@@ -2554,7 +3004,10 @@
       // A newline ends the command, so two sent close together (a slider
       // being dragged) can't run into one. Not after PUT: though - what
       // follows that is the file itself, byte for byte.
-      await writeToBoard(new TextEncoder().encode(duringUpload ? text : text + "\n"));
+      const bytes = new TextEncoder().encode(duringUpload ? text : text + "\n");
+      for (let at = 0; at < bytes.length; at += UPLOAD_PACKET_BYTES) {
+        await writeToBoard(bytes.subarray(at, at + UPLOAD_PACKET_BYTES));
+      }
       log(`> ${text}`);
     } catch (err) {
       log(`! write failed: ${err.message}`);
@@ -2755,7 +3208,7 @@
   // -- controls ------------------------------------------------------------
 
   connectBtn.addEventListener("click", connect);
-  refreshBtn.addEventListener("click", requestFileList);
+  refreshBtn.addEventListener("click", () => (viewSet === null ? requestFileList() : requestSet(viewSet)));
   diskBtn.addEventListener("click", () => sendCommand("DISK:ON"));
   uploadBtn.addEventListener("click", () => fileInput.click());
   if (CAN_RECORD) {
@@ -2767,6 +3220,16 @@
     recordBtn.addEventListener("contextmenu", (e) => e.preventDefault());
   }
   fileInput.addEventListener("change", onFilePicked);
+  setSelect.addEventListener("change", onSetPicked);
+  filesSetSelect.addEventListener("change", onSetPicked);
+  gapInput.addEventListener("input", onGapChanged);
+  setPlayBtn.addEventListener("click", onSetPlay);
+  setPrevBtn.addEventListener("click", () => sendCommand("SETPREV"));
+  setNextBtn.addEventListener("click", () => sendCommand("SETNEXT"));
+  prepBtn.addEventListener("click", () => {
+    prepStatus.textContent = "Preparing…";
+    sendCommand("PREP:" + viewSet);
+  });
   // Play latches the cued file, from the top; Stop releases the latch.
   transportBtn.addEventListener("click", () => {
     if (latched) sendCommand("STOP");

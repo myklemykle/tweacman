@@ -18,7 +18,8 @@
 
   Wiring: an SD card (FAT32, any SDHC card - see the SD note in
   CLAUDE.md, this board's slot is wired to the RA6M5's native SDHI
-  peripheral, not SPI) with one or more WAV files at its root - use
+  peripheral, not SPI) with WAV files on it - at its root, or sorted into
+  folders, one per set (see "Sets" below) - use
   tools/make_test_wav.py to generate a simple one, a slow sine sweep
   that makes speed changes and any resampling artifacts obvious by ear.
   Otherwise same as DACAudioTest (3.5mm jack on A0/A1/GND) plus two pots
@@ -160,10 +161,14 @@
   AudioKnobsWebBLEDemo - see that sketch and the codeless-binary-mode-
   dsps-protocol memory for the handshake itself. On top of that
   transport, this sketch speaks a small plain-text line protocol:
-  `LIST` requests a `FILES:BEGIN`/one-name-per-line/`FILES:END` block,
-  in the order the file knob steps through them (natural, case-blind -
-  see WavList.h), so a client shows them as they come;
-  `PLAY:<name>` requests a switch, answered with `PLAYING:<name>` on
+  `LIST` requests a `SETS:BEGIN`/one-`<set>|<gap>`-per-line/`SETS:END`
+  block - the card's sets, see "Sets" below, "/" being the WAVs at its
+  root - and then a `FILES:BEGIN:<set>`/one-name-per-line/`FILES:END:<n>`
+  block (n being how many names were sent) for the current file's set, in the order the file knob steps
+  through them (natural, case-blind - see WavList.h), so a client shows
+  them as they come; `LIST:<set>` is the same with another set's names.
+  A file is named everywhere else by its path, `<set>/<name>` (just
+  `<name>` at the root). `PLAY:<path>` requests a switch, answered with `PLAYING:<name>` on
   success or `ERR:<name>:<reason>` on failure - a bad or unsupported
   file is a normal, reported failure, not a hang. The periodic stats line
   carries `RUN:0|1` alongside `SPD:`/`BUF:`/`UND:`, so a client can show
@@ -179,7 +184,12 @@
   percent. For the page's tweaks tab there are also `MODE:`, the knob mode
   (0 for the first row of MODES); `HRD:`, the pitch you hear (the shift
   times the speed, which is what the pitch knob sets); and `WS:`, `WE:` and
-  `LEN:`, the window's start and end and the file's length, in seconds.
+  `LEN:`, the window's start and end and the file's length, in seconds, and
+  `CUR:`, where the cursor is. For the page's set tab, `SET:0|1` is whether
+  a set is playing through; `GAP:`, the current set's gap in seconds;
+  `GL:`, only during a gap, the seconds left in it; and `PREP:<n>/<total>`,
+  only while a set is being prepared, how far that's got; and `HLD:1`,
+  only while the setlist's track is looping, latched by hand.
   If the board's fuel gauge answers (see FuelGauge.h) there are also
   `BAT:`, the battery's charge in percent; `BV:`, its voltage; and `BCR:`,
   the rate the charge is changing in percent per hour, negative while
@@ -189,6 +199,12 @@
     `LATCH:<name>`       load a file and latch the transport on - plays from
                          the top and keeps playing, answered like PLAY:
     `STOP`               clear the latch, as a touch2 press would
+    `SETPLAY:<path>`     start the setlist of the set that file is in,
+                         from that file - see "Sets"; `SETSTOP` turns it off
+    `SETNEXT`, `SETPREV` the set's next track, or the one before, now
+    `GAP:<set>|<s>`      set a set's gap between tracks, in seconds
+    `PREP:<set>`         build the cached copies of every file in a set,
+                         in the background - see "Preparing a set"
     `RESET:SPEED`        speed back to 1.0x
     `RESET:ALL`          everything saved per file back to its default, as
                          the triple tap does - see "Reset"
@@ -231,7 +247,8 @@
                          `ACK:<bytes so far>` coming back, then
                          `SAVED:<name>`; see startUpload() for the flow
                          control, which is the tricky part
-    `REN:<old>/<new>`    rename, answered `RENAMED:<old>/<new>`
+    `REN:<old>|<new>`    rename, answered `RENAMED:<old>|<new>` - into
+                         another set, if the new path says so
     `DEL:<name>`         delete, answered `DELETED:<name>`
     `CAL`                print, over USB Serial, each knob's saved and live
                          calibration - see "Knob calibration" further down
@@ -252,7 +269,8 @@
                          it on the computer first, or unplug the cable
   Any of them can fail with the same `ERR:<name>:<reason>` as PLAY:. Names
   the page creates must end in .WAV, since those are the only files LIST
-  shows. Touching the file that is playing closes it first (FatFs can't
+  shows. A command can arrive in several Bluetooth writes - the page splits
+  one naming a long path - see pumpBLEInput(). Touching the file that is playing closes it first (FatFs can't
   change an open file) and then reloads it, or cues the next playable file
   if it's gone, restarting playback from the top. Each also keeps the
   file's cached copies in step: an upload that replaces a file deletes its
@@ -277,6 +295,39 @@
   still works while stopped - that is the point of expressing "stopped" as a
   speed of zero.
 
+  Sets: each folder at the card's root is a set, and the WAVs at the root
+  itself are one more, the default set - so a card is organised for a
+  performance by dragging files into folders on a computer. Only one level
+  deep: folders inside a set are ignored, as are the sketch's own cache/
+  and settings/. A set's tracks are in the same order as everywhere else,
+  so number the names to choose it ("01 - intro.wav"). The file knob steps
+  through the current file's set only.
+
+  The web page's Set tab plays a set through (SETPLAY:). Two things are
+  going on then, named the same here and on the page: the deck - the
+  transport, which plays the cued track - and the setlist, which waits its
+  turn and cues the next. Each track plays once, from the start of its
+  window to the end (or end to start, if its speed is backward), and the
+  deck stops. Whenever the deck is stopped and nobody is playing - no pad
+  touched, nothing being scrubbed - the setlist counts down its gap (10
+  seconds unless changed, saved per set, see FileSettings.h), and when it
+  runs out the next track starts, latched. Playing - the deck running,
+  latched or looping, a pad touched, a scrub - has the setlist stand by
+  and start its count over. After the last track the setlist is off. Each
+  track keeps its own saved speed, pitch, window, echo and filter, and the
+  knobs and pads work as ever meanwhile: scrubbing never ends a track, nor
+  does holding D21 - pressing it takes the deck from the setlist's latch,
+  and the track goes round for as long as the finger stays - and pressing
+  D21 after a track has played out plays it again from the top.
+  Latching by hand - the D20+D21 chord, or the page's play button on the
+  cued track - sets the track looping: round its window, as outside a set,
+  until it's stopped (D21, or the page's stop). Next and Prev on the page
+  change track straight away, whatever's happening. The Set tab's Stop
+  setlist (SETSTOP), or picking a single file, turns the setlist off. The
+  echo and filter ring out into the gap, since the next file isn't loaded
+  until the gap is over. The end of a track is caught in the audio
+  interrupt, so not a sample of its start is heard again - see setlistOn.
+
   Reset: tapping both pads together three times in a row puts the current
   file's speed, pitch, start and end points, echo and filter back to their
   defaults, and the RGB LED flashes white to say so. The first of the
@@ -289,7 +340,7 @@
   steps to the next knob mode, round and round. Holding it turns the knobs
   into selectors: knob1 steps through the modes, forward or back, one every
   60 degrees, so any mode is one gesture away; knob2 steps through the WAVs
-  on the card, one every 30 degrees, and plays each one it lands on from
+  in the current file's set, one every 30 degrees, and plays each one it lands on from
   its start, until D20 is released - or on past that, if the transport was
   already latched on. Each mode gives the two
   knobs a different job, and is one row of the MODES table - see "Knob
@@ -622,6 +673,24 @@
        of ejecting: about two seconds later the board comes back the
        same way. DISK:ON with no
        computer on the USB port is refused.
+    20. Sets: make a TEST folder on the card with a few short WAVs in it
+       (tools/make_test_wav.py --sine 440 --seconds 3, --pink --seconds 4
+       and so on). The page's set picker lists it, and the default set if
+       there are WAVs at the root. On the Set tab, set the gap to 2 and
+       Start setlist: each file plays once and stops dead at its end, with no
+       blip of its start; the panel counts the gap down, and the next file
+       starts by itself. Release nothing and touch nothing: after the last
+       file the setlist turns off. Start it again and press Next mid-file: the next
+       one starts at once. Stop a file partway with D21 (press it once to
+       clear the deck's latch, and lift): the gap counts down from there.
+       Keep a finger on a pad: the count waits, and starts over when you
+       let go. Chord D20+D21 mid-file: it loops on past its end (the
+       panel says Deck looping); press D21
+       and lift, and the gap counts down to the next. In the
+       gap, press D21: the file that ended plays again. Set SPEED:-1 on one
+       and start the setlist from there: it plays once backward, end to start.
+       Prepare builds every file's copies while PREP: counts up; then each
+       one plays at 1000x straight away.
 */
 
 #include <RV112FF.h>
@@ -1018,6 +1087,24 @@ bool transportRunning = false;
 // is engaged and released without playback ever stopping, which is the point.
 bool transportLatched = false;
 
+// The setlist - see "Sets". While setlistOn, each track plays once, from
+// one end of its window to the other, and then the deck stops; and
+// whenever the deck has been stopped and left alone for the set's gap, the
+// next one starts. loop() arms stopAtTrackEnd whenever
+// the tape is running under the transport (not scrubbed), and the audio
+// interrupt stops it right at the window's edge and says so in
+// reachedTrackEnd - not loop(), which only looks every CONTROL_INTERVAL and
+// would hear the start of the track again first.
+bool setlistOn = false;
+volatile bool stopAtTrackEnd = false;
+volatile bool reachedTrackEnd = false;
+bool trackEnded = false;          // the track played out, and stays stopped
+bool looping = false;             // latched by hand: loops until stopped, then the gap
+unsigned long gapStartMillis = 0;
+bool gapCounting = false;
+float setGapSeconds = FileSettings::DEFAULT_GAP_SECONDS;  // the current file's set's gap
+String gapSet = "-";              // which set that was loaded for ("-": none yet)
+
 // The knob-requested ratio as of the last control-rate tick, kept
 // outside that block too: loadFile() runs on its own schedule (whenever
 // a BLE PLAY: command arrives, not at CONTROL_INTERVAL), and needs this
@@ -1300,6 +1387,35 @@ void setStepNow(float step) {
   interrupts();
 }
 
+// Playing a set, a track ends at the edge of its window - see setlistOn. The
+// voice's position runs on round the window, lap after lap (see
+// fileOffsetFor()), so crossing an edge is the lap number changing: forward
+// into the next lap is the end, backward into the one before the start.
+// Either way the position is put back on the edge, inside, and stopped.
+AUDIO_HOT inline int32_t lapOf(const Voice &v, int32_t position) {
+  int32_t length = (int32_t)v.window.length;
+  int32_t from = position - v.windowBase;
+  return (from >= 0) ? from / length : -((length - 1 - from) / length);
+}
+
+AUDIO_HOT inline void stopAtWindowEdge(Voice &v, int32_t before) {
+  int32_t lapBefore = lapOf(v, before);
+  int32_t lapAfter = lapOf(v, v.resampler.index);
+  if (lapAfter == lapBefore) return;
+  int32_t edge = v.windowBase + (int32_t)v.window.length * (lapAfter > lapBefore ? lapAfter : lapBefore);
+  if (lapAfter > lapBefore) {
+    v.resampler.index = edge - 1;  // the window's last frame...
+    v.resampler.frac = 0.999f;     // ...as near its end as it goes
+  } else {
+    v.resampler.index = edge;      // its first
+    v.resampler.frac = 0.0f;
+  }
+  currentStep = targetStep = 0.0f;
+  stepSlope = 0.0f;
+  stopAtTrackEnd = false;
+  reachedTrackEnd = true;
+}
+
 AUDIO_HOT void audioCallback(timer_callback_args_t *args) {
   uint32_t tickStart = DWT->CYCCNT;
   audioTicks++;
@@ -1378,7 +1494,11 @@ AUDIO_HOT void audioCallback(timer_callback_args_t *args) {
       if (__builtin_fabsf(activeRate) > MAX_VOICE_RATE) {
         activeRate = __builtin_copysignf(MAX_VOICE_RATE, activeRate);
       }
-      active.resampler.advance(activeRate);
+      if (!reachedTrackEnd) {  // a track that has ended stays put until loop() notices
+        int32_t before = active.resampler.index;
+        active.resampler.advance(activeRate);
+        if (stopAtTrackEnd) stopAtWindowEdge(active, before);
+      }
     } else {
       outLeft = lastGoodLeft;  // hold the last good frame - see header comment
       outRight = lastGoodRight;
@@ -1554,9 +1674,75 @@ void primeVoice(Voice &v, int32_t from, uint32_t frames) {
   }
 }
 
-// How many of the current file's cached copies are ready to play.
+// The current file's copies, as they were when the builder last left it to
+// prepare another file (see "Preparing a set") - which it only does once
+// it's finished with this one.
+uint8_t currentFileLevelsReady = 0;
+uint8_t currentFileLevelCount = 0;
+
+// How many of the current file's cached copies are ready to play, and how
+// many it gets in all.
 uint8_t readyLevels() {
-  return (fileLoaded && cache.name() == currentFilename) ? cache.readyLevels() : 0;
+  if (!fileLoaded) return 0;
+  return (cache.name() == currentFilename) ? cache.readyLevels() : currentFileLevelsReady;
+}
+uint8_t levelCount() {
+  if (!fileLoaded) return 0;
+  return (cache.name() == currentFilename) ? cache.levelCount() : currentFileLevelCount;
+}
+int cachePercent() {
+  if (!fileLoaded) return 0;
+  if (cache.name() == currentFilename) return cache.percentDone();
+  return currentFileLevelsReady == currentFileLevelCount ? 100 : 0;
+}
+
+// -- Preparing a set ----------------------------------------------------------
+// A file's copies are built the first time it's cued, which takes a few
+// seconds, and until then the fastest speeds are held back. Fine at home,
+// not on stage. So a set can be prepared - every file in it built in turn,
+// in the background, while the current file's copies are complete - by the
+// web page's Prepare button (PREP:<set>), and whenever a set starts playing
+// through. A file that's already built costs a quick check, no more.
+std::vector<String> prepQueue;
+size_t prepNext = 0;  // the next file in it to build
+
+bool preparing() { return prepNext < prepQueue.size() || (cache.building() && cache.name() != currentFilename); }
+
+void prepareSet(const String &set) {
+  prepQueue = sortedWavPaths(set);
+  prepNext = 0;
+  Serial.print("Preparing set ");
+  Serial.print(set.length() ? set : String("(card root)"));
+  Serial.print(": ");
+  Serial.print(prepQueue.size());
+  Serial.println(" files");
+}
+
+// Starts building the next file in the queue - from loop(), when the
+// builder has nothing to do.
+void prepareNextFile() {
+  if (prepNext >= prepQueue.size()) {
+    if (!prepQueue.empty()) {
+      prepQueue.clear();
+      prepQueue.shrink_to_fit();
+      Serial.println("Set prepared.");
+    }
+    return;
+  }
+  if (fileLoaded && cache.name() == currentFilename) {
+    currentFileLevelsReady = cache.readyLevels();
+    currentFileLevelCount = cache.levelCount();
+  }
+  cache.start(prepQueue[prepNext++]);
+}
+
+// The builder is about to be taken off whatever it's doing: if that's a
+// file being prepared, it goes back in the queue, to be finished later.
+void requeueInterruptedPrep() {
+  if (cache.building() && prepNext > 0 && prepNext <= prepQueue.size() &&
+      prepQueue[prepNext - 1] == cache.name()) {
+    prepNext--;
+  }
 }
 
 // -- Choosing a copy ----------------------------------------------------------
@@ -1642,6 +1828,23 @@ void positionInCopy(Voice &from, Voice &to, int32_t &idx, float &frac) {
 // enough ahead to cover how far the playing voice moves while this reads.
 const int32_t PRIME_BEHIND = (int32_t)GRAIN_LENGTH_SAMPLES + 64;
 const int32_t PRIME_AHEAD = 4096;
+
+// Puts a voice at the top of the file - the start of its window - ready to
+// be primed: where loadFile() and rewindToStart() begin. Except when a set
+// is playing through backward: then a track starts at the window's end, so
+// that it plays once through backward and ends at its start, rather than
+// ending straight away. Returns where to prime the voice from, which is
+// mostly behind it in the direction it's going.
+int32_t cueAtTrackStart(Voice &v) {
+  resetVoiceWindow(v);
+  bool backward = setlistOn && lastKnownRatio < 0.0f;
+  v.resampler.index = (int32_t)(backward ? v.window.start + v.window.length - 1 : v.window.start);
+  v.resampler.frac = backward ? 0.999f : 0.0f;
+  // PRIME_BEHIND is history for the interpolator and the pitch shifter's
+  // grains, which trail the cursor - from the far side, going backward.
+  return backward ? v.resampler.index + PRIME_BEHIND + CHUNK_FRAMES - (int32_t)v.ring.frameCapacity()
+                  : v.resampler.index - PRIME_BEHIND;
+}
 
 // After a failed attempt to open a copy, don't retry on every control tick.
 unsigned long levelChangeFailedMillis = 0;
@@ -1933,7 +2136,7 @@ bool voiceToppedUp(float step) {
 // header comment for why the swap itself masks the audio timer's IRQ
 // rather than using a checked pause flag.
 bool loadFile(const String &filename, String &errorOut) {
-  if (filename.length() == 0 || filename.indexOf('/') != -1) {
+  if (!isTrackPath(filename)) {
     errorOut = "invalid filename";
     return false;
   }
@@ -1981,9 +2184,9 @@ bool loadFile(const String &filename, String &errorOut) {
   // file's settings apply.
   applySettings(FileSettings::load(filename));
   // And cued at the start of its window.
-  resetVoiceWindow(v);
-  v.resampler.index = (int32_t)v.window.start;
-  v.resampler.frac = 0.0f;
+  int32_t primeFrom = cueAtTrackStart(v);
+  stopAtTrackEnd = false;  // a new track hasn't ended - see setlistOn
+  reachedTrackEnd = false;
   // Only moving if the transport is running. Starting at 1x regardless
   // played a fragment of every file picked while stopped: the audio comes
   // back on below, and cache.start() can take tens of milliseconds before
@@ -2001,8 +2204,9 @@ bool loadFile(const String &filename, String &errorOut) {
   //
   // Starts PRIME_BEHIND samples before the start of the window - i.e. from
   // the end of it, since the window plays as a loop - so the interpolator
-  // has history to reach back into from the very first sample.
-  primeVoice(v, v.resampler.index - PRIME_BEHIND, v.ring.frameCapacity());
+  // has history to reach back into from the very first sample. (See
+  // cueAtTrackStart() for a set playing backward.)
+  primeVoice(v, primeFrom, v.ring.frameCapacity());
 
   audioTimer.enable_overflow_irq();
   restartDropCount();
@@ -2019,9 +2223,16 @@ bool loadFile(const String &filename, String &errorOut) {
   Serial.print(fileChannels == 2 ? " stereo, " : " mono, ");
   Serial.print(v.reader.totalFrames());
   Serial.println(" frames");
+  // Its set's gap, if it's a different set - see "Sets".
+  String set = setOf(filename);
+  if (set != gapSet) {
+    setGapSeconds = FileSettings::loadGap(set);
+    gapSet = set;
+  }
   // Check this file's cached copies, and build whatever's missing - in the
   // background, a step per loop() pass. Until they're ready, high speeds are
   // capped (see the control block in loop()).
+  requeueInterruptedPrep();
   cache.start(filename);
   return true;
 }
@@ -2057,9 +2268,9 @@ void rewindToStart() {
   if (level != v.level && !openVoice(v, currentFilename, level)) {
     openVoice(v, currentFilename, 0);  // copy unreadable - fall back to the WAV
   }
-  resetVoiceWindow(v);
-  v.resampler.index = (int32_t)v.window.start;
-  v.resampler.frac = 0.0f;
+  int32_t primeFrom = cueAtTrackStart(v);
+  stopAtTrackEnd = false;  // see setlistOn
+  reachedTrackEnd = false;
   endScrub();
   lastGoodLeft = lastGoodRight = 0;  // don't carry a stale frame across the jump
   grainOffset = 0.0f;   // start the next grain cycle from the seam, not mid-crossfade
@@ -2067,7 +2278,7 @@ void rewindToStart() {
   // this pass underruns, not one accumulated across every previous pass.
   underrunTicks = 0;
 
-  primeVoice(v, v.resampler.index - PRIME_BEHIND, v.ring.frameCapacity());  // see loadFile()
+  primeVoice(v, primeFrom, v.ring.frameCapacity());  // see loadFile()
 
   audioTimer.enable_overflow_irq();
   restartDropCount();
@@ -2090,6 +2301,7 @@ void unloadFile() {
     v.ring.reset();
   }
   audioTimer.enable_overflow_irq();
+  requeueInterruptedPrep();
   cache.stop();
   currentFilename = "NONE";
 }
@@ -2364,19 +2576,22 @@ bool cueRememberedFile() {
   return cueFirstPlayableFile();
 }
 
-// The first playable WAV in the list's order (see WavList.h).
+// The first playable WAV in the list's order (see WavList.h): the default
+// set's first, then each set's in turn.
 bool cueFirstPlayableFile() {
-  for (const String &name : sortedWavNames()) {
-    String err;
-    if (loadFile(name, err)) {
-      Serial.print("Cued ");
-      Serial.println(name);
-      return true;
+  for (const String &set : sortedSetNames()) {
+    for (const String &name : sortedWavPaths(set)) {
+      String err;
+      if (loadFile(name, err)) {
+        Serial.print("Cued ");
+        Serial.println(name);
+        return true;
+      }
+      Serial.print("  skipping ");
+      Serial.print(name);
+      Serial.print(" - ");
+      Serial.println(err);
     }
-    Serial.print("  skipping ");
-    Serial.print(name);
-    Serial.print(" - ");
-    Serial.println(err);
   }
 
   Serial.println("No playable file found on the card - waiting for a BLE PLAY command.");
@@ -2506,19 +2721,50 @@ unsigned long telemetrySuppressedUntilMillis = 0;
 // draining the ring buffer the whole time, playback audibly drops out - right
 // at connect, because clients request LIST as soon as they attach.
 //
-// So: one name per pumpFileList() call, at the same 40ms spacing. Same rate
+// So: one line per pumpFileList() call, at the same 40ms spacing. Same rate
 // on the wire, no blocking. The names are read and sorted up front (see
 // WavList.h) - reading the folder takes a few milliseconds, not 40 per name -
 // so the page gets them in the order the file knob steps through them.
+//
+// What's sent: LIST asks for the card's sets and then the current file's
+// set's tracks -
+//   SETS:BEGIN, one <set>|<gap> per line, SETS:END,
+//   FILES:BEGIN:<set>, one name per line, FILES:END:<how many names>
+// - and LIST:<set> for the same with another set's tracks. The sets come
+// every time, though only the tracks were asked for: there are only ever
+// a few, and so the page never has to ask twice in a row, which would cut
+// the first answer off. A set is
+// named by its folder, or "/" for the default set, the WAVs at the card's
+// root, and a track by its name within the set; the page puts the two
+// together, as <set>/<name>, for PLAY: and the rest. <gap> is the set's gap
+// between tracks, in seconds - see "Sets". Only one set's names at
+// a time, since some sets are long - forty long names take a couple of
+// seconds to send.
 // Telemetry is suppressed for the duration rather than relying on a fixed
 // cooldown afterwards, which is also strictly more correct - a long list can
 // legitimately take longer to drain than any fixed window.
-const unsigned long FILE_LIST_LINE_INTERVAL = 40;  // ms between names
+//
+// The spacing goes by each line's length, not just a line at a time: 40ms
+// a line was fine for short 8.3 names, but a set of hundred-character names
+// came out at 2.5KB/s, faster than the module gets them over the air
+// (about 1.8KB/s, see tools/ble_upload.py), and it dropped a run of bytes -
+// newlines and all - so two names arrived as one. FILES:END:<n> says how
+// many names were sent, so the page can tell a list came through short and
+// ask again.
+const unsigned long FILE_LIST_LINE_INTERVAL = 40;  // ms between lines, at least
+const unsigned long FILE_LIST_US_PER_BYTE = 1000;  // ~1KB/s, well under the module's rate
+
+// When the line after `line` may go.
+unsigned long fileLineDue(const String &line) {
+  unsigned long ms = (line.length() + 1) * FILE_LIST_US_PER_BYTE / 1000;
+  return millis() + (ms > FILE_LIST_LINE_INTERVAL ? ms : FILE_LIST_LINE_INTERVAL);
+}
 
 void finishFileList();
 
-std::vector<String> fileListNames;  // what's left to send, in order
+std::vector<String> fileListNames;  // the lines left to send, in order
 size_t fileListNext = 0;
+size_t fileListTrackCount = 0;      // how many of them are track names, for FILES:END
 bool fileListSending = false;
 unsigned long nextFileLineMillis = 0;
 
@@ -2530,18 +2776,31 @@ void abortFileList() {
   fileListNames.shrink_to_fit();  // give the names' memory back between lists
 }
 
-void startFileList() {
+// A set's name as the protocol has it - see above - and back.
+String setToken(const String &set) { return set.length() ? set : String("/"); }
+String setFromToken(const String &token) { return token == "/" ? String() : token; }
+
+// LIST or LIST:<set>.
+void startFileList(const String &set) {
   abortFileList();  // a second LIST mid-send restarts cleanly
-  blePrintLine("FILES:BEGIN");
-  fileListNames = sortedWavNames();
-  fileListNext = 0;
+  fileListNames.push_back("SETS:BEGIN");
+  for (const String &name : sortedSetNames()) {
+    fileListNames.push_back(setToken(name) + "|" + String(FileSettings::loadGap(name), 1));
+  }
+  fileListNames.push_back("SETS:END");
+  fileListNames.push_back("FILES:BEGIN:" + setToken(set));
+  size_t before = fileListNames.size();
+  for (const String &name : sortedWavNames(set)) fileListNames.push_back(name);
+  fileListTrackCount = fileListNames.size() - before;
+  blePrintLine(fileListNames[0]);
+  fileListNext = 1;
   fileListSending = true;
-  nextFileLineMillis = millis() + FILE_LIST_LINE_INTERVAL;
+  nextFileLineMillis = fileLineDue(fileListNames[0]);
 }
 
 void finishFileList() {
   abortFileList();
-  blePrintLine("FILES:END");
+  blePrintLine("FILES:END:" + String(fileListTrackCount));
   // Piggybacked here rather than sent separately right after the
   // handshake: a client already reliably requests LIST once on
   // connect, so answering "what's currently playing" as part of that
@@ -2560,8 +2819,9 @@ void pumpFileList() {
   if ((long)(millis() - nextFileLineMillis) < 0) return;
 
   if (fileListNext < fileListNames.size()) {
-    blePrintLine(fileListNames[fileListNext++]);
-    nextFileLineMillis = millis() + FILE_LIST_LINE_INTERVAL;
+    const String &line = fileListNames[fileListNext++];
+    blePrintLine(line);
+    nextFileLineMillis = fileLineDue(line);
     return;
   }
   finishFileList();  // all sent
@@ -2569,18 +2829,29 @@ void pumpFileList() {
 
 // -- Card management over BLE (upload, rename, delete) --------------------
 
-// Names the phone may create. Must end in .WAV, since LIST shows nothing
-// else - a file uploaded under any other name could never be seen, played or
-// deleted again from the page. Also rejects the characters FAT forbids, and
-// '/', which would reach outside the card's root (and is the separator in
-// the REN: command).
-bool isValidWavName(const String &name) {
-  if (name.length() < 5 || name.length() > 64) return false;
-  for (unsigned int i = 0; i < name.length(); i++) {
-    char c = name[i];
+// Paths the phone may create: a name, at the card's root or in a set (see
+// WavList.h). The name must end in .WAV, since LIST shows nothing else - a
+// file uploaded under any other name could never be seen, played or deleted
+// again from the page. Also rejects the characters FAT forbids, and '/' but
+// for the one after the set - more would reach into folders no set lists.
+// '|' is one of those characters, which makes it the separator in the REN:
+// command.
+bool isValidNamePart(const String &part, unsigned int maxLength) {
+  if (part.length() == 0 || part.length() > maxLength) return false;
+  for (unsigned int i = 0; i < part.length(); i++) {
+    char c = part[i];
     if (c < 32 || strchr("/\\:*?\"<>|", c) != nullptr) return false;
   }
-  return isWavName(name);
+  return true;
+}
+
+bool isValidWavName(const String &path) {
+  String set = setOf(path);
+  if (set.length() && !(isValidNamePart(set, 64) && isTrackPath(path))) return false;
+  String name = leafOf(path);
+  // FAT allows 255 characters; this leaves room for the ".txt" that a
+  // file's saved settings add (see FileSettings.h).
+  return name.length() >= 5 && isValidNamePart(name, 200) && isWavName(name);
 }
 
 bool fileExists(const String &name) {
@@ -2650,7 +2921,7 @@ void startUpload(const String &args) {
 
   long size = sizeText.toInt();
   if (!isValidWavName(name)) {
-    blePrintLine("ERR:" + name + ":name must end in .wav, with no / \\ : * ? \" < > |");
+    blePrintLine("ERR:" + name + ":name must end in .wav, with no \\ : * ? \" < > |");
     return;
   }
   if (size <= 0) {
@@ -2702,6 +2973,7 @@ void finishUpload() {
   bool wasCurrent = isCurrentFile(uploadName);
   if (wasCurrent) unloadFile();
   String dest = "/sd/" + uploadName;
+  if (setOf(uploadName).length()) mkdir(("/sd/" + setOf(uploadName)).c_str(), 0777);  // a new set
   remove(dest.c_str());  // fails harmlessly when this is a new name
   // Its saved settings are kept, though: a new version of the same file is
   // most likely the same sample, re-edited.
@@ -2774,17 +3046,18 @@ void pumpUpload() {
   }
 }
 
-// REN:<old>/<new>. '/' can't appear in either name (see isValidWavName()),
-// which makes it an unambiguous separator.
+// REN:<old>|<new>, both paths. '|' can't appear in either (see
+// isValidWavName()), which makes it an unambiguous separator. The new path
+// can be in another set: that moves the file there.
 void renameOnCard(const String &args) {
-  int sep = args.indexOf('/');
+  int sep = args.indexOf('|');
   String from = sep == -1 ? args : args.substring(0, sep);
   String to = sep == -1 ? "" : args.substring(sep + 1);
   from.trim();
   to.trim();
 
   if (!isValidWavName(to)) {
-    blePrintLine("ERR:" + from + ":new name must end in .wav, with no / \\ : * ? \" < > |");
+    blePrintLine("ERR:" + from + ":new name must end in .wav, with no \\ : * ? \" < > |");
     return;
   }
   // A change of case alone is the same file as far as FAT is concerned, so
@@ -2800,13 +3073,14 @@ void renameOnCard(const String &args) {
   bool wasCurrent = isCurrentFile(from);
   if (wasCurrent) unloadFile();
 
+  if (setOf(to).length()) mkdir(("/sd/" + setOf(to)).c_str(), 0777);  // a new set
   bool ok = rename(("/sd/" + from).c_str(), ("/sd/" + to).c_str()) == 0;
   if (ok) {
     // The audio hasn't changed, so its cached copies move with it rather
     // than being rebuilt under the new name.
     MipCache::renameFor(from, to);
     FileSettings::renameFor(from, to);
-    blePrintLine("RENAMED:" + from + "/" + to);
+    blePrintLine("RENAMED:" + from + "|" + to);
   } else {
     blePrintLine("ERR:" + from + ":rename failed");
   }
@@ -2827,7 +3101,7 @@ void renameOnCard(const String &args) {
 void deleteFromCard(const String &nameArg) {
   String name = nameArg;
   name.trim();
-  if (name.length() == 0 || name.indexOf('/') != -1) {
+  if (!isTrackPath(name)) {
     blePrintLine("ERR:" + name + ":invalid filename");
     return;
   }
@@ -2836,6 +3110,7 @@ void deleteFromCard(const String &nameArg) {
   if (wasCurrent) {
     unloadFile();
     transportLatched = false;
+    endSet();
   }
 
   if (remove(("/sd/" + name).c_str()) == 0) {
@@ -2873,12 +3148,115 @@ void rebuildCache() {
   }
 }
 
+// -- Sets ----------------------------------------------------------------------
+// Playing a set through, for performing - see "Sets" in the header comment.
+
+// Loads `path` as a set's next track and latches it on. Unplayable files are
+// stepped over, `direction` being the way to step. False if none would play.
+bool startSetTrack(std::vector<String> &tracks, int index, int direction) {
+  for (; index >= 0 && index < (int)tracks.size(); index += direction) {
+    String err;
+    setlistOn = true;  // first, so loadFile() cues it for playing once - see cueAtTrackStart()
+    if (loadFile(tracks[index], err)) {
+      trackEnded = false;
+      looping = false;
+      gapCounting = false;
+      transportLatched = true;
+      blePrintLine("PLAYING:" + tracks[index]);
+      Serial.print("Setlist: playing ");
+      Serial.print(index + 1);
+      Serial.print(" of ");
+      Serial.print(tracks.size());
+      Serial.print(", ");
+      Serial.println(tracks[index]);
+      return true;
+    }
+    blePrintLine("ERR:" + tracks[index] + ":" + err);
+  }
+  return false;
+}
+
+// Turns the setlist off. The track stays cued.
+void endSet() {
+  setlistOn = false;
+  trackEnded = false;
+  looping = false;
+  gapCounting = false;
+}
+
+// Latching by hand while the setlist is on - the touch pads' chord, or
+// LATCH: for the cued track - sets the track looping: it plays on round its
+// window rather than stopping at the end, until it's stopped, and then the
+// gap starts. A chord in the gap plays the track that ended again, looping.
+void loopSetTrack() {
+  if (!setlistOn) return;
+  looping = true;
+  trackEnded = false;
+  gapCounting = false;
+  Serial.println("Setlist: deck looping");
+}
+
+// SETPLAY:<path> - plays the set that file is in through, from that file.
+void startSetAt(const String &pathArg) {
+  String path = pathArg;
+  path.trim();
+  std::vector<String> tracks = sortedWavPaths(setOf(path));
+  int index = -1;
+  for (int i = 0; i < (int)tracks.size(); i++) {
+    if (tracks[i].equalsIgnoreCase(path)) index = i;
+  }
+  if (index == -1) {
+    blePrintLine("ERR:" + path + ":not in a set on the card");
+    return;
+  }
+  if (startSetTrack(tracks, index, 1)) {
+    prepareSet(setOf(path));
+  } else {
+    endSet();
+  }
+}
+
+// The next track (`direction` 1) or the one before (-1), straight away -
+// SETNEXT and SETPREV, and the end of the gap. Past the last track the set
+// is over and the tape stops; before the first, the first plays again.
+void stepSet(int direction) {
+  if (!fileLoaded) return;
+  std::vector<String> tracks = sortedWavPaths(setOf(currentFilename));
+  int index = -1;
+  for (int i = 0; i < (int)tracks.size(); i++) {
+    if (isCurrentFile(tracks[i])) index = i;
+  }
+  int next = index + direction;
+  if (next < 0) next = 0;
+  if (next >= (int)tracks.size() || !startSetTrack(tracks, next, direction < 0 ? -1 : 1)) {
+    endSet();
+    transportLatched = false;
+    Serial.println("Setlist: finished");
+  }
+}
+
+// GAP:<set>|<seconds> - a set's gap, kept on the card.
+void setGapFromCommand(const String &args) {
+  int sep = args.lastIndexOf('|');
+  if (sep == -1) return;
+  String set = setFromToken(args.substring(0, sep));
+  float seconds = constrain(args.substring(sep + 1).toFloat(), 0.0f, 600.0f);
+  FileSettings::saveGap(set, seconds);
+  if (set == gapSet) setGapSeconds = seconds;
+  Serial.print("Gap for set ");
+  Serial.print(setToken(set));
+  Serial.print(": ");
+  Serial.print(seconds, 1);
+  Serial.println("s");
+}
+
 // Whether a line is one of the commands handleBLECommand() takes - the
 // web page's words, which can only ever reach this sketch through an open
 // Binary mode pipe. See handleBLELine() for why that matters.
 bool isBoardCommand(const String &line) {
   static const char *const COMMANDS[] = {
     "LIST", "PLAY:", "LATCH:", "STOP", "RESET:", "PROFILE", "SPEED:", "PITCH:", "WINDOW:", "ECHO:", "FILTER:", "BAND:", "PUT:", "REN:", "DEL:", "DISK:",
+    "SETPLAY:", "SETSTOP", "SETNEXT", "SETPREV", "GAP:", "PREP:",
     "MODE:", "HEARD:", "STRETCH:", "TAPE:",
     "CAL", "RECAL"
   };
@@ -2906,7 +3284,9 @@ void handleBLECommand(String line) {
   }
 
   if (line == "LIST") {
-    startFileList();
+    startFileList(fileLoaded ? setOf(currentFilename) : String());
+  } else if (line.startsWith("LIST:")) {
+    startFileList(setFromToken(line.substring(5)));
   } else if (line.startsWith("PLAY:") || line.startsWith("LATCH:")) {
     // PLAY: cues a file, leaving the transport to the touch pads. LATCH:
     // cues it and latches the transport on, as if both pads had been
@@ -2915,6 +3295,15 @@ void handleBLECommand(String line) {
     bool latch = line.startsWith("LATCH:");
     String filename = line.substring(latch ? 6 : 5);
     filename.trim();
+    // LATCH: for the track a set is on holds it, without starting it over
+    // if it's playing - see loopSetTrack().
+    if (latch && setlistOn && isCurrentFile(filename)) {
+      transportLatched = true;
+      loopSetTrack();
+      blePrintLine("PLAYING:" + currentFilename);
+      return;
+    }
+    endSet();  // picking one file is leaving the set
     String err;
     if (loadFile(filename, err)) {
       if (latch) transportLatched = true;
@@ -2925,7 +3314,22 @@ void handleBLECommand(String line) {
   } else if (line == "STOP") {
     // Clears the latch, exactly as a touch2 press would - so a finger that
     // happens to be holding touch2 keeps the tape running until it lifts.
+    // A set playing through carries on as it would then (see "Sets");
+    // SETSTOP is the one that stops it.
     transportLatched = false;
+  } else if (line == "SETSTOP") {
+    transportLatched = false;
+    endSet();
+  } else if (line.startsWith("SETPLAY:")) {
+    startSetAt(line.substring(8));
+  } else if (line == "SETNEXT") {
+    stepSet(1);
+  } else if (line == "SETPREV") {
+    stepSet(-1);
+  } else if (line.startsWith("GAP:")) {
+    setGapFromCommand(line.substring(4));
+  } else if (line.startsWith("PREP:")) {
+    prepareSet(setFromToken(line.substring(5)));
   } else if (line == "RESET:ALL") {
     resetAllTweaks();
   } else if (line == "RESET:SPEED") {
@@ -3148,16 +3552,26 @@ void handleBLELine(const String &line) {
 // burst is split into lines and handled, just as before.
 //
 // Why keep the 20ms of quiet at all, rather than acting on each line the
-// moment its newline arrives? Two reasons. The web page sends commands with
-// no newline, so a gap is the only sign one is over. And the module seems
+// moment its newline arrives? Two reasons. Some clients send commands with
+// no newline (the web page used to), so a gap is the only sign one is over.
+// And the module seems
 // to need it: replying the instant a status line ends - while the module
 // may still be mid-burst - was tried, and the Binary mode handshake stopped
 // working, and the module stopped coming back to advertise after a
 // disconnect. Answering only once it has finished talking had always
 // worked.
+//
+// But a command longer than one Bluetooth write - a long path, say - comes
+// in several writes, and the gap between two of them can be longer than
+// that. So once the pipe is open, a burst that stops partway through a line
+// keeps that part, to go in front of the next burst. If nothing more comes
+// within BLE_PARTIAL_MS it's taken as a line by itself after all, so a
+// client that sends no newline still works, just a little later.
 const unsigned long BLE_QUIET_MS = 20;
+const unsigned long BLE_PARTIAL_MS = 250;
 const unsigned int BLE_BURST_MAX = 1024;  // a runaway burst is cut here rather than growing forever
 String bleBurst;
+String blePartialLine;  // the start of a line, still arriving
 unsigned long bleBurstLastByteMillis = 0;
 
 void pumpBLEInput() {
@@ -3166,7 +3580,16 @@ void pumpBLEInput() {
     bleBurstLastByteMillis = millis();
     if (bleBurst.length() < BLE_BURST_MAX) bleBurst += c;
   }
-  if (bleBurst.length() == 0 || millis() - bleBurstLastByteMillis < BLE_QUIET_MS) return;
+  if (bleBurst.length() == 0) {
+    if (blePartialLine.length() > 0 && millis() - bleBurstLastByteMillis >= BLE_PARTIAL_MS) {
+      String line = blePartialLine;
+      blePartialLine = "";
+      line.trim();
+      if (line.length() > 0) handleBLELine(line);
+    }
+    return;
+  }
+  if (millis() - bleBurstLastByteMillis < BLE_QUIET_MS) return;
 
   String burst = bleBurst;
   bleBurst = "";
@@ -3176,10 +3599,21 @@ void pumpBLEInput() {
   // ("+CONNECTED\r\n+BINREQ\r\n"), and each must be handled - acting on
   // only the first match once silently lost the +BINREQ and stalled the
   // handshake.
+  burst = blePartialLine + burst;
+  blePartialLine = "";
   int start = 0;
   while (start < (int)burst.length()) {
     int end = start;
     while (end < (int)burst.length() && burst[end] != '\r' && burst[end] != '\n') end++;
+    // Never the module's own words, though: they all start with '+', and its
+    // "+++" on leaving Binary mode comes with no newline - held back, it can
+    // run into the "+READY" that follows, and neither would be recognised,
+    // leaving the module unadvertised until a reset. No command starts so.
+    if (end == (int)burst.length() && linkMode == LINK_BINARY &&
+        burst[start] != '+' && burst.length() - start < BLE_BURST_MAX) {
+      blePartialLine = burst.substring(start);  // the rest of it is still to come
+      break;
+    }
     String line = burst.substring(start, end);
     start = end + 1;
     line.trim();
@@ -3739,10 +4173,10 @@ void turnModeSelector(float turned) {
 }
 
 // The WAV `steps` places on from the current file (back, if negative) in
-// the list's order - the order LIST gives, see WavList.h - going round at
-// the ends. Empty if the card has none.
+// its set, in the list's order - the order LIST gives, see WavList.h -
+// going round at the ends. Empty if the set has none.
 String wavAtOffset(int steps) {
-  std::vector<String> names = sortedWavNames();
+  std::vector<String> names = sortedWavPaths(fileLoaded ? setOf(currentFilename) : String());
   int count = names.size();
   if (count == 0) return "";
   int current = 0;
@@ -3752,7 +4186,7 @@ String wavAtOffset(int steps) {
   return names[((current + steps) % count + count) % count];
 }
 
-// Knob2 while selecting: steps through the card's WAVs. Each one it lands
+// Knob2 while selecting: steps through the WAVs in the current file's set. Each one it lands
 // on is cued and plays from its start for as long as the pad stays held -
 // an audition. Only turning does that: holding the pad plays nothing by
 // itself.
@@ -4382,7 +4816,7 @@ void loop() {
     if (c == '\n' || c == '\r') {
       if (usbLine.length() > 0) handleBLECommand(usbLine);
       usbLine = "";
-    } else if (usbLine.length() < 80) {
+    } else if (usbLine.length() < 320) {  // room for a long path
       usbLine += c;
     }
   }
@@ -4434,7 +4868,10 @@ void loop() {
     // topped up, and never during an upload, whose flow control needs
     // loop() to keep answering promptly. Each step is a few milliseconds.
     t = DWT->CYCCNT;
-    if (cache.building() && !uploadInProgress() && voiceToppedUp(step)) cache.step();
+    if (!uploadInProgress() && voiceToppedUp(step)) {
+      if (cache.building()) cache.step();
+      else prepareNextFile();  // see "Preparing a set"
+    }
     stageDone(STAGE_CACHE, t);
   }
 
@@ -4485,6 +4922,7 @@ void loop() {
     if (touch1Now && !touch1WasTouched) {
       if (touch2Now) {
         transportLatched = true;
+        loopSetTrack();
       } else {
         modeTapPending = true;
       }
@@ -4502,12 +4940,30 @@ void loop() {
 
     // touch2 pressed while touch1 is down latches too - the chord works in
     // either order. Pressed on its own, it clears the latch.
-    if (touch2Now && !touch2WasTouched) transportLatched = touch1Now;
+    bool touch2Pressed = touch2Now && !touch2WasTouched;
+    if (touch2Pressed) transportLatched = touch1Now;
+    if (touch2Pressed && touch1Now) loopSetTrack();
 
     touch1WasTouched = touch1Now;
     touch2WasTouched = touch2Now;
 
-    bool nowRunning = touch2Now || transportLatched || auditioning;
+    // Playing a set through, a track that has played out stops, whatever is
+    // holding the transport up, and stays stopped until touch2 is pressed
+    // again - which plays it again from the top - or the gap runs out. See
+    // "Sets".
+    if (reachedTrackEnd) {
+      if (setlistOn) {
+        trackEnded = true;
+        transportLatched = false;
+        gapCounting = false;
+        Serial.println("Setlist: track played out");
+      }
+      setStepNow(0.0f);  // before the audio interrupt is let go of it
+      reachedTrackEnd = false;
+    }
+    if (trackEnded && (touch2Pressed || !setlistOn)) trackEnded = false;
+
+    bool nowRunning = (touch2Now || transportLatched || auditioning) && !trackEnded;
 
     // Rewind on the rising edge of *running*, not of the pad, so engaging or
     // releasing the latch mid-playback does not jump back to the top.
@@ -4515,8 +4971,14 @@ void loop() {
     // And a stop is when newly learned knob calibrations get saved.
     if (!nowRunning && transportRunning) {
       saveNewKnobCalibration();
+      // A looping track that stops loops no longer - see "Sets".
+      if (setlistOn && looping) {
+        looping = false;
+        Serial.println("Setlist: looping track stopped");
+      }
     }
     transportRunning = nowRunning;
+
 
     // The knobs: each hands however far it has turned since the last tick to
     // the current mode's function for it - see "Knob modes". Both are read
@@ -4550,6 +5012,26 @@ void loop() {
     bool scrubDriven = scrubbing;
     float step = scrubDriven ? scrubStep
                              : (transportRunning ? lastKnownRatio : 0.0f) * rateFactor;
+    // The gap between a set's tracks: counted down whenever the tape is
+    // stopped and nobody is playing it - no pad touched, no scrub - and
+    // started over whenever someone is. When it's over, the next track
+    // starts. See "Sets".
+    bool inUse = transportRunning || scrubDriven || touch1Now || touch2Now;
+    if (setlistOn && !inUse) {
+      if (!gapCounting) {
+        gapCounting = true;
+        gapStartMillis = currentMillis;
+      }
+      if (currentMillis - gapStartMillis >= (unsigned long)(setGapSeconds * 1000.0f)) stepSet(1);
+    } else {
+      gapCounting = false;
+    }
+
+    // A set's track ends at the edge of its window when the setlist's own
+    // latch is running it - not while a finger on D21 holds the deck up, or
+    // it's looping, or being scrubbed: those go round and round as ever.
+    stopAtTrackEnd = setlistOn && transportRunning && transportLatched && !touch2Now &&
+                     !scrubDriven && !auditioning && !trackEnded && !looping;
 
     // While there's sound the echo is at full; after it stops the echo
     // fades out over a few delay times, and then is damped - see "Echo".
@@ -4584,7 +5066,7 @@ void loop() {
     // tried, and underran.
     const float MAX_STEP_UNCACHED = 2.0f;
     uint8_t ready = readyLevels();
-    if (ready < cache.levelCount()) {
+    if (ready < levelCount()) {
       // ...but never below native speed: a 192kHz file needs 4 samples per
       // tick just to play at 1x, and capping that at 2 would play it at
       // half speed until its copies were built.
@@ -4666,7 +5148,7 @@ void loop() {
     float fillPercent = 100.0f * voices[activeVoice].ring.usedSpace() /
                         voices[activeVoice].ring.frameCapacity();
     uint8_t level = fileLoaded ? voices[activeVoice].level : 0;
-    int cachePercent = (cache.name() == currentFilename) ? cache.percentDone() : 0;
+    int cachePercentDone = cachePercent();
     // Four decimals below 1x, since the knob now slows smoothly right down
     // to zero and two would show anything under 0.005x as "0.00x".
     int speedDecimals = fabsf(ratio) < 1.0f ? 4 : 2;
@@ -4697,7 +5179,7 @@ void loop() {
     Serial.print("  copy ");
     Serial.print(level);
     Serial.print("  cache ");
-    Serial.print(cachePercent);
+    Serial.print(cachePercentDone);
     Serial.print("%  isr avg ");
     uint32_t count = isrCount;
     Serial.print(count ? 100 * (isrCyclesSum / count) / cyclesPerTick : 0);
@@ -4759,12 +5241,22 @@ void loop() {
                      ",BUF:" + String((int)fillPercent) + ",UND:" + String(underrunTicks) +
                      ",RUN:" + String(transportRunning ? 1 : 0) +
                      ",LAT:" + String(transportLatched ? 1 : 0) +
-                     ",LVL:" + String(level) + ",CACHE:" + String(cachePercent) +
+                     ",LVL:" + String(level) + ",CACHE:" + String(cachePercentDone) +
                      ",MODE:" + String(knobMode) + ",HRD:" + String(reportedPitch(), 3);
       if (fileLoaded) {
         stat += ",WS:" + String(windowStart / nativeRate, 3) +
                 ",WE:" + String(windowEnd / nativeRate, 3) +
-                ",LEN:" + String((double)fileFrames / nativeRate, 3);
+                ",LEN:" + String((double)fileFrames / nativeRate, 3) +
+                ",CUR:" + String(cursorFrames() / nativeRate, 2);
+      }
+      stat += ",SET:" + String(setlistOn ? 1 : 0) + ",GAP:" + String(setGapSeconds, 1);
+      if (setlistOn && looping) stat += ",HLD:1";
+      if (setlistOn && gapCounting) {
+        float left = setGapSeconds - (millis() - gapStartMillis) / 1000.0f;
+        stat += ",GL:" + String(left > 0.0f ? left : 0.0f, 1);
+      }
+      if (preparing()) {
+        stat += ",PREP:" + String((unsigned)prepNext) + "/" + String((unsigned)prepQueue.size());
       }
       if (battery.present()) {
         stat += ",BAT:" + String(battery.percent, 1) + ",BV:" + String(battery.volts, 3) +

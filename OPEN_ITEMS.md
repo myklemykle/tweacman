@@ -127,6 +127,30 @@ fixed header), and Info (playback stats and the link log, folded away).
 
 ## SDResampleDemo - known issues
 
+- **Touch pads went dead on stage (2026-10-30 gig, outdoors, cold).**
+  Both pads stopped responding at once, after working fine at the start
+  of the show: a latched loop couldn't be stopped from the pads, and
+  touch1 wouldn't step modes. Knobs and BLE kept working; switching to a
+  set from the phone and leaving it alone played on, and some time later
+  the pads worked again by themselves. Never partly working. Two
+  theories:
+  1. Both pads stuck reading *touched* (condensation, something resting
+     across them, a ground change), cleared by the library's 60s
+     stuck-touch recalibration. It fits the pads' logic - touch2 held
+     keeps the deck running, a mode step needs touch1 released, and both
+     held is a chord, so the knobs stay normal - but probably not the
+     set: its gap only counts down while no pad reads touched.
+  2. The CTSU stopped measuring (an ESD zap is likelier in cold dry air,
+     or a TSCAP voltage error, `CTSUERRS.CTSUICOMP`). `scan()` then times
+     out without updating anything, so each pad keeps its last state.
+     Fits better, but nothing in the library recovers from that.
+  To do: show each pad's raw reading, baseline and state (and scan
+  timeouts/CTSU errors) on the Serial status line and the page's Info
+  tab; have `scan()` count failures and re-initialise the CTSU, treating
+  the pads as released meanwhile; let the page's Stop work even with
+  touch2 held; maybe a shorter stuck timeout in this sketch. A bench
+  test from cold (freezer, condensation) might reproduce it.
+
 - **USB disk mode: speed.** With the core's `UsbMsd` library as it is,
   copying onto the card runs at about 115KB/s and reading off it about
   550KB/s (4MB each way, 2026-10-16); full-speed USB allows about 1MB/s.

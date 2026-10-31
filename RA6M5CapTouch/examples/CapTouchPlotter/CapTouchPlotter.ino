@@ -3,7 +3,7 @@
 // Specified by Mykle Hansen, implemented by Claude (Anthropic).
 
 /*
-  SerialPlotterDemo - RA6M5CapTouch library
+  CapTouchPlotter - RA6M5CapTouch library
 
   Reads two touch-capable pins and streams their raw graduated reading,
   tracked baseline, and boolean touched state to the Arduino Serial

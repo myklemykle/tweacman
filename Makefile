@@ -25,7 +25,7 @@
 # A sketch that lives inside a library's examples/ folder works the same
 # way, just with the full relative path:
 #
-#   make run SKETCH=RV112FF/examples/SerialPlotterDemo
+#   make run SKETCH=RV112FF/examples/KnobAnglePlotter
 #
 # ---------------------------------------------------------------------------
 
@@ -196,4 +196,4 @@ help:
 	@echo
 	@echo "Variables: SKETCH, FQBN, PORT, BAUD, LIBRARIES, OPENSCAD, KNOB_PRESET"
 	@echo "Example:   make run SKETCH=HelloWorld"
-	@echo "Example:   make run SKETCH=RV112FF/examples/SerialPlotterDemo"
+	@echo "Example:   make run SKETCH=RV112FF/examples/KnobAnglePlotter"

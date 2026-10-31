@@ -12,7 +12,7 @@
   identical mixed signal is sent to both DAC channels (A0 and A1), so
   it doesn't matter which one your speaker or headphone is wired to.
 
-  Wiring: same as RV112FF/examples/SerialPlotterDemo (pot 1 wipers on
+  Wiring: same as RV112FF/examples/KnobAnglePlotter (pot 1 wipers on
   A2/A3, pot 2 wipers on A4/A5, both pots' track ends on 3.3V/GND) plus
   a 3.5mm jack on A0/A1/GND as in DACAudioTest - see that sketch's
   header comment for the DC-offset and output-impedance notes that

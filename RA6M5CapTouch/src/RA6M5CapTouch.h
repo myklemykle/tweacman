@@ -119,7 +119,7 @@ class CapTouch {
     // comment on automatic baseline tracking. Reflects whichever
     // scan() last ran, like readRaw(); useful mainly for plotting
     // alongside readRaw() to see the tracking happen (see
-    // SerialPlotterDemo).
+    // the CapTouchPlotter example).
     uint16_t readBaseline() const { return (uint16_t)_baseline; }
 
     // A cached decision from the most recently completed scan() -

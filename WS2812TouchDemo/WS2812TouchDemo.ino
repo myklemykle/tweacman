@@ -17,7 +17,7 @@
 
   Wiring: D6 to a ~10nF capacitor to GND (TSCAP, shared by both pads -
   see RA6M5CapTouch.h), D20 (touch1) and D21 (touch2) each to their own wire
-  or touch pad - same as CapTouch's own SerialPlotterDemo. The RGB LED
+  or touch pad - same as RA6M5CapTouch's CapTouchPlotter example. The RGB LED
   itself needs no wiring; it's onboard.
 */
 

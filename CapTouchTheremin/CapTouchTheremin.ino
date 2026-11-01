@@ -97,10 +97,10 @@
 // -- Tuning: how your hands map onto the instrument -----------------------
 
 // How much a hand adds to a pad's reading at the top of each range, in
-// the touch hardware's counts. A hand right against the pad adds several
-// thousand; the plotter's pitchHand and volumeHand show what yours do.
+// the touch hardware's counts. A hand right against the bench pads adds
+// about 14500; the plotter's pitchHand and volumeHand show what yours do.
 const float PITCH_FULL = 14000;
-const float VOLUME_FULL = 3000;
+const float VOLUME_FULL = 14000;
 
 // Where the logarithmic curve (see closeness()) bends: below about this
 // many counts it's nearly linear. Smaller spreads the far end of the

@@ -99,7 +99,7 @@
 // How much a hand adds to a pad's reading at the top of each range, in
 // the touch hardware's counts. A hand right against the pad adds several
 // thousand; the plotter's pitchHand and volumeHand show what yours do.
-const float PITCH_FULL = 8000;
+const float PITCH_FULL = 14000;
 const float VOLUME_FULL = 3000;
 
 // Where the logarithmic curve (see closeness()) bends: below about this

@@ -52,11 +52,13 @@
         in 20ms.
     +   one more hardware repeat per measurement (setMeasurementCount()),
     -   one fewer (1-64, starting at 1). Each repeat adds the pin's
-        reading again, so raw and baseline climb in steps, the threshold
-        is scaled to match, and noise relative to the reading falls - at
-        the cost of a slower scan. With nothing subtracting each pin's
-        background reading, the 16-bit counter tops out after only a
-        few repeats: a flat line at 65535 means it overflowed.
+        reading again, so the hardware's count grows in proportion; the
+        plot divides it back down, so raw and baseline stay put and you
+        can watch the noise shrink - at the cost of a slower scan. With
+        nothing subtracting each pin's background reading, the 16-bit
+        counter tops out after only a few repeats, so "+" steps back if
+        it overflows straight away. A touch can still overflow it: a
+        flat line at 65535 divided by the repeats.
 */
 
 #include <RA6M5CapTouch.h>
@@ -71,16 +73,18 @@ unsigned long previousMillis = 0;
 
 bool averaging = false;
 
-// Every scan's readings since the last printed line, for averaging.
-uint32_t sum1 = 0, sum2 = 0;
-uint16_t scansSincePrint = 0;
+// The measurement count the scan under way started with. A new count
+// only takes effect when the next scan starts, so a scan already running
+// when "+" or "-" is pressed finishes with the old one - and its readings
+// have to be divided by that.
+uint8_t scanCount = 1;
+bool checkOverflow = false;  // "+" was just pressed: back off if it overflows
 
-void setup() {
-  Serial.begin(115200);
-  wire1.begin();
-  wire2.begin();
-  CapTouch::startScan();
-}
+// The latest scan's readings, and the sum of every scan's since the last
+// printed line (for averaging) - all per repeat.
+float raw1 = 0, raw2 = 0, baseline1 = 0, baseline2 = 0;
+float sum1 = 0, sum2 = 0;
+uint16_t scansSincePrint = 0;
 
 void setMeasurementCount(int count) {
   if (count < 1 || count > 64) return;
@@ -89,20 +93,49 @@ void setMeasurementCount(int count) {
   wire2.setThreshold(THRESHOLD_PER_REPEAT * count);
 }
 
+void startScan() {
+  scanCount = CapTouch::getMeasurementCount();
+  CapTouch::startScan();
+}
+
+void setup() {
+  Serial.begin(115200);
+  wire1.begin();
+  wire2.begin();
+  startScan();
+}
+
 void loop() {
   // Keep the scan moving; whenever one finishes, add it up and start
   // the next.
   if (CapTouch::update()) {
-    sum1 += wire1.readRaw();
-    sum2 += wire2.readRaw();
+    if (checkOverflow && scanCount == CapTouch::getMeasurementCount()) {
+      checkOverflow = false;
+      if (CapTouch::overflowed()) {
+        setMeasurementCount(scanCount - 1);
+        startScan();
+        return;  // and leave this scan's readings, which are only 65535, off the plot
+      }
+    }
+    // Plotted per repeat, so the traces keep their height whatever the
+    // measurement count - see the "+" key above.
+    raw1 = (float)wire1.readRaw() / scanCount;
+    raw2 = (float)wire2.readRaw() / scanCount;
+    baseline1 = (float)wire1.readBaseline() / scanCount;
+    baseline2 = (float)wire2.readBaseline() / scanCount;
+    sum1 += raw1;
+    sum2 += raw2;
     scansSincePrint++;
-    CapTouch::startScan();
+    startScan();
   }
 
   while (Serial.available()) {
     char c = Serial.read();
     if (c == 'a') averaging = !averaging;
-    if (c == '+') setMeasurementCount(CapTouch::getMeasurementCount() + 1);
+    if (c == '+') {
+      setMeasurementCount(CapTouch::getMeasurementCount() + 1);
+      checkOverflow = true;
+    }
     if (c == '-') setMeasurementCount(CapTouch::getMeasurementCount() - 1);
   }
 
@@ -113,23 +146,23 @@ void loop() {
   if (currentMillis - previousMillis >= PLOT_INTERVAL && scansSincePrint > 0) {
     previousMillis = currentMillis;
 
-    uint16_t raw1 = averaging ? sum1 / scansSincePrint : wire1.readRaw();
-    uint16_t raw2 = averaging ? sum2 / scansSincePrint : wire2.readRaw();
+    float plot1 = averaging ? sum1 / scansSincePrint : raw1;
+    float plot2 = averaging ? sum2 / scansSincePrint : raw2;
     sum1 = sum2 = 0;
     scansSincePrint = 0;
 
     // Serial Plotter format: comma-separated "label:value" pairs, one
     // line per sample.
     Serial.print("raw1:");
-    Serial.print(raw1);
+    Serial.print(plot1, 1);
     Serial.print(",baseline1:");
-    Serial.print(wire1.readBaseline());
+    Serial.print(baseline1, 1);
     Serial.print(",touched1:");
     Serial.print(wire1.isTouched() ? 65535 : 0);
     Serial.print(",raw2:");
-    Serial.print(raw2);
+    Serial.print(plot2, 1);
     Serial.print(",baseline2:");
-    Serial.print(wire2.readBaseline());
+    Serial.print(baseline2, 1);
     Serial.print(",touched2:");
     Serial.println(wire2.isTouched() ? 65535 : 0);
   }

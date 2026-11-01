@@ -296,6 +296,22 @@ fixed header), and Info (playback stats and the link log, folded away).
   URL - and the license name would fit next to the existing "this hardware
   is open source" text on the back.
 
+## CapTouchTheremin
+
+- **Tune it by ear and hand.** Written and tested unattended (2026-10-31):
+  hands away it's silent and the resting note is steady, the audio
+  interrupt is 4% of the CPU, and the pads scan ~2300 times a second - but
+  nobody has played it yet. `PITCH_FULL`, `VOLUME_FULL`, `KNEE` and the two
+  dead zones are guesses from the bench numbers (a touch adds 5000-12000
+  counts); watch the plotter's `pitchHand`/`volumeHand` while playing and
+  set them from what a hand really adds across a playable distance.
+- **Range.** Plain wires sense about an inch. A bigger plate or a short
+  antenna should reach further, but raises the hands-away reading towards
+  the counter's ceiling - see the sensor offset item under the libraries.
+- **Knob 2 wraps.** The bottom note jumps from C5 back to C2 where the pot's
+  angle wraps; folding it (as `AudioKnobsDemo` does) or `MultiTurnKnob` with
+  limits would avoid that, if it bothers anyone.
+
 ## Arduino libraries
 
 - **Publish the libraries to the Library Manager, so the Arduino IDE can

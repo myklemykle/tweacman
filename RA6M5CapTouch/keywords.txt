@@ -19,3 +19,10 @@ isTouched	KEYWORD2
 setThreshold	KEYWORD2
 getThreshold	KEYWORD2
 scan	KEYWORD2
+startScan	KEYWORD2
+update	KEYWORD2
+scanning	KEYWORD2
+setMeasurementCount	KEYWORD2
+getMeasurementCount	KEYWORD2
+overflowed	KEYWORD2
+scanFailures	KEYWORD2

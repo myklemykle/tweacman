@@ -55,10 +55,19 @@
   reading back a specific pin's result from that shared measurement is
   the only part that's per-instance.
 
-  Implemented as a blocking, polled scan() (typically well under a
-  millisecond per registered pin) - matching this project's established
-  preference for polling over interrupts (see RV112FF) - rather than the
-  free-running, interrupt-driven mode the hardware also supports.
+  Polled from loop() - matching this project's established preference
+  for polling over interrupts (see RV112FF) - rather than the
+  free-running, interrupt-driven mode the hardware also supports. Two
+  ways to poll: scan() measures every pin and waits until it's done,
+  which is simplest; or startScan() begins one and update(), called
+  every pass through loop(), moves it along and reports when it's
+  done, so the sketch never waits. The CPU has to step in between
+  pins (to give the hardware each pin's settings, then take its
+  result), but the hardware waits for it at each step, so a loop()
+  that calls update() less often only makes a scan take longer.
+  Measured on the Thing Plus with two pins: scan() takes about 400us,
+  most of it waiting - update() calls add up to about 40us of real work
+  per scan.
 
   Automatic baseline tracking: the CTSU hardware only reports a raw
   graduated count (readRaw()) - it has no concept of "touched" and no
@@ -156,10 +165,43 @@ class CapTouch {
 
     // Triggers one measurement across every registered CapTouch pin at
     // once - the hardware measures them together in a single pass, it
-    // can't scan just one in isolation. Blocks until done (typically
-    // well under a millisecond per registered pin). Call this once per
-    // loop() pass, same polling pattern as RV112FF.
+    // can't scan just one in isolation. Blocks until done (about 200us
+    // per registered pin, and that again for each extra repeat - see
+    // setMeasurementCount()). Call this once per loop() pass, same
+    // polling pattern as RV112FF.
     static void scan();
+
+    // The same scan without waiting for it. startScan() begins one (and
+    // does nothing if one is already under way); update() then does
+    // whatever the hardware is waiting for and returns at once - true
+    // just once, when the scan has finished and every pin's readings
+    // are new. Call update() on every pass through loop():
+    //
+    //   if (!CapTouch::scanning()) CapTouch::startScan();
+    //   if (CapTouch::update()) { ...readRaw(), isTouched()... }
+    static void startScan();
+    static bool update();
+    static bool scanning() { return s_scanning; }
+
+    // How many times the hardware repeats its measurement of each pin
+    // and adds up the results, 1-64 (default 1). More is quieter but
+    // takes proportionally longer - and readRaw() grows in proportion
+    // too, so scale setThreshold() with it, and watch overflowed(): with
+    // nothing subtracting the pad's background reading, a few repeats
+    // are enough to fill the 16-bit counter. Takes effect from the next
+    // scan, which re-centres every pin's baseline on its new reading.
+    static void setMeasurementCount(uint8_t count);
+    static uint8_t getMeasurementCount() { return s_measurementCount; }
+
+    // True if a pin's reading in the most recent scan hit the counter's
+    // ceiling (65535), so it reads lower than it really is.
+    static bool overflowed() { return s_overflowed; }
+
+    // How many scans have been abandoned because the hardware stopped
+    // making progress. A stuck scan is stopped and the hardware's
+    // control block reset, so the next scan starts clean; the pins
+    // keep their previous readings.
+    static uint32_t scanFailures() { return s_scanFailures; }
 
   private:
     uint8_t _pin;
@@ -203,10 +245,21 @@ class CapTouch {
     static uint8_t s_instanceCount;
     static bool s_hardwareReady;
 
+    // The scan under way, if any - see update().
+    static bool s_scanning;
+    static uint8_t s_resultsRead;      // pins whose result has been read
+    static uint8_t s_settingsWritten;  // pins the hardware has been given settings for
+    static unsigned long s_lastProgressMicros;
+    static uint8_t s_measurementCount;
+    static uint8_t s_scanMeasurementCount;  // the count the scan under way started with
+    static bool s_recentrePending;     // set by setMeasurementCount()
+    static bool s_overflowed;
+    static uint32_t s_scanFailures;
+
     static void initHardwareOnce();
     static bool lookupTsChannel(uint8_t pin, uint8_t &tsChannel);
 
-    // Called from scan() with a freshly-read measurement for this
+    // Called from update() with a freshly-read measurement for this
     // instance: updates readRaw()/readReference(), decides
     // isTouched(), and advances (or freezes, or resets) the baseline -
     // see the class comment on automatic baseline tracking.

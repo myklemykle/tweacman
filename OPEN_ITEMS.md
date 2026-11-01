@@ -334,6 +334,28 @@ fixed header), and Info (playback stats and the link log, folded away).
   and possibly its own tutorial demo of hardware-offloaded LED driving. Would
   ship as a small local library in the style of `RA6M5CapTouch`. Watch for
   the SD driver's DMAC channel.
+- **RA6M5CapTouch: sensor offset current.** `setMeasurementCount()` works,
+  but with `CTSUSO` (the offset current that subtracts each pad's background
+  reading) left at 0, the bench pads (~11800 counts each) overflow the 16-bit
+  counter at 6 repeats - and a touch adds up to ~12000 more per repeat, so
+  only 1-2 repeats are really usable. Exposing the offset would fix that, but
+  carefully: per the manual, an offset larger than the pad's own current
+  latches the TSCAP voltage error (`CTSUERRS.CTSUICOMP`), which only clears by
+  powering the CTSU down. Measured 2026-10-31, two pads, hands off: noise
+  (sd) 12.9 counts at 1 repeat; per repeat, 9.7 at 2 and 8.0 at 4 - about
+  what averaging the same number of 1-repeat scans in software gives (7.2 for
+  4), so software averaging is the better buy until the offset exists.
+  Averaging 16 scans only reached 4.9, not the 3.2 independent noise would
+  give - something slow, perhaps mains hum, isn't averaged out in ~7ms.
+- **RA6M5CapTouch: check the TSCAP error flag.** `update()` now aborts and
+  resets a scan that stops making progress (`scanFailures()`), but nothing
+  checks `CTSUICOMP`, which the manual says leaves readings undefined while
+  scans still complete normally. Checking it after each scan, and powering
+  the CTSU down and back up when it's set, would cover the other way the pads
+  could have died on stage (see SDResampleDemo's known issues).
+- **SDResampleDemo: non-blocking touch scans.** It still calls the blocking
+  `CapTouch::scan()` every 10ms control tick: ~400us of waiting, about 4% of
+  `loop()`. `startScan()`/`update()` would cut that to ~40us of real work.
 
 ## Toolchain / bench reliability
 

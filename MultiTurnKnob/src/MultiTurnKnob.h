@@ -75,7 +75,7 @@ class MultiTurnKnob {
     // recent read() - the same value RV112FF::read() would return, just
     // without calling it again (see the class comment on why not to).
     // Mainly useful for showing both alongside each other, e.g. on a
-    // plotter - see SerialPlotterDemo.
+    // plotter - see the MultiTurnPlotter example.
     float lastAngle() const { return _prevAngle; }
 
   private:

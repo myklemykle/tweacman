@@ -49,6 +49,15 @@ static const bsp_io_port_pin_t TSCAP_PORT = BSP_IO_PORT_02_PIN_07;
 CapTouch *CapTouch::s_instances[CapTouch::MAX_INSTANCES] = {};
 uint8_t CapTouch::s_instanceCount = 0;
 bool CapTouch::s_hardwareReady = false;
+bool CapTouch::s_scanning = false;
+uint8_t CapTouch::s_resultsRead = 0;
+uint8_t CapTouch::s_settingsWritten = 0;
+unsigned long CapTouch::s_lastProgressMicros = 0;
+uint8_t CapTouch::s_measurementCount = 1;
+uint8_t CapTouch::s_scanMeasurementCount = 1;
+bool CapTouch::s_recentrePending = false;
+bool CapTouch::s_overflowed = false;
+uint32_t CapTouch::s_scanFailures = 0;
 
 CapTouch::CapTouch(uint8_t pin) : _pin(pin) {
   // Deliberately no hardware access here - see RV112FF.h for why: a
@@ -251,16 +260,29 @@ bool CapTouch::begin() {
   return true;
 }
 
-void CapTouch::scan() {
-  if (s_instanceCount == 0) return;
+void CapTouch::setMeasurementCount(uint8_t count) {
+  if (count < 1) count = 1;
+  if (count > 64) count = 64;  // CTSUSNUM is 6 bits: 0-63 means 1-64 repeats
+  if (count == s_measurementCount) return;
+  s_measurementCount = count;
+  // Every reading is about to jump in proportion, which the baseline
+  // would otherwise take for a touch - so re-centre each pin on the
+  // first reading made with the new count. (Not the scan under way now,
+  // if there is one: it started with the old count, and keeps it.)
+  s_recentrePending = true;
+}
 
-  // A result left unread by an earlier scan (see the end of this function)
-  // would otherwise be taken for this scan's first result. Reading CTSURC
-  // is what clears it.
+void CapTouch::startScan() {
+  if (s_instanceCount == 0 || s_scanning) return;
+
+  // A result left unread by an earlier scan would otherwise be taken
+  // for this scan's first result. Reading CTSURC is what clears it.
   if (R_CTSU->CTSUST_b.CTSUDTSR) {
     (void)R_CTSU->CTSUSC;
     (void)R_CTSU->CTSURC;
   }
+  // The overflow flag stays set until software writes 0 to it.
+  if (R_CTSU->CTSUST_b.CTSUSOVF) R_CTSU->CTSUST_b.CTSUSOVF = 0;
 
   // CTSUCHAC0 covers TS00-TS07, CTSUCHAC1 TS08-TS15 and CTSUCHAC2
   // TS16-TS19 - clear all three and set exactly the bits for
@@ -273,87 +295,107 @@ void CapTouch::scan() {
     R_CTSU->CTSUCHAC[ch / 8] |= (1 << (ch % 8));
   }
 
+  s_resultsRead = 0;
+  s_settingsWritten = 0;
+  s_scanMeasurementCount = s_measurementCount;
+  s_lastProgressMicros = micros();
+  s_scanning = true;
   R_CTSU->CTSUCR0_b.CTSUSTRT = 1;  // software trigger: start the scan
+}
 
-  unsigned long start = millis();
-  const unsigned long TIMEOUT_MS = 50;  // generous - a full scan should
-                                          // take well under this even
-                                          // with all channels registered
-  uint8_t lastStatus = 0xFF;
+bool CapTouch::update() {
+  if (!s_scanning) return false;
 
-  // How many results this scan has read so far, which is also which pin
-  // the next one belongs to. The hardware measures the enabled channels in
-  // ascending order, and begin() keeps s_instances in that same order, so
-  // the Nth result is s_instances[N]'s.
+  // The hardware measures the enabled channels in ascending order, one
+  // at a time, and for each one it stops twice to wait for the CPU:
   //
-  // Matching by position replaced an earlier approach that noted the
-  // channel number (CTSUMCH0) at Status 2 and credited the next result to
-  // it. That raced: the hardware doesn't wait for the previous channel's
-  // result to be read before moving on to the next channel's Status 2, so
-  // if loop() was held up at just the wrong moment - an interrupt, which
-  // an audio timer, SD traffic or the RGB LED make far more likely - the
-  // next channel's number was noted first and the previous channel's
-  // result got credited to it. The symptom on the bench: holding D21 put
-  // occasional single-scan D21-sized spikes on D20, more often the more
-  // interrupt load was running, and invisible while nothing was touched,
-  // since the two pads then read about the same anyway.
-  uint8_t resultsRead = 0;
-  unsigned long doneMicros = 0;  // when the hardware reported the scan done
+  //   Status 2: waiting for this channel's settings to be written.
+  //   Status 3: waiting (after its settling time) for the *previous*
+  //             channel's result to be read, before measuring this one.
+  //
+  // So it never runs ahead of us, however rarely update() is called -
+  // it just sits and waits. All update() has to do is answer whichever
+  // question is pending, using two counts to keep its place: pins whose
+  // result has been read, and pins whose settings have been written.
+  // begin() keeps s_instances in channel order, so the Nth result and
+  // the Nth settings both belong to s_instances[N].
+  //
+  // Counting rather than watching which channel the hardware says it's
+  // on (CTSUMCH0) matters: an earlier version noted the channel number
+  // at Status 2 and credited the next result to it, which raced - by the
+  // time an interrupt-delayed loop() looked, the hardware could already
+  // be on the next channel's Status 2, and a result landed on the wrong
+  // pin.
+  bool progress = false;
 
-  while (millis() - start < TIMEOUT_MS && resultsRead < s_instanceCount) {
-    uint8_t status = R_CTSU->CTSUST_b.CTSUSTC;
-
-    // Status 2 ("wait for sensor drive pulse setting"): write this
-    // channel's measurement settings. The manual says a write to
-    // CTSUSO1 specifically is what triggers the transition onward to
-    // Status 3, so it must be written last - and it needs writing on
-    // every visit to Status 2, not just once, so gate on the status
-    // *changing* rather than a one-shot flag.
-    //
-    // CTSUSSC=0x0200 sets CTSUSSDIV=2 (spectrum diffusion divisor for
-    // a ~1.33-2.00MHz base clock, Table 46.6 - matches this board's
-    // PCLKB-derived base clock with CTSUCLK left undivided above).
-    // CTSUSO0=0 leaves the sensor offset/measurement-count at their
-    // defaults. CTSUSO1=0x0F00 sets CTSUSDPA=15 (base clock divided by
-    // (15+1)*2 = 32 - this is Step 5 of the manual's initial settings
-    // flow, "set CTSU base clock", which earlier code never actually
-    // did, leaving the divisor at its reset value of /2 instead) with
-    // CTSURICOA=0 and CTSUICOG=00b (ICO gain 100%, both defaults).
-    if (status == 2 && status != lastStatus) {
-      R_CTSU->CTSUSSC = 0x0200;
-      R_CTSU->CTSUSO0 = 0x0000;
-      R_CTSU->CTSUSO1 = 0x0F00;  // must be written last - see the comment above
-    }
-    lastStatus = status;
-
-    // CTSUST.CTSUDTSR ("result ready, not yet read") is the reliable
-    // signal that a channel's measurement is done - polling for the
-    // status counter to equal 5 directly missed real transitions in
-    // testing (Status 5 can be too brief to catch by polling, the same
-    // problem Status 1 turned out to have), which then permanently
-    // stalled the *next* channel in Status 3 forever, since per the
-    // manual "Status 3 continues until the CTSURC counter is read,
-    // even if the stabilization time...elapses". Reading CTSURC here
-    // is what clears CTSUDTSR and lets the next channel proceed.
-    if (R_CTSU->CTSUST_b.CTSUDTSR) {
-      uint16_t raw = R_CTSU->CTSUSC;         // read order matters: SC then RC
-      uint16_t reference = R_CTSU->CTSURC;
-      s_instances[resultsRead]->finishReading(raw, reference);
-      resultsRead++;
-    }
-
-    // The hardware clears CTSUSTRT once every channel has been measured -
-    // but the last result can still be waiting to be read at that point
-    // (it finishes between the result check above and this one), and
-    // stopping here would leave it for the next scan to mistake for its
-    // own. So keep polling for any results still owed, but only briefly:
-    // a result that hasn't shown up within a millisecond isn't coming.
-    if (R_CTSU->CTSUCR0_b.CTSUSTRT == 0) {
-      if (doneMicros == 0) {
-        doneMicros = micros() | 1;  // | 1 so it can't be mistaken for "not yet"
-      } else if (micros() - doneMicros > 1000) {
-        break;
-      }
-    }
+  // A result is ready (CTSUST.CTSUDTSR). Polling for Status 5 instead
+  // missed real ones in testing - it can be too brief to catch - which
+  // stalled the next channel in Status 3 forever. Reading CTSURC is what
+  // clears the flag and lets the hardware go on.
+  if (R_CTSU->CTSUST_b.CTSUDTSR && s_resultsRead < s_instanceCount) {
+    uint16_t raw = R_CTSU->CTSUSC;         // read order matters: SC then RC
+    uint16_t reference = R_CTSU->CTSURC;
+    s_instances[s_resultsRead]->finishReading(raw, reference);
+    s_resultsRead++;
+    progress = true;
   }
+
+  // Status 2: write the next channel's settings. A channel's Status 2
+  // comes after the previous channel's result is ready, which the check
+  // above has just read - so "settings written == results read" means
+  // this Status 2 hasn't been answered yet. (Status 2 can still read back
+  // for a moment after the answer; the counts keep that from being
+  // answered twice.)
+  //
+  // The write to CTSUSO1 is what moves the hardware on, so it goes last.
+  // CTSUSSC=0x0200 sets CTSUSSDIV=2 (spectrum diffusion divisor for a
+  // ~1.33-2.00MHz base clock, Table 46.6 - matches this board's
+  // PCLKB-derived base clock with CTSUCLK left undivided). CTSUSO0 holds
+  // the measurement count (CTSUSNUM, repeats minus one) and leaves the
+  // sensor offset current (CTSUSO) at 0. CTSUSO1=0x0F00 sets CTSUSDPA=15
+  // (base clock divided by (15+1)*2 = 32 - Step 5 of the manual's initial
+  // settings flow, "set CTSU base clock", left at its reset value of /2
+  // by earlier code) with CTSURICOA=0 and CTSUICOG=00b (ICO gain 100%,
+  // both defaults).
+  if (R_CTSU->CTSUST_b.CTSUSTC == 2 && s_settingsWritten == s_resultsRead &&
+      s_settingsWritten < s_instanceCount) {
+    R_CTSU->CTSUSSC = 0x0200;
+    R_CTSU->CTSUSO0 = (uint16_t)((s_scanMeasurementCount - 1) << R_CTSU_CTSUSO0_CTSUSNUM_Pos);
+    R_CTSU->CTSUSO1 = 0x0F00;  // must be written last - see above
+    s_settingsWritten++;
+    progress = true;
+  }
+
+  if (s_resultsRead == s_instanceCount) {
+    s_scanning = false;
+    s_overflowed = R_CTSU->CTSUST_b.CTSUSOVF;
+    if (s_recentrePending && s_scanMeasurementCount == s_measurementCount) {
+      for (uint8_t i = 0; i < s_instanceCount; i++) s_instances[i]->recalibrate();
+      s_recentrePending = false;
+    }
+    return true;
+  }
+
+  // Give up on a scan that has stopped moving - not merely one update()
+  // hasn't been called for, since the hardware waits for us, but one
+  // where nothing new has happened in far longer than a channel's
+  // measurement takes (roughly 0.2ms per repeat). Stopping a scan by
+  // hand needs CTSUSTRT=0 and CTSUINIT=1 in a single write, per the
+  // manual.
+  unsigned long now = micros();
+  if (progress) {
+    s_lastProgressMicros = now;
+  } else if (now - s_lastProgressMicros > 5000UL + 1000UL * s_scanMeasurementCount) {
+    R_CTSU->CTSUCR0 = (uint8_t)((R_CTSU->CTSUCR0 & ~R_CTSU_CTSUCR0_CTSUSTRT_Msk) |
+                                R_CTSU_CTSUCR0_CTSUINIT_Msk);
+    s_scanning = false;
+    s_scanFailures++;
+    return true;
+  }
+  return false;
+}
+
+void CapTouch::scan() {
+  startScan();
+  while (s_scanning) update();
 }

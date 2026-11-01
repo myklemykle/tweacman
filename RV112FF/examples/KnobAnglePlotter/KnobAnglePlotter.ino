@@ -3,7 +3,7 @@
 // Specified by Mykle Hansen, implemented by Claude (Anthropic).
 
 /*
-  SerialPlotterDemo - RV112FF library
+  KnobAnglePlotter - RV112FF library
 
   Reads two RV112FF-40 dual potentiometers and streams their shaft
   angles to the Arduino Serial Plotter (Tools > Serial Plotter in the

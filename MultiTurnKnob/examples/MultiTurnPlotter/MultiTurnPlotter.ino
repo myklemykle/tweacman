@@ -3,7 +3,7 @@
 // Specified by Mykle Hansen, implemented by Claude (Anthropic).
 
 /*
-  SerialPlotterDemo - MultiTurnKnob library
+  MultiTurnPlotter - MultiTurnKnob library
 
   Wraps one RV112FF-40 pot in a MultiTurnKnob and streams both its raw
   single-turn angle and the unbounded accumulated position to the Arduino
@@ -12,7 +12,7 @@
   graph).
 
   Wiring (SparkFun Thing Plus RA6M5): pot wipers -> A2, A3; both track
-  ends -> 3.3V and GND (same as RV112FF's own SerialPlotterDemo). On
+  ends -> 3.3V and GND (same as RV112FF's own KnobAnglePlotter). On
   another board, use any two analog pins it has.
 
   Spin the knob past a full turn in either direction and watch

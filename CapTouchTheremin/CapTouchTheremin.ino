@@ -16,8 +16,9 @@
   Wiring (the same as the other demos in this project):
     D6      -> a ~10nF capacitor to GND (TSCAP, which the touch hardware
                needs - see RA6M5CapTouch.h)
-    D20     -> the pitch pad: a wire or small metal plate (TS05)
-    D21     -> the volume pad (TS04)
+    D21     -> the pitch pad: a wire or small metal plate (TS04) - on
+               the right, as on a real theremin, on this project's board
+    D20     -> the volume pad, on the left (TS05)
     A0, A1  -> a 3.5mm jack's tip and ring, sleeve to GND (both get the
                same mono signal - see DACAudioTest for the DC offset,
                and why a coupling capacitor helps)
@@ -98,7 +99,7 @@
 // How much a hand adds to a pad's reading at the top of each range, in
 // the touch hardware's counts. A hand right against the pad adds several
 // thousand; the plotter's pitchHand and volumeHand show what yours do.
-const float PITCH_FULL = 4000;
+const float PITCH_FULL = 8000;
 const float VOLUME_FULL = 3000;
 
 // Where the logarithmic curve (see closeness()) bends: below about this
@@ -165,8 +166,8 @@ __attribute__((optimize("O2"))) void audioCallback(timer_callback_args_t *args) 
 
 // -- Pads ---------------------------------------------------------------
 
-CapTouch pitchPad(20);
-CapTouch volumePad(21);
+CapTouch pitchPad(21);
+CapTouch volumePad(20);
 
 // The most recent readings from each pad, oldest overwritten first, for
 // the moving average knob 1 sets.
@@ -279,9 +280,10 @@ void readKnobs() {
                            : (int)roundf(powf(2.0f, angle1 / 360.0f * 6.0f));
   if (smoothing > MAX_SMOOTHING) smoothing = MAX_SMOOTHING;
   // Knob 2: the bottom note, on an octave scale so equal turns are equal
-  // musical intervals.
+  // musical intervals - and higher clockwise, which is the opposite way
+  // to the angle RV112FF reports.
   baseHz = (angle2 < 0) ? DEFAULT_BASE_HZ
-                        : LOWEST_BASE_HZ * powf(2.0f, angle2 / 360.0f * BASE_RANGE_OCTAVES);
+                        : LOWEST_BASE_HZ * powf(2.0f, (360.0f - angle2) / 360.0f * BASE_RANGE_OCTAVES);
 }
 
 // -- Scans --------------------------------------------------------------
@@ -352,7 +354,7 @@ const unsigned long PLOT_INTERVAL = 20;  // ms (~50 Hz)
 unsigned long previousPlotMillis = 0;
 
 void greet() {
-  Serial.println("CapTouchTheremin: pitch hand near D20, volume hand near D21.");
+  Serial.println("CapTouchTheremin: pitch hand near D21 (right), volume hand near D20 (left).");
   Serial.println("Knob 1 smoothing, knob 2 bottom note, USR button snaps to notes.");
   Serial.println("Send c to remeasure the pads with hands away, s to step the snapping.");
 }

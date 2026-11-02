@@ -232,12 +232,37 @@ fixed header), and Info (playback stats and the link log, folded away).
   build. FatFs was erasing every sector before writing it, which
   `RA6M5FastSD` now skips (2026-11-01): an 8KB write went from ~25ms to
   ~2.7ms (worst ~8ms on `SDWriteBench`), and a 60s mono file's copies now
-  build in 26s (~0.43s per second of audio, from ~0.66). But `PROFILE`
-  over that build still showed a longest step of 76ms (2.2ms average) -
-  so the stalls aren't writes in general. Suspects: the card's occasional
-  long busy (SDWriteBench saw single writes of 50-70ms now and then), and
-  opening, closing and renaming each copy's file. Find which before
-  splitting steps.
+  build in 26s (~0.43s per second of audio, from ~0.66). Traced on
+  2026-11-01 (branch `experiment/cache-stall-trace`, not for merging:
+  every step timed by kind, every SD driver call logged):
+  - **Path lookups are the stall.** For a file in a real set (a
+    long-named file in `HALLOWEEN CLIPS`), every operation that names a
+    path - open, remove, rename, mkdir, `exists()` - walks
+    `/sd/cache/<set>/<long name>/` from the root, reading about 36
+    directory sectors one command at a time (~0.25ms each, FatFs's tiny
+    mode keeps no directory sectors between lookups): ~9ms per lookup.
+    So every open step took ~14ms, every finish (close, remove, rename)
+    ~25-29ms and every wipe step 13-28ms, and `MipCache::start()` took
+    50-100ms - 70ms of it checking which copies exist, one `exists()` per
+    copy (244 reads). The 76ms `PROFILE` saw was `start()`, which is in
+    the same profiler stage. A test file at the root with a short name
+    hides all this (open ~3ms, finish ~8ms).
+  - **The data steps are fine:** filtering, reading and writing stay
+    under 10ms (stereo worst ~9.5ms, mono ~8.7ms).
+  - **The card's own busy:** now and then one write takes ~23ms (two in
+    one build, none in another). Not fixable short of non-blocking
+    writes; rare.
+  Likeliest fix: a small sector cache in the block-device layer for
+  FatFs's single-sector reads (directory and table sectors), with
+  read-ahead - reading 8 sectors in one command costs about what 2
+  single reads do, and directory scans are sequential. That would speed
+  up every path lookup in the sketch (settings saves, the file list,
+  boot), not just the cache. It must be emptied whenever USB disk mode
+  hands the card back, since the computer will have changed it. Other
+  options: record finished copies in `info.txt` instead of a `.tmp` and
+  rename per copy, and check them from it rather than with `exists()`;
+  short (hashed) cache folder names, so directory entries aren't long
+  names; and splitting `start()` into steps.
 
 ## BLE / CodeLess
 

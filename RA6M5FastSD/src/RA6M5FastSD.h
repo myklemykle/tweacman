@@ -53,7 +53,12 @@
   sector after sector. Every write updates whatever it overlaps in the
   cache, so it never goes stale, whoever does the writing through this
   object (FatFs, or the core's UsbMsd library). Bigger reads, which are
-  file data, aren't cached.
+  file data, aren't cached. Measured in SDResampleDemo, for a file in a
+  long-named folder: opening a new file 13.7 -> 5.9ms, finishing one
+  (close, remove, rename) 25.7 -> 14.7ms; and reading off the card as a
+  USB disk, which the core does a sector at a time, 575 -> 753KB/s. What's
+  left in a lookup is mostly FatFs's own work matching long names, and
+  the single-sector writes it makes - twice the cache barely helped.
 
   It's a drop-in replacement: same constructor, and FATFileSystem mounts it
   the same way.

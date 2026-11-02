@@ -170,7 +170,8 @@ fixed header), and Info (playback stats and the link log, folded away).
   card. `RA6M5FastSD` now skips the erase (2026-11-01). Timed from the
   Mac's shell (`cp`, then `sync`), before and after: one 4MB file 61 ->
   235KB/s, twenty 100KB files 43 -> 135KB/s, reading 4MB back 479 ->
-  575KB/s (on a fresh mount; data verified both times). The card itself
+  575KB/s (on a fresh mount; data verified both times) - and 753KB/s
+  with the sector cache, since the library reads a sector at a time. The card itself
   writes 8MB/s in 32KB commands, so what's left is the per-sector
   read-then-write and USB's ~1MB/s ceiling. The plan, if
   it's worth it: our own `tud_msc_*` handlers that gather consecutive
@@ -257,17 +258,20 @@ fixed header), and Info (playback stats and the link log, folded away).
   - **The card's own busy:** now and then one write takes ~23ms (two in
     one build, none in another). Not fixable short of non-blocking
     writes; rare.
-  Likeliest fix: a small sector cache in the block-device layer for
-  FatFs's single-sector reads (directory and table sectors), with
-  read-ahead - reading 8 sectors in one command costs about what 2
-  single reads do, and directory scans are sequential. That would speed
-  up every path lookup in the sketch (settings saves, the file list,
-  boot), not just the cache. It must be emptied whenever USB disk mode
-  hands the card back, since the computer will have changed it. Other
-  options: record finished copies in `info.txt` instead of a `.tmp` and
-  rename per copy, and check them from it rather than with `exists()`;
-  short (hashed) cache folder names, so directory entries aren't long
-  names; and splitting `start()` into steps.
+  Done: `RA6M5FastSD` now caches single-sector reads, 8 sectors at a time
+  (branch `feature/sd-sector-cache`). Open steps 13.7 -> 5.9ms, wipe
+  steps 14.9 -> 6.1ms on average, finish steps 25.7 -> 14.7ms, and
+  `start()` 98 -> 44ms (just after mounting) or 48 -> 32ms; copies came
+  out byte-identical. Doubling the cache barely helped (finish 14.0ms):
+  what's left is FatFs's own work matching long names (with the audio
+  interrupt taking half the CPU meanwhile) and its single-sector writes,
+  ~1.2ms each, four per finish. Still over 10ms: every finish step, the
+  first wipe step, and `start()`, once per file loaded. The fixes left are
+  in `MipCache`: write each copy under its final name and judge it
+  finished by its length (a copy cut short by a reset is shorter), rather
+  than a `.tmp` file, a remove and a rename - a finish becomes just a
+  close; split `start()` into steps; and maybe short (hashed) cache
+  folder names, so FatFs has no long names to match.
 
 ## BLE / CodeLess
 

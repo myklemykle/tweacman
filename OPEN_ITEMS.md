@@ -226,6 +226,11 @@ fixed header), and Info (playback stats and the link log, folded away).
 - **Prepare's count can step back.** While a set is prepared, `PREP:n/t`
   goes back by one when the file being built is interrupted (cueing it
   requeues it). Cosmetic.
+- **Other `loop()` stalls over 10ms.** `PROFILE` on 2026-11-01 also showed
+  the status-line stage taking up to 44ms and BLE input up to 77ms, with
+  nothing to do with the cache. Probably Serial or BLE output waiting for
+  buffer room, or BLE commands that touch the card (and so its path
+  lookups - see the next item). Not yet looked into.
 - **Cache-build stalls.** While `MipCache` is building, a single build step
   could stall `loop()` for up to ~35ms on an SD write - over this project's
   10ms limit for control latency, so the knobs and pads felt it during a

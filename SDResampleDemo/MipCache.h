@@ -21,15 +21,29 @@
   The copies halve in size at every step, so the whole ladder takes about as
   much space as the original file.
 
-  On the card: /sd/cache/<wav name>/ - or /sd/cache/<set>/<wav name>/, for
-  a WAV in one of the card's sets (see WavList.h) - holds L01.raw ... L10.raw (raw 16-bit
-  samples, no header - mono, or interleaved left/right for a stereo WAV) and
-  info.txt, a one-line description of the WAV they were made from - its
-  length, sample rate, channel count, and a hash of its first and last 4KB. This core can't read file timestamps, so content is the only way
-  to notice a WAV has changed underneath its cache. info.txt is written
-  before the copies (once any stale ones are gone), and each copy is written
-  under a .tmp name and renamed when complete, so a reset mid-build loses at
-  most the copy in progress - the next build resumes from there.
+  On the card: /sd/cache/<8 hex digits>/, named by a hash of the WAV's path
+  (e.g. "HALLOWEEN CLIPS/scream.wav"), holds L01.RAW ... L10.RAW (raw
+  16-bit samples, no header - mono, or interleaved left/right for a stereo
+  WAV) and INFO.TXT, a one-line description of the WAV they were made from
+  - its length, sample rate, channel count, and a hash of its first and
+  last 4KB. This core can't read file timestamps, so content is the only
+  way to notice a WAV has changed underneath its cache. (Two WAVs whose
+  paths hashed alike would just keep finding each other's copies stale and
+  rebuilding them - at worst slow, never wrong.)
+
+  Why such cryptic names: the card's filesystem has no index - finding a
+  file means reading every directory on the way to it entry by entry, and
+  a long name takes several entries, each compared character by character.
+  A cache folder named after a long WAV name, in a folder of others like
+  it, made every open, rename and delete of a copy cost ~9ms; with one
+  short-named folder per WAV, those lookups are quick. Nobody needs to
+  look in there.
+
+  INFO.TXT is written before the copies (once any stale ones are gone).
+  Each copy is written under its own name from the start, and counts as
+  finished once it's the right length - a copy cut short by a reset is
+  shorter, and is built again. So a reset mid-build loses at most the copy
+  in progress, and the next build resumes from there.
 
   Building: each copy is made from the one before it (L01 from the WAV, L02
   from L01, ...) in small blocks, one per step() call, so loop() can keep
@@ -71,7 +85,7 @@ class MipCache {
   void start(const String &wavName);
 
   // Abandons any build in progress, closing its files. A partly written
-  // copy stays on the card as .tmp and is simply overwritten next time.
+  // copy stays on the card, too short to count, and is overwritten next time.
   void stop();
 
   // Does one block of building work (a few milliseconds of SD reading,
@@ -92,18 +106,20 @@ class MipCache {
   int percentDone() const;
 
   // -- Card housekeeping, for when the sketch changes a WAV --------------
-  static String dirFor(const String &wavName) { return "/sd/cache/" + wavName; }
-  static String levelPath(const String &wavName, uint8_t level, bool temp = false);
+  static String dirFor(const String &wavName);
+  static String levelPath(const String &wavName, uint8_t level);
   static void removeFor(const String &wavName);
   static void renameFor(const String &from, const String &to);
   // Removes cache folders whose WAV no longer exists - e.g. one deleted
-  // from a computer rather than through the sketch - and the folders of
-  // sets left empty by that.
+  // from a computer rather than through the sketch - and anything else in
+  // /sd/cache that isn't a current WAV's folder (such as the long-named
+  // folders older versions of this code made).
   static void removeOrphans();
 
  private:
   bool openNextLevel();
   void finishLevel();
+  bool levelComplete(uint8_t level) const;
 
   String name_;
   bool active_ = false;

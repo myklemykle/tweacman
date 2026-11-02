@@ -265,13 +265,23 @@ fixed header), and Info (playback stats and the link log, folded away).
   out byte-identical. Doubling the cache barely helped (finish 14.0ms):
   what's left is FatFs's own work matching long names (with the audio
   interrupt taking half the CPU meanwhile) and its single-sector writes,
-  ~1.2ms each, four per finish. Still over 10ms: every finish step, the
-  first wipe step, and `start()`, once per file loaded. The fixes left are
-  in `MipCache`: write each copy under its final name and judge it
-  finished by its length (a copy cut short by a reset is shorter), rather
-  than a `.tmp` file, a remove and a rename - a finish becomes just a
-  close; split `start()` into steps; and maybe short (hashed) cache
-  folder names, so FatFs has no long names to match.
+  ~1.2ms each, four per finish. Then `MipCache` changed (branch
+  `feature/mipcache-short-names`): each WAV's copies live in
+  `/sd/cache/<8 hex digits>/`, named by a hash of its path, with 8.3 file
+  names, and each copy is written under its own name and counts as done
+  once it's full length - no `.tmp`, remove and rename. For the same clip:
+  open steps 5.9 -> 2.5ms, finish 14.7 -> 4.2ms, wipe steps 6.1 -> 1.5ms,
+  `start()` 32 -> 22ms (and 44 -> 20ms just after mounting); copies
+  byte-identical. The first boot on it deleted the old layout's 749 files
+  (75 folders) - quickly enough that it was over before the USB serial
+  port opened. What's left over 10ms: now and then a data step that lands
+  on a card write slower than usual (10-12ms, a couple per build), and
+  `start()`, ~20ms once per file loaded or prepared. Splitting `start()`
+  into steps would fix the second, but the sketch reads its result (which
+  copies are ready) straight after calling it, so playback would briefly
+  start on the WAV alone - worth doing only if loading a file is felt.
+  Also seen: the card itself sometimes slows to ~13ms per single-sector
+  write for a few seconds (just after the 749 deletions).
 
 ## BLE / CodeLess
 

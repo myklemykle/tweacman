@@ -4435,7 +4435,9 @@ unsigned long previousBatteryMillis = 0;
 //
 // One catch: FastLED zeroes the cycle counter on every LED update (see
 // "Audio interrupt timing"), so the LED stage is timed with micros()
-// instead, and any measurement spanning a reset is thrown away.
+// instead, and any measurement spanning a reset is thrown away. A last
+// line gives how long the control ticks waited for their touch scans (see
+// "Touch scans").
 enum LoopStage : uint8_t {
   STAGE_BLE, STAGE_USB, STAGE_FILE_LIST, STAGE_REFILL, STAGE_CACHE,
   STAGE_TOUCH, STAGE_CONTROL, STAGE_COPY_CHANGE, STAGE_LED, STAGE_STATUS, STAGE_COUNT
@@ -4456,6 +4458,10 @@ uint32_t profileMaxPassCycles = 0;
 unsigned long profileStartMillis = 0;
 const uint32_t STAGE_BUSY_CYCLES = 6000;   // 30us at 200MHz
 const uint32_t STAGE_BOGUS_CYCLES = 1u << 30;  // ~5s: only a counter reset looks like this
+// How long each control tick waited for its touch scan - see "Touch scans".
+uint32_t touchScansTimed = 0;
+uint64_t touchWaitMicrosTotal = 0;
+uint32_t touchWaitMicrosMax = 0;
 
 // Takes the stage as a plain uint8_t rather than a LoopStage only because
 // Arduino's generated prototypes land above the enum's definition.
@@ -4494,9 +4500,52 @@ void printProfile() {
     Serial.println(line);
     stageStats[i] = StageStats();
   }
+  if (touchScansTimed > 0) {
+    snprintf(line, sizeof(line), "  touch: %lu scans, tick to readings %lu us on average, %lu us at most",
+             (unsigned long)touchScansTimed, (unsigned long)(touchWaitMicrosTotal / touchScansTimed),
+             (unsigned long)touchWaitMicrosMax);
+    Serial.println(line);
+  }
+  touchScansTimed = 0;
+  touchWaitMicrosTotal = 0;
+  touchWaitMicrosMax = 0;
   profilePasses = 0;
   profileMaxPassCycles = 0;
   profileStartMillis = millis();
+}
+
+// -- Touch scans --------------------------------------------------------------
+// The pads are scanned once per control tick, but without waiting for the
+// hardware: CapTouch::scan() would spend ~400us of every tick just polling.
+// Instead the tick starts a scan, pumpTouchScan() moves it along, and the
+// control block runs once its readings are in - a few hundred microseconds
+// after the tick rather than at it, so a touch still lands within one scan
+// of when it would have.
+//
+// The hardware stops twice per pad to wait for the CPU (see
+// RA6M5CapTouch.cpp), so a scan is only as quick as the gaps between
+// update() calls. One call per loop() pass would let a few-millisecond
+// cache-build step stretch it to several times that; loop() calls
+// pumpTouchScan() between each of its slow stages instead.
+bool controlPending = false;  // a control tick is waiting for its scan
+bool touchScanDone = false;   // ...and the scan has finished
+uint32_t touchScanStartMicros = 0;
+
+void pumpTouchScan() {
+  // Most passes fall outside a scan; skipping them here, before the
+  // profiler's timing, keeps the extra calls from costing anything.
+  if (!controlPending || touchScanDone) return;
+  uint32_t t = DWT->CYCCNT;
+  if (CapTouch::update()) {
+    touchScanDone = true;
+    // Profiled: the wait from the tick to its readings, in micros() since
+    // FastLED can reset the cycle counter in between.
+    uint32_t waited = micros() - touchScanStartMicros;
+    touchScansTimed++;
+    touchWaitMicrosTotal += waited;
+    if (waited > touchWaitMicrosMax) touchWaitMicrosMax = waited;
+  }
+  stageDone(STAGE_TOUCH, t);
 }
 
 // -- USB disk mode -------------------------------------------------------------
@@ -4823,6 +4872,7 @@ void loop() {
     }
   }
   stageDone(STAGE_USB, t);
+  pumpTouchScan();
 
   // Emits the next file-list line if one is due - see pumpFileList().
   t = DWT->CYCCNT;
@@ -4865,12 +4915,15 @@ void loop() {
     repairStrandedCursor(voices[activeVoice], step);
     refillVoice(voices[activeVoice], step);
     stageDone(STAGE_REFILL, t);
+    pumpTouchScan();
 
     // Build cached copies in the gaps: only when the playing voices are
     // topped up, and never during an upload, whose flow control needs
     // loop() to keep answering promptly. Each step is a few milliseconds.
     t = DWT->CYCCNT;
-    if (!uploadInProgress() && voiceToppedUp(step)) {
+    // Nor while a touch scan is under way: a step would hold it up by its
+    // whole length (see "Touch scans").
+    if (!uploadInProgress() && voiceToppedUp(step) && !(controlPending && !touchScanDone)) {
       if (cache.building()) cache.step();
       else prepareNextFile();  // see "Preparing a set"
     }
@@ -4879,12 +4932,23 @@ void loop() {
 
   unsigned long currentMillis = millis();
 
-  if (currentMillis - previousControlMillis >= CONTROL_INTERVAL) {
-    float controlSeconds = (currentMillis - previousControlMillis) / 1000.0f;  // usually CONTROL_INTERVAL
+  // The control tick starts a touch scan, and the control block below runs
+  // when it's done - see "Touch scans".
+  static float controlSeconds = 0;
+  if (!controlPending && currentMillis - previousControlMillis >= CONTROL_INTERVAL) {
+    controlSeconds = (currentMillis - previousControlMillis) / 1000.0f;  // usually CONTROL_INTERVAL
     previousControlMillis = currentMillis;
     t = DWT->CYCCNT;
-    CapTouch::scan();
+    touchScanStartMicros = micros();
+    touchScanDone = false;
+    CapTouch::startScan();
+    controlPending = true;
     stageDone(STAGE_TOUCH, t);
+  }
+  pumpTouchScan();
+
+  if (controlPending && touchScanDone) {
+    controlPending = false;
 
     t = DWT->CYCCNT;
     // Transport: touch pad 2 held means running, released means stopped.

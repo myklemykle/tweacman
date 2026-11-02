@@ -165,17 +165,22 @@ fixed header), and Info (playback stats and the link log, folded away).
   the card would keep Finder from showing or copying it (untested whether
   the core's FATFileSystem lets the sketch set that attribute).
   Writes are slow because the library gets 512 bytes at a time from the
-  computer and, for each sector, reads it back from the card and writes it
-  again as its own command - the worst case for an SD card. The plan, if
+  computer and, for each sector, reads it back from the card, erases it
+  and writes it again, each as its own command - the worst case for an SD
+  card. `RA6M5FastSD` now skips the erase (2026-11-01). Timed from the
+  Mac's shell (`cp`, then `sync`), before and after: one 4MB file 61 ->
+  235KB/s, twenty 100KB files 43 -> 135KB/s, reading 4MB back 479 ->
+  575KB/s (on a fresh mount; data verified both times) - and 753KB/s
+  with the sector cache, since the library reads a sector at a time. The card itself
+  writes 8MB/s in 32KB commands, so what's left is the per-sector
+  read-then-write and USB's ~1MB/s ceiling. The plan, if
   it's worth it: our own `tud_msc_*` handlers that gather consecutive
   sectors into a ~32KB buffer and write them as one multi-sector command
   through `RA6M5FastSD`, flushed when the computer jumps elsewhere, asks
   for a sync, or ejects. Reads could go through the multi-sector path too.
   Test first, to see where the time really goes: Finder copies of a real
   sample folder both ways (many small files as well as a few big ones),
-  the card's own write speed in large pieces (a small benchmark sketch -
-  the 0.35MB/s figure in CLAUDE.md was measured with 8KB writes), and how
-  long the mount takes, including macOS's checks.
+  and how long the mount takes, including macOS's checks.
 - **USB disk mode: Spotlight holds up ejecting.** Soon after the card
   mounts, macOS's Spotlight indexer (`mds_stores`) starts reading it, and
   ejecting is refused until it's done - 40 seconds once, at USB disk mode's
@@ -222,12 +227,61 @@ fixed header), and Info (playback stats and the link log, folded away).
 - **Prepare's count can step back.** While a set is prepared, `PREP:n/t`
   goes back by one when the file being built is interrupted (cueing it
   requeues it). Cosmetic.
+- **Other `loop()` stalls over 10ms.** `PROFILE` on 2026-11-01 also showed
+  the status-line stage taking up to 44ms and BLE input up to 77ms, with
+  nothing to do with the cache. Probably Serial or BLE output waiting for
+  buffer room, or BLE commands that touch the card (and so its path
+  lookups - see the next item). Not yet looked into.
 - **Cache-build stalls.** While `MipCache` is building, a single build step
-  can stall `loop()` for up to ~35ms on an SD write - over this project's
-  10ms limit for control latency, so the knobs and pads feel it during a
-  build. Card writes are slow (~0.35MB/s on the bench card) whatever the
-  chunk size, so the fix is probably splitting the work into smaller steps
-  rather than writing faster.
+  could stall `loop()` for up to ~35ms on an SD write - over this project's
+  10ms limit for control latency, so the knobs and pads felt it during a
+  build. FatFs was erasing every sector before writing it, which
+  `RA6M5FastSD` now skips (2026-11-01): an 8KB write went from ~25ms to
+  ~2.7ms (worst ~8ms on `SDWriteBench`), and a 60s mono file's copies now
+  build in 26s (~0.43s per second of audio, from ~0.66). Traced on
+  2026-11-01 (branch `experiment/cache-stall-trace`, not for merging:
+  every step timed by kind, every SD driver call logged):
+  - **Path lookups are the stall.** For a file in a real set (a
+    long-named file in `HALLOWEEN CLIPS`), every operation that names a
+    path - open, remove, rename, mkdir, `exists()` - walks
+    `/sd/cache/<set>/<long name>/` from the root, reading about 36
+    directory sectors one command at a time (~0.25ms each, FatFs's tiny
+    mode keeps no directory sectors between lookups): ~9ms per lookup.
+    So every open step took ~14ms, every finish (close, remove, rename)
+    ~25-29ms and every wipe step 13-28ms, and `MipCache::start()` took
+    50-100ms - 70ms of it checking which copies exist, one `exists()` per
+    copy (244 reads). The 76ms `PROFILE` saw was `start()`, which is in
+    the same profiler stage. A test file at the root with a short name
+    hides all this (open ~3ms, finish ~8ms).
+  - **The data steps are fine:** filtering, reading and writing stay
+    under 10ms (stereo worst ~9.5ms, mono ~8.7ms).
+  - **The card's own busy:** now and then one write takes ~23ms (two in
+    one build, none in another). Not fixable short of non-blocking
+    writes; rare.
+  Done: `RA6M5FastSD` now caches single-sector reads, 8 sectors at a time
+  (branch `feature/sd-sector-cache`). Open steps 13.7 -> 5.9ms, wipe
+  steps 14.9 -> 6.1ms on average, finish steps 25.7 -> 14.7ms, and
+  `start()` 98 -> 44ms (just after mounting) or 48 -> 32ms; copies came
+  out byte-identical. Doubling the cache barely helped (finish 14.0ms):
+  what's left is FatFs's own work matching long names (with the audio
+  interrupt taking half the CPU meanwhile) and its single-sector writes,
+  ~1.2ms each, four per finish. Then `MipCache` changed (branch
+  `feature/mipcache-short-names`): each WAV's copies live in
+  `/sd/cache/<8 hex digits>/`, named by a hash of its path, with 8.3 file
+  names, and each copy is written under its own name and counts as done
+  once it's full length - no `.tmp`, remove and rename. For the same clip:
+  open steps 5.9 -> 2.5ms, finish 14.7 -> 4.2ms, wipe steps 6.1 -> 1.5ms,
+  `start()` 32 -> 22ms (and 44 -> 20ms just after mounting); copies
+  byte-identical. The first boot on it deleted the old layout's 749 files
+  (75 folders) - quickly enough that it was over before the USB serial
+  port opened. What's left over 10ms: now and then a data step that lands
+  on a card write slower than usual (10-12ms, a couple per build), and
+  `start()`, ~20ms once per file loaded or prepared. Splitting `start()`
+  into steps would fix the second, but the sketch reads its result (which
+  copies are ready) straight after calling it, so playback would briefly
+  start on the WAV alone - worth doing only if loading a file is felt.
+  Also seen: the card itself sometimes slows to ~13ms per single-sector
+  write for a few seconds (just after the 749 deletions).
 
 ## BLE / CodeLess
 

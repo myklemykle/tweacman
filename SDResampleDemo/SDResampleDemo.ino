@@ -582,9 +582,11 @@
        updates. Repeat the overwrite, rename and delete on the file that is
        playing, and cancel an upload halfway to confirm the old file
        survives. Watch the underrun count while uploading during playback.
-       Check the card's cache/ folder follows along: the renamed file's
-       folder renamed, the deleted file's gone, and the overwritten
-       file's copies rebuilt (Serial says so) the next time it's cued.
+       Check the cache follows along: the renamed file isn't rebuilt
+       when it's next cued (its copies' folder - named by a hash of the
+       file's path, see MipCache.h - was renamed with it), the deleted
+       file's folder is gone from cache/, and the overwritten file's
+       copies are rebuilt (Serial says so) the next time it's cued.
     11. Knob calibration: send RECAL, then reset the board. Serial says
        neither knob has a saved calibration, and neither knob does
        anything yet. Turn each about two full turns until it responds,

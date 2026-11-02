@@ -7,6 +7,7 @@
 #include "FATFileSystem.h"  // opendir()/mkdir() on the card
 #include "WavList.h"        // setOf(), for files in a set
 
+#include <sys/stat.h>
 #include <cmath>
 #include <cstring>
 
@@ -57,8 +58,9 @@ static void initFilter() {
 // which multi-block writing needs.
 //
 // Writes are still the slow part, and the stalls a build causes in loop()
-// come from them: this card takes ~25ms to write 8KB (about 0.35MB/s,
-// measured - multi-block commands only help by about 1.5x here).
+// come from them: an 8KB write takes ~2.7ms on the bench card (~3MB/s,
+// worst ~8ms), measured with RA6M5FastSD's SDWriteBench. (It was ~25ms
+// until RA6M5FastSD stopped FatFs erasing every sector before writing it.)
 static const uint32_t OUT_BLOCK = 256;
 static const uint32_t READ_OUTPUTS = 2048;
 static const uint32_t IN_CAPACITY = 2 * READ_OUTPUTS + 4 * FILTER_HALF;  // samples - room
@@ -119,26 +121,36 @@ static uint32_t fingerprint(WavReader &wav) {
 
 // -- Paths and housekeeping -------------------------------------------------
 
-String MipCache::levelPath(const String &wavName, uint8_t level, bool temp) {
+// A WAV's cache folder is named by a hash of its path, ignoring case as
+// FAT does - see "Why such cryptic names" in MipCache.h.
+static uint32_t pathHash(const String &wavName) {
+  String lower = wavName;
+  lower.toLowerCase();
+  return fnv1a(2166136261u, lower.c_str(), lower.length());
+}
+
+static String folderName(uint32_t hash) {
+  char name[9];
+  snprintf(name, sizeof(name), "%08lX", (unsigned long)hash);
+  return String(name);
+}
+
+String MipCache::dirFor(const String &wavName) {
+  return "/sd/cache/" + folderName(pathHash(wavName));
+}
+
+String MipCache::levelPath(const String &wavName, uint8_t level) {
   char leaf[16];
-  snprintf(leaf, sizeof(leaf), "/L%02u.%s", level, temp ? "tmp" : "raw");
+  snprintf(leaf, sizeof(leaf), "/L%02u.RAW", level);
   return dirFor(wavName) + leaf;
 }
 
-static bool exists(const String &path) {
-  FILE *f = fopen(path.c_str(), "rb");
-  if (!f) return false;
-  fclose(f);
-  return true;
-}
+static String infoPathFor(const String &wavName) { return MipCache::dirFor(wavName) + "/INFO.TXT"; }
 
 // Deletes everything in a cache folder but the folder itself.
 static void emptyDir(const String &wavName) {
-  for (uint8_t k = 1; k <= MipCache::MAX_LEVELS; k++) {
-    remove(MipCache::levelPath(wavName, k).c_str());
-    remove(MipCache::levelPath(wavName, k, true).c_str());
-  }
-  remove((MipCache::dirFor(wavName) + "/info.txt").c_str());
+  for (uint8_t k = 1; k <= MipCache::MAX_LEVELS; k++) remove(MipCache::levelPath(wavName, k).c_str());
+  remove(infoPathFor(wavName).c_str());
 }
 
 void MipCache::removeFor(const String &wavName) {
@@ -146,68 +158,93 @@ void MipCache::removeFor(const String &wavName) {
   remove(dirFor(wavName).c_str());  // FatFs only removes an empty folder
 }
 
-// A file in a set has its cache folder inside a folder for the set, which
-// has to exist before the file's can be made.
-static void makeDirsFor(const String &wavName) {
-  mkdir("/sd/cache", 0777);  // fails harmlessly when it already exists
-  String set = setOf(wavName);
-  if (set.length()) mkdir(("/sd/cache/" + set).c_str(), 0777);
-}
-
 void MipCache::renameFor(const String &from, const String &to) {
-  // A change of case alone is the same folder as far as FAT is concerned;
+  // A change of case alone hashes the same, so the folder stays put;
   // anything else must not land on top of a stale cache for the new name.
-  if (!to.equalsIgnoreCase(from)) removeFor(to);
-  makeDirsFor(to);
+  if (pathHash(from) == pathHash(to)) return;
+  removeFor(to);
   if (rename(dirFor(from).c_str(), dirFor(to).c_str()) != 0) {
     removeFor(from);  // couldn't move it, so don't leave it orphaned - it gets rebuilt
   }
 }
 
-// Removes the cache folders in /sd/cache/<set> (or /sd/cache itself, for
-// the root's files, set "") whose WAV is gone. The root's pass also lists
-// the sets' folders it finds, in setFolders, to be gone through next.
-static void removeOrphansIn(const String &set, std::vector<String> *setFolders) {
-  // Collected first and removed after, rather than deleting while the
-  // directory is still being read.
+// Deletes a file, or a folder and everything in it.
+static void removeTree(const String &path) {
+  // Collected a batch at a time and deleted after, rather than deleting
+  // while the folder is still being read.
   const int BATCH = 16;
-  String folder = set.length() ? "/sd/cache/" + set : String("/sd/cache");
   while (true) {
-    String orphans[BATCH];
+    String names[BATCH];
+    bool isDir[BATCH];
     int found = 0;
-    DIR *dir = opendir(folder.c_str());
-    if (!dir) return;
+    DIR *dir = opendir(path.c_str());
+    if (!dir) break;  // a file, not a folder
     struct dirent *ent;
     while (found < BATCH && (ent = readdir(dir)) != nullptr) {
-      if (ent->d_type != DT_DIR) continue;
       String name(ent->d_name);
       if (name == "." || name == "..") continue;
-      // In the root's pass, a folder not named for a WAV is a set's.
-      if (!isWavName(name)) {
-        if (setFolders) setFolders->push_back(name);
-        continue;
-      }
-      String wavName = pathInSet(set, name);
-      if (!exists("/sd/" + wavName)) orphans[found++] = wavName;
+      names[found] = name;
+      isDir[found++] = ent->d_type == DT_DIR;
     }
     closedir(dir);
-    if (setFolders && found == BATCH) setFolders->clear();  // listed again next time round
+    if (found == 0) break;
     for (int i = 0; i < found; i++) {
-      Serial.print("Cache: removing orphaned copies of ");
-      Serial.println(orphans[i]);
-      MipCache::removeFor(orphans[i]);
+      String child = path + "/" + names[i];
+      if (isDir[i]) {
+        removeTree(child);
+      } else {
+        remove(child.c_str());
+      }
     }
-    if (found < BATCH) return;
   }
+  remove(path.c_str());
 }
 
 void MipCache::removeOrphans() {
-  std::vector<String> sets;
-  removeOrphansIn("", &sets);
-  for (const String &set : sets) {
-    removeOrphansIn(set, nullptr);
-    remove(("/sd/cache/" + set).c_str());  // gone too once it's empty - FatFs won't remove it otherwise
+  // The folder name every WAV on the card would have...
+  std::vector<String> keep;
+  for (const String &set : sortedSetNames()) {
+    for (const String &path : sortedWavPaths(set)) keep.push_back(folderName(pathHash(path)));
   }
+  // ...and anything else in /sd/cache goes, a batch at a time.
+  const int BATCH = 16;
+  int removed = 0;
+  while (true) {
+    String orphans[BATCH];
+    int found = 0;
+    DIR *dir = opendir("/sd/cache");
+    if (!dir) return;
+    struct dirent *ent;
+    while (found < BATCH && (ent = readdir(dir)) != nullptr) {
+      String name(ent->d_name);
+      if (name == "." || name == "..") continue;
+      bool wanted = false;
+      for (const String &k : keep) {
+        if (name.equalsIgnoreCase(k)) {
+          wanted = true;
+          break;
+        }
+      }
+      if (!wanted) orphans[found++] = name;
+    }
+    closedir(dir);
+    for (int i = 0; i < found; i++) removeTree("/sd/cache/" + orphans[i]);
+    removed += found;
+    if (found < BATCH) break;
+  }
+  if (removed) {
+    Serial.print("Cache: removed ");
+    Serial.print(removed);
+    Serial.println(" folder(s) of copies whose WAV is gone.");
+  }
+}
+
+// Whether a copy on the card is finished: written under its own name from
+// the start, it only reaches its full length once it is.
+bool MipCache::levelComplete(uint8_t level) const {
+  struct stat st;
+  if (stat(levelPath(name_, level).c_str(), &st) != 0) return false;
+  return (uint32_t)st.st_size == levelLen_[level] * 2 * channels_;
 }
 
 // -- Building ---------------------------------------------------------------
@@ -239,22 +276,21 @@ void MipCache::start(const String &wavName) {
            (unsigned long)fingerprint(wav));
   wav.close();
 
-  makeDirsFor(wavName);
-  mkdir(dirFor(wavName).c_str(), 0777);
-
-  String infoPath = dirFor(wavName) + "/info.txt";
   char found[64] = "";
-  FILE *info = fopen(infoPath.c_str(), "r");
+  FILE *info = fopen(infoPathFor(wavName).c_str(), "r");
   if (info) {
     if (!fgets(found, sizeof(found), info)) found[0] = '\0';
     fclose(info);
     found[strcspn(found, "\r\n")] = '\0';
+  } else {
+    mkdir("/sd/cache", 0777);  // either may exist already, which is fine
+    mkdir(dirFor(wavName).c_str(), 0777);
   }
   if (strcmp(found, expected) != 0) {
     // Missing, stale, or from an older format: start over. The old copies
     // are deleted a couple per step() rather than all at once here - a
     // card can take a few hundred milliseconds to delete twenty files,
-    // and the file that's just been loaded is already playing. info.txt is
+    // and the file that's just been loaded is already playing. INFO.TXT is
     // only rewritten once they're gone, so a reset mid-wipe just finds the
     // cache still stale next time, and wipes again.
     if (found[0]) {
@@ -265,7 +301,7 @@ void MipCache::start(const String &wavName) {
     wipeLevel_ = MAX_LEVELS;
     strncpy(info_, expected, sizeof(info_) - 1);
   } else {
-    while (ready_ < count_ && exists(levelPath(wavName, ready_ + 1))) ready_++;
+    while (ready_ < count_ && levelComplete(ready_ + 1)) ready_++;
   }
 
   workTotal_ = 0;
@@ -305,7 +341,7 @@ bool MipCache::openNextLevel() {
                      : src_.openRaw(levelPath(name_, k - 1).c_str(), sampleRate_ >> (k - 1),
                                     channels_);
   if (!ok) return false;
-  out_ = fopen(levelPath(name_, k, true).c_str(), "wb");
+  out_ = fopen(levelPath(name_, k).c_str(), "wb");
   if (!out_) {
     src_.close();
     return false;
@@ -321,18 +357,18 @@ bool MipCache::openNextLevel() {
 }
 
 void MipCache::finishLevel() {
-  fclose(out_);
-  out_ = nullptr;
-  src_.close();
-  uint8_t k = ready_ + 1;
-  String done = levelPath(name_, k);
-  remove(done.c_str());
-  if (rename(levelPath(name_, k, true).c_str(), done.c_str()) != 0) {
+  // Closing it is all it takes: it's under its own name already, and now
+  // at full length - see levelComplete().
+  if (fclose(out_) != 0) {
+    out_ = nullptr;
+    src_.close();
     Serial.println("Cache: couldn't finish a copy - stopping.");
     active_ = false;
     return;
   }
-  ready_ = k;
+  out_ = nullptr;
+  src_.close();
+  ready_++;
   if (ready_ == count_) {
     active_ = false;
     Serial.print("Cache: ");
@@ -352,9 +388,8 @@ bool MipCache::step() {
   // start(). Then the new description, and building can begin.
   if (wipeLevel_ > 0) {
     remove(levelPath(name_, wipeLevel_).c_str());
-    remove(levelPath(name_, wipeLevel_, true).c_str());
     if (--wipeLevel_ == 0) {
-      FILE *info = fopen((dirFor(name_) + "/info.txt").c_str(), "w");
+      FILE *info = fopen(infoPathFor(name_).c_str(), "w");
       if (!info) {
         Serial.println("Cache: couldn't write to the card - playing without copies.");
         stop();
@@ -366,8 +401,8 @@ bool MipCache::step() {
     return true;
   }
 
-  // Opening and finishing a copy each get a step to themselves - file
-  // creation and renaming are some of the slowest things FatFs does, and
+  // Opening and finishing a copy each get a step to themselves - creating
+  // and closing a file are some of the slowest things FatFs does, and
   // stacking them on top of a block of filtering would double the stall.
   if (!out_) {
     if (!openNextLevel()) {

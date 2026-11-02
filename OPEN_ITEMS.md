@@ -423,9 +423,6 @@ fixed header), and Info (playback stats and the link log, folded away).
   scans still complete normally. Checking it after each scan, and powering
   the CTSU down and back up when it's set, would cover the other way the pads
   could have died on stage (see SDResampleDemo's known issues).
-- **SDResampleDemo: non-blocking touch scans.** It still calls the blocking
-  `CapTouch::scan()` every 10ms control tick: ~400us of waiting, about 4% of
-  `loop()`. `startScan()`/`update()` would cut that to ~40us of real work.
 
 ## Toolchain / bench reliability
 

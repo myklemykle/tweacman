@@ -167,11 +167,12 @@ fixed header), and Info (playback stats and the link log, folded away).
   Writes are slow because the library gets 512 bytes at a time from the
   computer and, for each sector, reads it back from the card, erases it
   and writes it again, each as its own command - the worst case for an SD
-  card. `RA6M5FastSD` now skips the erase (2026-11-01), which on
-  `SDWriteBench` lifts that pattern from 0.15 to 0.37MB/s - so USB disk
-  writes should be roughly twice as fast already; measure with a Finder
-  copy. The card itself writes 8MB/s in 32KB commands, so the card isn't
-  what limits USB disk mode - USB's ~1MB/s is the real ceiling. The plan, if
+  card. `RA6M5FastSD` now skips the erase (2026-11-01). Timed from the
+  Mac's shell (`cp`, then `sync`), before and after: one 4MB file 61 ->
+  235KB/s, twenty 100KB files 43 -> 135KB/s, reading 4MB back 479 ->
+  575KB/s (on a fresh mount; data verified both times). The card itself
+  writes 8MB/s in 32KB commands, so what's left is the per-sector
+  read-then-write and USB's ~1MB/s ceiling. The plan, if
   it's worth it: our own `tud_msc_*` handlers that gather consecutive
   sectors into a ~32KB buffer and write them as one multi-sector command
   through `RA6M5FastSD`, flushed when the computer jumps elsewhere, asks
@@ -228,10 +229,15 @@ fixed header), and Info (playback stats and the link log, folded away).
 - **Cache-build stalls.** While `MipCache` is building, a single build step
   could stall `loop()` for up to ~35ms on an SD write - over this project's
   10ms limit for control latency, so the knobs and pads felt it during a
-  build. Most of that was FatFs erasing every sector before writing it,
-  which `RA6M5FastSD` now skips (2026-11-01): an 8KB write went from ~25ms
-  to ~2.7ms (worst ~8ms on `SDWriteBench`). Re-measure a build with
-  `PROFILE` - this may be closed.
+  build. FatFs was erasing every sector before writing it, which
+  `RA6M5FastSD` now skips (2026-11-01): an 8KB write went from ~25ms to
+  ~2.7ms (worst ~8ms on `SDWriteBench`), and a 60s mono file's copies now
+  build in 26s (~0.43s per second of audio, from ~0.66). But `PROFILE`
+  over that build still showed a longest step of 76ms (2.2ms average) -
+  so the stalls aren't writes in general. Suspects: the card's occasional
+  long busy (SDWriteBench saw single writes of 50-70ms now and then), and
+  opening, closing and renaming each copy's file. Find which before
+  splitting steps.
 
 ## BLE / CodeLess
 

@@ -24,6 +24,24 @@
   pays the card's programming time once per 512 bytes. Writing a run of
   sectors in one command pays it once.
 
+    one sector per command (the core)      0.44 MB/s
+    8 sectors per command                  3.2 MB/s
+    64 sectors per command                 8 MB/s
+    256 sectors per command               14 MB/s
+
+  And erases are skipped. The core's FATFileSystem erases every run of
+  sectors before writing it (as does its UsbMsd library, every sector),
+  and the core's driver does that with one erase command per sector -
+  which an SD card doesn't need (a write replaces whatever was there), and
+  which costs far more than the write itself. Measured with this library's
+  SDWriteBench example, writing a new file in 32KB fwrite()s:
+
+    erase per sector, then write (the core)   0.36 MB/s
+    write only                                 4.4 MB/s
+
+  (FatFs writes at most one cluster per command - 16KB on the bench card -
+  so files don't reach the raw speeds above.)
+
   It's a drop-in replacement: same constructor, and FATFileSystem mounts it
   the same way.
 
@@ -62,6 +80,7 @@ class FastSDCardBlockDevice : public SDCardBlockDevice {
 
   int read(void *buffer, bd_addr_t addr, bd_size_t size) override;
   int program(const void *buffer, bd_addr_t addr, bd_size_t size) override;
+  int erase(bd_addr_t addr, bd_size_t size) override;
 
   // Turns the multi-block path off (or back on) for both reads and writes,
   // so a sketch can compare against the core's original
@@ -69,9 +88,14 @@ class FastSDCardBlockDevice : public SDCardBlockDevice {
   // correctly either way.)
   void setMultiBlock(bool on) { multiBlock_ = on; }
 
+  // Turns skipping erases off (or back on), so erase() erases the way the
+  // core's driver does - one command per sector - for comparison.
+  void setSkipErase(bool on) { skipErase_ = on; }
+
  private:
   int readAligned(void *buffer, bd_addr_t addr, bd_size_t size);
   int programAligned(const void *buffer, bd_addr_t addr, bd_size_t size);
 
   bool multiBlock_ = true;
+  bool skipErase_ = true;
 };

@@ -63,6 +63,14 @@ int FastSDCardBlockDevice::programAligned(const void *buffer, bd_addr_t addr, bd
   return (int)rv;
 }
 
+int FastSDCardBlockDevice::erase(bd_addr_t addr, bd_size_t size) {
+  // An SD card's write replaces what was there, so FatFs's erase before
+  // every write (and UsbMsd's before every sector) only costs time - an
+  // erase command per sector, through the core's driver.
+  if (!skipErase_) return SDCardBlockDevice::erase(addr, size);
+  return is_valid_erase(addr, size) ? 0 : FSP_ERR_INVALID_ADDRESS;
+}
+
 int FastSDCardBlockDevice::read(void *buffer, bd_addr_t addr, bd_size_t size) {
   if (isAligned(buffer)) return readAligned(buffer, addr, size);
   uint8_t *dst = (uint8_t *)buffer;

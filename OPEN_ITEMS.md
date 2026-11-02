@@ -165,17 +165,20 @@ fixed header), and Info (playback stats and the link log, folded away).
   the card would keep Finder from showing or copying it (untested whether
   the core's FATFileSystem lets the sketch set that attribute).
   Writes are slow because the library gets 512 bytes at a time from the
-  computer and, for each sector, reads it back from the card and writes it
-  again as its own command - the worst case for an SD card. The plan, if
+  computer and, for each sector, reads it back from the card, erases it
+  and writes it again, each as its own command - the worst case for an SD
+  card. `RA6M5FastSD` now skips the erase (2026-11-01), which on
+  `SDWriteBench` lifts that pattern from 0.15 to 0.37MB/s - so USB disk
+  writes should be roughly twice as fast already; measure with a Finder
+  copy. The card itself writes 8MB/s in 32KB commands, so the card isn't
+  what limits USB disk mode - USB's ~1MB/s is the real ceiling. The plan, if
   it's worth it: our own `tud_msc_*` handlers that gather consecutive
   sectors into a ~32KB buffer and write them as one multi-sector command
   through `RA6M5FastSD`, flushed when the computer jumps elsewhere, asks
   for a sync, or ejects. Reads could go through the multi-sector path too.
   Test first, to see where the time really goes: Finder copies of a real
   sample folder both ways (many small files as well as a few big ones),
-  the card's own write speed in large pieces (a small benchmark sketch -
-  the 0.35MB/s figure in CLAUDE.md was measured with 8KB writes), and how
-  long the mount takes, including macOS's checks.
+  and how long the mount takes, including macOS's checks.
 - **USB disk mode: Spotlight holds up ejecting.** Soon after the card
   mounts, macOS's Spotlight indexer (`mds_stores`) starts reading it, and
   ejecting is refused until it's done - 40 seconds once, at USB disk mode's
@@ -223,11 +226,12 @@ fixed header), and Info (playback stats and the link log, folded away).
   goes back by one when the file being built is interrupted (cueing it
   requeues it). Cosmetic.
 - **Cache-build stalls.** While `MipCache` is building, a single build step
-  can stall `loop()` for up to ~35ms on an SD write - over this project's
-  10ms limit for control latency, so the knobs and pads feel it during a
-  build. Card writes are slow (~0.35MB/s on the bench card) whatever the
-  chunk size, so the fix is probably splitting the work into smaller steps
-  rather than writing faster.
+  could stall `loop()` for up to ~35ms on an SD write - over this project's
+  10ms limit for control latency, so the knobs and pads felt it during a
+  build. Most of that was FatFs erasing every sector before writing it,
+  which `RA6M5FastSD` now skips (2026-11-01): an 8KB write went from ~25ms
+  to ~2.7ms (worst ~8ms on `SDWriteBench`). Re-measure a build with
+  `PROFILE` - this may be closed.
 
 ## BLE / CodeLess
 

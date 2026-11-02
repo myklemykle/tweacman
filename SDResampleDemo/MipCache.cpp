@@ -57,8 +57,9 @@ static void initFilter() {
 // which multi-block writing needs.
 //
 // Writes are still the slow part, and the stalls a build causes in loop()
-// come from them: this card takes ~25ms to write 8KB (about 0.35MB/s,
-// measured - multi-block commands only help by about 1.5x here).
+// come from them: an 8KB write takes ~2.7ms on the bench card (~3MB/s,
+// worst ~8ms), measured with RA6M5FastSD's SDWriteBench. (It was ~25ms
+// until RA6M5FastSD stopped FatFs erasing every sector before writing it.)
 static const uint32_t OUT_BLOCK = 256;
 static const uint32_t READ_OUTPUTS = 2048;
 static const uint32_t IN_CAPACITY = 2 * READ_OUTPUTS + 4 * FILTER_HALF;  // samples - room

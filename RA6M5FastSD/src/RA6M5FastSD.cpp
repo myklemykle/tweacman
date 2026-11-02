@@ -67,11 +67,105 @@ int FastSDCardBlockDevice::erase(bd_addr_t addr, bd_size_t size) {
   // An SD card's write replaces what was there, so FatFs's erase before
   // every write (and UsbMsd's before every sector) only costs time - an
   // erase command per sector, through the core's driver.
-  if (!skipErase_) return SDCardBlockDevice::erase(addr, size);
+  if (!skipErase_) {
+    dropFromCache(addr, size);
+    return SDCardBlockDevice::erase(addr, size);
+  }
   return is_valid_erase(addr, size) ? 0 : FSP_ERR_INVALID_ADDRESS;
 }
 
+// -- The sector cache --------------------------------------------------------
+// FatFs reads directories and its allocation table one sector at a time,
+// and (built in tiny mode, as the core builds it) keeps none of them, so a
+// path lookup re-reads the same few directory sectors every time. Those
+// single-sector reads are answered from a handful of 8-sector blocks
+// instead - see RA6M5FastSD.h.
+
+void FastSDCardBlockDevice::clearSectorCache() {
+  for (uint8_t i = 0; i < LINES; i++) lines_[i].sectors = 0;
+  cacheHits_ = 0;
+  cacheMisses_ = 0;
+}
+
+void FastSDCardBlockDevice::setSectorCache(bool on) {
+  cacheOn_ = on;
+  clearSectorCache();
+}
+
+int FastSDCardBlockDevice::readCachedSector(void *buffer, bd_addr_t addr) {
+  if (!is_valid_read(addr, SECTOR)) return FSP_ERR_INVALID_ADDRESS;  // also catches no card yet
+  uint32_t sector = addr / SECTOR;
+  uint32_t first = sector - sector % LINE_SECTORS;
+  CacheLine *line = nullptr;
+  for (uint8_t i = 0; i < LINES; i++) {
+    if (lines_[i].sectors && sector >= lines_[i].first &&
+        sector < lines_[i].first + lines_[i].sectors) {
+      line = &lines_[i];
+      break;
+    }
+  }
+  if (line) {
+    cacheHits_++;
+  } else {
+    // Replace the least recently used block with the one around this sector.
+    line = &lines_[0];
+    for (uint8_t i = 1; i < LINES; i++) {
+      if (lines_[i].lastUsed < line->lastUsed) line = &lines_[i];
+    }
+    uint32_t cardSectors = size() / SECTOR;
+    uint32_t count = LINE_SECTORS;
+    if (first + count > cardSectors) count = cardSectors - first;
+    line->sectors = 0;
+    int rv = readAligned(line->data, (bd_addr_t)first * SECTOR, count * SECTOR);
+    if (rv != 0) return rv;
+    line->first = first;
+    line->sectors = count;
+    cacheMisses_++;
+  }
+  line->lastUsed = ++useClock_;
+  memcpy(buffer, line->data + (sector - line->first) * SECTOR, SECTOR);
+  return 0;
+}
+
+// After a write: copy the new data into any cached block it overlaps, so
+// the cache always matches the card.
+void FastSDCardBlockDevice::updateCache(const void *buffer, bd_addr_t addr, bd_size_t size) {
+  uint32_t from = addr / SECTOR, to = (addr + size) / SECTOR;  // [from, to)
+  for (uint8_t i = 0; i < LINES; i++) {
+    CacheLine &l = lines_[i];
+    if (!l.sectors) continue;
+    uint32_t lo = from > l.first ? from : l.first;
+    uint32_t hi = to < l.first + l.sectors ? to : l.first + l.sectors;
+    if (lo < hi) {
+      memcpy(l.data + (lo - l.first) * SECTOR, (const uint8_t *)buffer + (lo - from) * SECTOR,
+             (hi - lo) * SECTOR);
+    }
+  }
+}
+
+// After an erase or a failed write, when what's on the card isn't known.
+void FastSDCardBlockDevice::dropFromCache(bd_addr_t addr, bd_size_t size) {
+  uint32_t from = addr / SECTOR, to = (addr + size) / SECTOR;
+  for (uint8_t i = 0; i < LINES; i++) {
+    CacheLine &l = lines_[i];
+    if (l.sectors && from < l.first + l.sectors && to > l.first) l.sectors = 0;
+  }
+}
+
+int FastSDCardBlockDevice::init() {
+  clearSectorCache();
+  return SDCardBlockDevice::init();
+}
+
+int FastSDCardBlockDevice::deinit() {
+  clearSectorCache();
+  return SDCardBlockDevice::deinit();
+}
+
+// -- Reads and writes -------------------------------------------------------
+
 int FastSDCardBlockDevice::read(void *buffer, bd_addr_t addr, bd_size_t size) {
+  if (cacheOn_ && size == SECTOR) return readCachedSector(buffer, addr);
   if (isAligned(buffer)) return readAligned(buffer, addr, size);
   uint8_t *dst = (uint8_t *)buffer;
   for (bd_size_t done = 0; done < size;) {
@@ -85,14 +179,22 @@ int FastSDCardBlockDevice::read(void *buffer, bd_addr_t addr, bd_size_t size) {
 }
 
 int FastSDCardBlockDevice::program(const void *buffer, bd_addr_t addr, bd_size_t size) {
-  if (isAligned(buffer)) return programAligned(buffer, addr, size);
-  const uint8_t *src = (const uint8_t *)buffer;
-  for (bd_size_t done = 0; done < size;) {
-    bd_size_t n = size - done < sizeof(bounce) ? size - done : sizeof(bounce);
-    memcpy(bounce, src + done, n);
-    int rv = programAligned(bounce, addr + done, n);
-    if (rv != 0) return rv;
-    done += n;
+  int rv = 0;
+  if (isAligned(buffer)) {
+    rv = programAligned(buffer, addr, size);
+  } else {
+    const uint8_t *src = (const uint8_t *)buffer;
+    for (bd_size_t done = 0; done < size && rv == 0;) {
+      bd_size_t n = size - done < sizeof(bounce) ? size - done : sizeof(bounce);
+      memcpy(bounce, src + done, n);
+      rv = programAligned(bounce, addr + done, n);
+      done += n;
+    }
   }
-  return 0;
+  if (rv == 0) {
+    updateCache(buffer, addr, size);
+  } else {
+    dropFromCache(addr, size);
+  }
+  return rv;
 }

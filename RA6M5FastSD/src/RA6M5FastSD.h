@@ -42,6 +42,19 @@
   (FatFs writes at most one cluster per command - 16KB on the bench card -
   so files don't reach the raw speeds above.)
 
+  And single-sector reads are cached. The core builds FatFs in its "tiny"
+  mode, which keeps just one sector in memory, so every time a file is
+  opened, created, renamed or deleted it reads every directory on the way
+  to it again from the card, one sector per command - about 0.25ms each.
+  For a file a few folders down with long names that's ~36 reads, ~9ms per
+  lookup. This class keeps the last few blocks of 8 sectors it was asked
+  for one sector of (32KB in all), reading each whole block in one command
+  - about the cost of two single reads - since directories are read
+  sector after sector. Every write updates whatever it overlaps in the
+  cache, so it never goes stale, whoever does the writing through this
+  object (FatFs, or the core's UsbMsd library). Bigger reads, which are
+  file data, aren't cached.
+
   It's a drop-in replacement: same constructor, and FATFileSystem mounts it
   the same way.
 
@@ -81,6 +94,8 @@ class FastSDCardBlockDevice : public SDCardBlockDevice {
   int read(void *buffer, bd_addr_t addr, bd_size_t size) override;
   int program(const void *buffer, bd_addr_t addr, bd_size_t size) override;
   int erase(bd_addr_t addr, bd_size_t size) override;
+  int init() override;    // both empty the sector cache: it may be a
+  int deinit() override;  // different card next time
 
   // Turns the multi-block path off (or back on) for both reads and writes,
   // so a sketch can compare against the core's original
@@ -92,9 +107,39 @@ class FastSDCardBlockDevice : public SDCardBlockDevice {
   // core's driver does - one command per sector - for comparison.
   void setSkipErase(bool on) { skipErase_ = on; }
 
+  // Turns the sector cache off (or back on), for comparison. Turning it
+  // either way empties it.
+  void setSectorCache(bool on);
+  // Empties the sector cache - only needed if something changed the card
+  // other than through this object.
+  void clearSectorCache();
+  // How many single-sector reads the cache answered, and how many it had
+  // to read from the card, since the last clearSectorCache().
+  uint32_t sectorCacheHits() const { return cacheHits_; }
+  uint32_t sectorCacheMisses() const { return cacheMisses_; }
+
  private:
   int readAligned(void *buffer, bd_addr_t addr, bd_size_t size);
   int programAligned(const void *buffer, bd_addr_t addr, bd_size_t size);
+  int readCachedSector(void *buffer, bd_addr_t addr);
+  void updateCache(const void *buffer, bd_addr_t addr, bd_size_t size);
+  void dropFromCache(bd_addr_t addr, bd_size_t size);
+
+  static const uint32_t SECTOR = 512;
+  static const uint32_t LINE_SECTORS = 8;  // read in one command
+  static const uint8_t LINES = 8;          // 8 x 4KB = 32KB
+
+  struct CacheLine {
+    alignas(4) uint8_t data[LINE_SECTORS * SECTOR];
+    uint32_t first = 0;      // its first sector
+    uint32_t sectors = 0;    // how many it holds (fewer at the card's end); 0 = empty
+    uint32_t lastUsed = 0;   // for replacing the least recently used
+  };
+  CacheLine lines_[LINES];
+  uint32_t useClock_ = 0;
+  uint32_t cacheHits_ = 0;
+  uint32_t cacheMisses_ = 0;
+  bool cacheOn_ = true;
 
   bool multiBlock_ = true;
   bool skipErase_ = true;

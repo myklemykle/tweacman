@@ -349,6 +349,25 @@ fixed header), and Info (playback stats and the link log, folded away).
   CERN-OHL-S-2.0 asks for a "Source Location" on the product - the repo's
   URL - and the license name would fit next to the existing "this hardware
   is open source" text on the back.
+- **Tighter knob settings for the PCB build.** SDResampleDemo's knob noise
+  settings were set on the breadboard: 20ms `smoothTau` on both pots, 4x
+  oversampling on pot2 only, 0.3-degree backlash on knob1 and the scrub,
+  a 1-degree scrub start. Measured on the PCB (2026-11-08, `KnobNoise`
+  plus NoiseMeter): every wiper under 0.5 counts RMS, against ~1.5 on the
+  breadboard with caps; the smoothed angle jitters 0.003-0.007 degrees RMS
+  but up to 0.08 peak-to-peak, so the 0.3-degree backlash is only ~4x the
+  worst peak - about right already - and the 1-degree scrub start ~12x,
+  room to halve it. The bigger win is lag - the 20ms smoothing (plus the
+  scrub's own 20ms follow) is over the 10ms rule; maybe 5ms with 4x
+  oversampling on both pots. Keep the current values as the default for
+  anyone building on a breadboard; the PCB values would be an option (a
+  `#define` in the sketch, say). Before choosing: add a 5ms smoothing
+  setting to `KnobNoise` and measure at several angles, then set each
+  threshold at 3-5x the worst peak-to-peak; check by feel that a hand
+  resting on a knob doesn't start a scrub, and that the page's 1.00x
+  doesn't flicker. (Odd, to look into: on knob2 the 20ms-smoothed angle
+  showed a larger peak-to-peak than the unsmoothed one, 0.07 against
+  0.02-0.06.)
 
 ## CapTouchTheremin
 

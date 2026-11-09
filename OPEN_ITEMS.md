@@ -99,6 +99,16 @@ page's tweaks tab.
   low-pass in series). Low-pass-only or a notch could be further modes, or
   a third parameter.
 
+### Audio output
+
+- **Dither the DAC output.** `audioCallback()` turns each 16-bit sample
+  into 12 bits by dropping the bottom four (`>> 4`), so quiet audio
+  distorts: measured on the Apogee Duet (2026-11-08), THD at 1kHz is
+  0.5% at -40dBFS and 8% at -60dBFS with the DAC's amplifiers off, 1.5%
+  and 15% with them on. TPDF dither - two cheap random numbers added
+  before the shift - would trade that for a little steady hiss. Measure
+  before and after with `tools/audio_test` (on branch `feature/audio-test`).
+
 ### Web UI (`web/wav-remote.html`)
 
 Redesigned 2026-10-13 (`feature/web-redesign`): a one-line status bar, a

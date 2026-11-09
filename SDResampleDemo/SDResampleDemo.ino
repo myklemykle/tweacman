@@ -3784,6 +3784,18 @@ const float SCRUB_BACKLASH_DEGREES = 0.3f;
 // too long and it's slow to resume. A starting point to tune by feel.
 const unsigned long SCRUB_RELEASE_MS = 150;
 
+// Once scrubbing, how far the knob has to move (after the backlash) to
+// count as still turning and hold the scrub open. Holding it open only
+// on SCRUB_START_DEGREES steps let a slow turn - under a degree per
+// SCRUB_RELEASE_MS - release between steps and restart at the next one,
+// heard as a ratchet of separate grains. The slowest turn that now holds
+// is this much per SCRUB_RELEASE_MS, about 1.3 degrees a second. Above
+// the knob's resting jitter, measured from the last step and not tick to
+// tick: a resting knob sits at the edge of its backlash, where jitter
+// still nudges the position by a few hundredths of a degree now and then
+// (up to 0.08 degrees peak-to-peak on the PCB, 2026-11-08).
+const float SCRUB_HOLD_DEGREES = 0.2f;
+
 // The cursor chases the knob with this time constant, in output ticks
 // (960 = 20ms) - the same smoothing the speed-based scrub this replaced
 // used. The knob's position arrives 100 times a second, in steps, and
@@ -3799,10 +3811,11 @@ float scrubAnchorDegrees = 0.0f;    // scrubKnobDegrees when it did
 double scrubAnchorFrames = 0.0;     // where the cursor was when a scrub started
 float scrubPrevAngle = -1.0f;       // pot2's last reading, or -1 if it had none
 unsigned long scrubLastMoveMillis = 0;
+float scrubHoldDegrees = 0.0f;      // scrubKnobDegrees when that was
 
 // Set to 1 to print when each scrub starts and ends - handy for tuning
-// SCRUB_BACKLASH_DEGREES (a resting knob should never start one) and
-// SCRUB_RELEASE_MS.
+// SCRUB_BACKLASH_DEGREES (a resting knob should never start one),
+// SCRUB_RELEASE_MS and SCRUB_HOLD_DEGREES (a slow turn should be one scrub).
 #define SCRUB_TRACE 0
 
 // Fits the scrub to a newly loaded file - see SCRUB_SECONDS_PER_TURN.
@@ -3914,7 +3927,8 @@ void scrubKnob(float turned) {
 
   // Movement is measured in clear steps from a resting point that's moved
   // up each time, so the release timer below only restarts for real motion
-  // and not for jitter.
+  // and not for jitter: SCRUB_START_DEGREES to start a scrub, then the
+  // smaller SCRUB_HOLD_DEGREES to keep it going.
   unsigned long now = millis();
   if (fabsf(scrubPhysicalDegrees - scrubRestDegrees) > SCRUB_START_DEGREES) {
     scrubRestDegrees = scrubPhysicalDegrees;
@@ -3923,12 +3937,19 @@ void scrubKnob(float turned) {
       // A hand on the reel: start from wherever the tape is now.
       scrubbing = true;
       scrubAnchorFrames = cursorFrames();
+      scrubHoldDegrees = scrubKnobDegrees;
 #if SCRUB_TRACE
       Serial.println("Scrub: started");
 #endif
     }
   }
   if (!scrubbing) return;
+
+  if (fabsf(scrubKnobDegrees - scrubHoldDegrees) >= SCRUB_HOLD_DEGREES) {
+    scrubHoldDegrees = scrubKnobDegrees;
+    scrubRestDegrees = scrubPhysicalDegrees;
+    scrubLastMoveMillis = now;
+  }
 
   if (now - scrubLastMoveMillis >= SCRUB_RELEASE_MS) {
     endScrub();

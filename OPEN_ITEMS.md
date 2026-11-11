@@ -105,7 +105,8 @@ page's tweaks tab.
   into 12 bits by dropping the bottom four (`>> 4`), so quiet audio
   distorts: measured on the Apogee Duet (2026-11-08), THD at 1kHz is
   0.5% at -40dBFS and 8% at -60dBFS with the DAC's amplifiers off, 1.5%
-  and 15% with them on. TPDF dither - two cheap random numbers added
+  and 15% with them on (SDResampleDemo now turns them on -
+  `DAC_OUTPUT_AMPS`). TPDF dither - two cheap random numbers added
   before the shift - would trade that for a little steady hiss. Measure
   before and after with `tools/audio_test` (on branch `feature/audio-test`).
 

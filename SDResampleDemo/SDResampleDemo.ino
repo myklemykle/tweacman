@@ -22,7 +22,9 @@
   folders, one per set (see "Sets" below) - use
   tools/make_test_wav.py to generate a simple one, a slow sine sweep
   that makes speed changes and any resampling artifacts obvious by ear.
-  Otherwise same as DACAudioTest (3.5mm jack on A0/A1/GND) plus two pots
+  Otherwise same as DACAudioTest (3.5mm jack on A0/A1/GND, each output
+  through 5.1k in series, 1.0nF to ground and a DC-blocking cap - or set
+  DAC_OUTPUT_AMPS to 0 for a jack wired straight to the pins) plus two pots
   (RV112FF wipers on A2/A3 for speed or pitch, A4/A5 for tape scrub or
   time-stretch, both pots' track ends on 3.3V/GND) and two CapTouch pads
   (D20 steps through the knob modes, and chorded with D21 latches the
@@ -1122,6 +1124,39 @@ float lastKnownRatio = 1.0f;
 float minRatioSeen = 1e9f;
 float maxRatioSeen = -1e9f;
 
+// ---- RA6M5-specific ----
+// The DAC's internal output amplifiers, which the Arduino core leaves off.
+// Off, each DAC pin has about 8.5k of output impedance, so any filter
+// capacitor after it rolls off the treble far below where it was meant to
+// (on the first carrier board, 1k and 6.8nF, -13dB at 10kHz). On, the
+// output is stiff and a little louder, but the amplifiers are rated for a
+// load of 5k or more and 50pF or less, and only swing 0.2V to VREFH-0.2V -
+// see the scaling in audioCallback().
+//
+// 1 for the carrier board as now specified: R1/R2 5.1k in series with
+// each output and C1/C2 1.0nF to ground, which measured -1.9dB at 10kHz
+// and -9dB at 20kHz into 2m of cable (2026-11-10). 0 for anything that
+// loads the pins harder - headphones or a cable wired straight to A0/A1,
+// or a series resistor under 5k. Same register sequence as DACAudioTest's
+// setDacOutputAmplifier().
+#define DAC_OUTPUT_AMPS 1
+#if DAC_OUTPUT_AMPS
+void enableDacOutputAmps() {
+  R_DAC->DACR_b.DAOE0 = 0;
+  R_DAC->DACR_b.DAOE1 = 0;
+  R_DAC->DAASWCR_b.DAASW0 = 1;
+  R_DAC->DAASWCR_b.DAASW1 = 1;
+  R_DAC->DAAMPCR_b.DAAMP0 = 1;
+  R_DAC->DAAMPCR_b.DAAMP1 = 1;
+  R_DAC->DACR_b.DAOE0 = 1;
+  R_DAC->DACR_b.DAOE1 = 1;
+  delayMicroseconds(4);
+  R_DAC->DAASWCR_b.DAASW0 = 0;
+  R_DAC->DAASWCR_b.DAASW1 = 0;
+}
+#endif
+// ---- end RA6M5-specific ----
+
 // -- Audio-rate interrupt ---------------------------------------------
 
 FspTimer audioTimer;
@@ -1523,8 +1558,15 @@ AUDIO_HOT void audioCallback(timer_callback_args_t *args) {
   // accuracy (RA6M5 datasheet, Table 53.48). Left to DAC0 (A0, the jack's
   // tip), right to DAC1 (A1, its ring) - a mono file's frames carry the
   // same value in both.
+#if DAC_OUTPUT_AMPS
+  // The amplifiers only swing 0.2V to VREFH-0.2V: 7/8 of full scale
+  // keeps every code inside that (256-3840, 0.21V-3.09V at 3.3V).
+  R_DAC->DADR[0] = (uint16_t)((((int32_t)outLeft * 7 >> 3) + 32768) >> 4);
+  R_DAC->DADR[1] = (uint16_t)((((int32_t)outRight * 7 >> 3) + 32768) >> 4);
+#else
   R_DAC->DADR[0] = (uint16_t)(((int32_t)outLeft + 32768) >> 4);
   R_DAC->DADR[1] = (uint16_t)(((int32_t)outRight + 32768) >> 4);
+#endif
 
   uint32_t used = DWT->CYCCNT - tickStart;
   if (used > isrCyclesMax) isrCyclesMax = used;
@@ -4822,6 +4864,9 @@ void setup() {
   analogWriteResolution(12);
   analogWrite(A0, 2048);
   analogWrite(A1, 2048);
+#if DAC_OUTPUT_AMPS
+  enableDacOutputAmps();
+#endif
 
   ble.begin();
   // Set before anything else talks AT: Arduino's default 1000ms Stream

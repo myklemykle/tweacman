@@ -360,13 +360,20 @@ fixed header), and Info (playback stats and the link log, folded away).
   ERC (now with the PWR_FLAG), build one, recalibrate the touch thresholds
   for real pads instead of wires, re-test touch noise, and check BLE range
   with the lid on.
-- **BOM, after the fit check** (`feature/pcb-bom`, not merged yet):
-  - Feet (3M SJ5023) - height unverified.
-  - Check the M-F standoff's male thread bites into the F-F standoff above.
+- **BOM leftovers** (`feature/pcb-bom`; hardware updated 2026-11-15 to the
+  stack measured on the first builds):
+  - Threaded feet. Essentra TB-3 (Mouser 144-TB-3, M3 male stud, $2.94,
+    size unlisted) would screw into the back standoffs; the front screw tips
+    leave no thread for one. The 3M stick-on feet are a stopgap.
+  - Brass M3 x 22 touch screws and brass nuts aren't at Mouser.
+  - M3 x 30 is hard to find; the next board revision could use a larger
+    corner hole (M3.5 or M4) for more choice of screws.
+  - C3/C4 are still drawn as polarised capacitors in the schematic; both are
+    film now.
   - TS header pin diameter versus the SL socket's contact range.
-  - C4 (axial, laid flat) fit on its footprint.
   - The LCSC columns are stale - refresh or drop them.
-  - Low Mouser stock on the SL-112 socket and TS-116 header matters for kits.
+  - Low Mouser stock on the SL-112 socket, the TS-116 header and the 16 mm
+    spacer (M0545-3-AL) matters for kits.
 - **Rev 2 (maybe):** the I2S mic and OLED, preserved as designed on
   `feature/pcb-mic-oled`.
 - **Before publishing the board:** fab notes (ENIG preferred, for the exposed
@@ -484,15 +491,6 @@ fixed header), and Info (playback stats and the link log, folded away).
   before the CDC endpoint is ready (`Port monitor error: timeout waiting for
   message`). A readiness check, or a short retry on the first read, would be
   more honest than the existence check plus a fixed sleep.
-
-## PCB case
-
-- **Fit-test the case-height fix.** The first build showed the 15 mm top
-  standoffs were too short (untrimmed header pins hold the Thing Plus 8.5 mm
-  up; its JST reaches 16 mm). On order: 17 mm top standoffs, and for the
-  three Thing Plus hold-downs, 8 mm spacers shimmed with one or two thin M2.5
-  washers (thickness unlisted) under M2.5 x 16 screws. Confirm the washer
-  count and that the knobs still seat, then settle the BOM.
 
 ## Web pages
 

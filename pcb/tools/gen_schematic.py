@@ -302,23 +302,23 @@ box(118.0, 20.0, 262.0, 118.0, "Audio out: one-pole RC low-pass, then the DC blo
 for ch, y, net_in, net_out, ci, cb, ri in (("L", 45.72, "DAC_L", "AUDIO_L", 1, 3, 1), ("R", 78.74, "DAC_R", "AUDIO_R", 2, 4, 2)):
     x_r, x_node, x_b = 139.7, 154.94, 170.18
     label(net_in, (127.0, y), 180)
-    r = symbol("Device:R", f"R{ri}", "1k", R_FP, (x_r, y), 90)
+    r = symbol("Device:R", f"R{ri}", "5.1k", R_FP, (x_r, y), 90)
     wire((127.0, y), r["1"])
     node = (x_node, y)
     wire(r["2"], node)
     junction(node)
-    cf = symbol("Device:C", f"C{ci}", "6.8n", C_FP, (x_node, y + 10.16), 0, ref_at=(x_node + 2.54, y + 8.89), val_at=(x_node + 2.54, y + 11.43))
+    cf = symbol("Device:C", f"C{ci}", "1.0n", C_FP, (x_node, y + 10.16), 0, ref_at=(x_node + 2.54, y + 8.89), val_at=(x_node + 2.54, y + 11.43))
     wire(node, cf["1"])
     gnd(cf["2"])
     cd = symbol("Device:C_Polarized", f"C{cb}", "2.2u", "cassette:C_DCBlock_Dual", (x_b, y), 90, ref_at=(x_b, y - 5.5), val_at=(x_b, y + 5.5))
     wire(node, cd["1"])
     wire(cd["2"], (181.61, y))
     label(net_out, (181.61, y), 0)
-text("R1/R2 + C1/C2: one-pole low-pass, fc = 1/(2 pi R C) = 23 kHz. R sits at the DAC pin so the DAC's output",
+text("R1/R2 + C1/C2: one-pole low-pass, fc = 1/(2 pi R C) = 31 kHz (~19 kHz into 2 m of cable). R sits at the DAC pin, so the",
      (122.0, 101.0))
-text("amplifier never sees the capacitor directly (datasheet: 5 kohm min load, 50 pF max). C1/C2 should be C0G or film.",
+text("DAC's output amplifier (on in firmware) sees >= 5 kohm and never the capacitor directly. C1/C2 should be C0G or film.",
      (122.0, 104.0))
-text("C3/C4 (2.2 uF, + toward the DAC) block the DC bias; electrolytic or film fits the same footprint.",
+text("C3/C4 (2.2 uF film, either way round) block the DC bias. With the DAC amplifiers off, R1/R2 = 1k and C1/C2 = 6.8n.",
      (122.0, 107.0))
 J1 = (236.22, 62.23)
 j = symbol("cassette:STX-3120-3B", "J1", "STX-3120-3B", "cassette:Kycon_STX-3120-3B", J1, 0,

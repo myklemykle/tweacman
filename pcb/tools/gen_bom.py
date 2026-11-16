@@ -24,26 +24,22 @@ SKIP = ("TCH", "MH", "JP")             # board-only: pads, mounting holes, and t
 R_AXIAL = "Resistor_THT:R_Axial_DIN0204_L3.6mm_D1.6mm_P7.62mm_Horizontal"
 C_DISC = "Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P5.00mm"
 
-# One C_DCBlock_Dual per channel, stuffed differently on purpose so the two can be compared by ear: film on the left (C3),
-# electrolytic on the right (C4). Grouping uses this value in place of the schematic's "2.2u".
-VARIANT = {"C3": "2.2u film", "C4": "2.2u electrolytic"}
-
 # (description, requirements, purpose, manufacturer, MPN, note).  Blank MPN = generic part: buy to the requirements.
 PARTS = {
-    f"6.8n|{C_DISC}": ("6.8 nF capacitor, radial", "C0G/NP0 or film, 5% or better, >=16 V, 5 mm pitch",
-                       "Audio low-pass with R1/R2 (1k): sets the corner, so avoid X7R", "", "", ""),
-    "2.2u film|cassette:C_DCBlock_Dual": ("2.2 uF film capacitor, radial box", "Film (PET/PP), >=25 V, 5-15 mm pitch, under 12 mm tall",
-                                          "Left audio DC blocker (film side of the A/B pair)", "", "",
-                                          "Film boxes of 2.2 uF are 10.5-12.5 mm tall, lowest at 15 mm pitch; the lid is 17 mm up"),
-    "2.2u electrolytic|cassette:C_DCBlock_Dual": ("2.2 uF aluminium electrolytic, axial, laid flat", ">=25 V, body <= 11 mm long (15 mm pitch), 5 mm dia",
-                                                  "Right audio DC blocker (electrolytic side of the A/B pair)", "", "",
-                                                  "Polarised: + toward the DAC (pad 1, square). Either kind fits either channel"),
+    f"1.0n|{C_DISC}": ("1.0 nF capacitor, radial", "C0G/NP0 or film, 5% or better, >=16 V, 5 mm pitch",
+                       "Audio low-pass with R1/R2 (5.1k): sets the corner, so avoid X7R",  "", "",
+                       "For the firmware's default, DAC output amplifiers on. With them off: 6.8 nF and 1 kOhm"),
+    "2.2u|cassette:C_DCBlock_Dual": ("2.2 uF film capacitor, radial box", "Film (PET/PP), >=25 V, 5-15 mm pitch, under 12 mm tall",
+                                     "Audio DC blockers, one per channel", "", "",
+                                     "Film boxes of 2.2 uF are 10.5-12.5 mm tall, lowest at 15 mm pitch. Either way round: leads in the "
+                                     "square pad and the hole farthest from it"),
     f"100n|{C_DISC}": ("100 nF capacitor, radial", "X7R or better, >=16 V, 5 mm pitch", "Pot wiper noise filter (4x)", "", "", ""),
     "10u|Capacitor_THT:CP_Radial_D5.0mm_P2.00mm": ("10 uF aluminium electrolytic, radial", ">=16 V, 5 mm dia, 2.0 mm pitch, under 12 mm tall",
                                                    "Pot supply filter", "", "", "Polarised: long lead = +"),
     f"10n|{C_DISC}": ("10 nF capacitor, radial", "C0G or X7R, 10% or better, >=16 V, 5 mm pitch",
                       "Touch sensing (CTSU) TSCAP reference: touch won't work without it", "", "", ""),
-    f"1k|{R_AXIAL}": ("1 kOhm resistor, axial", "1% metal film, 1/8-1/6 W (0204 body, 7.62 mm pitch)", "Audio low-pass with C1/C2", "", "", ""),
+    f"5.1k|{R_AXIAL}": ("5.1 kOhm resistor, axial", "1% metal film, 1/8-1/6 W (0204 body, 7.62 mm pitch)",
+                        "Audio low-pass with C1/C2, and the DAC output amplifiers' load (5 kOhm min)", "", "", ""),
     "22|cassette:R_Axial_DIN0204_P7.62mm_CutJumper": ("22 Ohm resistor, axial", "1% metal film, 1/8-1/6 W (0204 body)",
                                                      "Optional pot supply filter", "", "",
                                                      "Shorted by a jumper in the footprint: cut the jumper to use it"),
@@ -68,12 +64,10 @@ PARTS = {
 # LCSC / JLCPCB loose-parts picks, looked up 2026-09-21 (price = USD at qty 1, stock as listed then; recheck before ordering).
 # key -> (LCSC #, LCSC part, price, stock, note).  No entry = not stocked there.
 LCSC = {
-    f"6.8n|{C_DISC}": ("C390177", "KYET PE682J2A0501", 0.0437, 2400, "Metallised polyester film 100 V 5%, 5 mm pitch. Only C0G found is C454391 (TORCH), stock 19, $0.454"),
-    "2.2u film|cassette:C_DCBlock_Dual": ("C53070641", "DGCX MPE225J2AB070B200ZR", 0.35, 750, "Polyester film 100 V 10%, 7.5 mm pitch. Alts: C3019042 KYET 5 mm $0.578; C46638925 WALSON 15 mm $0.203. Check height < 10 mm"),
+    "2.2u|cassette:C_DCBlock_Dual": ("C53070641", "DGCX MPE225J2AB070B200ZR", 0.35, 750, "Polyester film 100 V 10%, 7.5 mm pitch. Alts: C3019042 KYET 5 mm $0.578; C46638925 WALSON 15 mm $0.203. Check height < 10 mm"),
     f"100n|{C_DISC}": ("C5632426", "KNSCHA 178MU0002", 0.0138, 5076, "X7R 50 V 10%, 5.08 mm pitch"),
     "10u|Capacitor_THT:CP_Radial_D5.0mm_P2.00mm": ("C55265437", "TOPAZ ESS1V100M050700B", 0.0093, 3244, "35 V, 5 x 7 mm, 2 mm pitch"),
     f"10n|{C_DISC}": ("C454414", "TORCH CC4-0805-CG-50V-0.01uF-J", 0.1285, 6016, "C0G 5%, 5.08 mm pitch. Cheaper X7R: C5632432 KNSCHA $0.0196"),
-    f"1k|{R_AXIAL}": ("C1371015", "YAGEO MFR-12FTF52-1K", 0.0045, 3000, "1% metal film, 1/6 W, 1.9 x 3.4 mm"),
     "22|cassette:R_Axial_DIN0204_P7.62mm_CutJumper": ("C2848542", "VO MF1/8W-22R-1%-OT52", 0.0066, 2805, "1% metal film, 1/8 W, 2.3 x 3.7 mm"),
     f"560|{R_AXIAL}": ("", "", None, None, "No 1/8 W metal film in stock. 1/4 W bodies are ~6.3 mm long (tight on 7.62 pitch): C2848609 VO $0.0065, C1369978 YAGEO $0.0183"),
     "EG1224|Button_Switch_THT:SW_E-Switch_EG1224_SPDT_Angled": ("C273395", "E-Switch EG1224", 1.7269, 157, ""),
@@ -84,13 +78,12 @@ LCSC = {
 # Mouser picks, looked up 2026-09-26 with tools/mouser_search.py (stock/prices move: gen_bom.py --order rechecks them).
 # key -> (Mouser #, note).  No entry = not stocked at Mouser.
 MOUSER = {
-    f"6.8n|{C_DISC}": ("810-FG28C0G1H682JNT6", "TDK FG28C0G1H682JNT06: C0G 5% 50 V, 5 mm pitch"),
-    "2.2u film|cassette:C_DCBlock_Dual": ("871-B32522C225J", "TDK B32522C0225J000: PET film 5% 63 V, 15 mm pitch, 18 x 5 x 10.5 mm (lowest 2.2 uF film found)"),
-    "2.2u electrolytic|cassette:C_DCBlock_Dual": ("594-2222-021-28228", "Vishay MAL202128228E3: 63 V 20%, 4.5 x 10 mm; datasheet's minimum lead pitch is 15 mm"),
+    f"1.0n|{C_DISC}": ("810-FG28C0G1H102JNT6", "TDK FG28C0G1H102JNT06: C0G 5% 50 V, 5 mm pitch"),
+    "2.2u|cassette:C_DCBlock_Dual": ("871-B32522C225J", "TDK B32522C0225J000: PET film 5% 63 V, 15 mm pitch, 18 x 5 x 10.5 mm (lowest 2.2 uF film found)"),
     f"100n|{C_DISC}": ("810-FG28X7R1H104KNT0", "TDK FG28X7R1H104KNT00: X7R 10% 50 V, 5 mm pitch"),
     "10u|Capacitor_THT:CP_Radial_D5.0mm_P2.00mm": ("667-ECA-1VM100", "Panasonic ECA-1VM100: 35 V 20%, 5 x 11 mm, 2.0 mm pitch; long-running M series (Lelon SS 5 x 5 went EOL)"),
     f"10n|{C_DISC}": ("810-FG28C0G1H103JNT6", "TDK FG28C0G1H103JNT06: C0G 5% 50 V, 5 mm pitch"),
-    f"1k|{R_AXIAL}": ("603-MFR-12FTF52-1K", "YAGEO MFR-12FTF52-1K: 1% metal film, 1/6 W, 0204 body"),
+    f"5.1k|{R_AXIAL}": ("603-MFR-12FTF52-5K1", "YAGEO MFR-12FTF52-5K1: 1% metal film, 1/6 W, 0204 body"),
     "22|cassette:R_Axial_DIN0204_P7.62mm_CutJumper": ("603-MFR-12FTF52-22R", "YAGEO MFR-12FTF52-22R: 1% metal film, 1/6 W, 0204 body"),
     f"560|{R_AXIAL}": ("603-MFR-12FTF52-560R", "YAGEO MFR-12FTF52-560R: 1% metal film, 1/6 W, 0204 body"),
     "RV112FF-40-25A-0B10K|cassette:RV112FF-40": ("317-1240FF-25A-B10K", ""),
@@ -100,17 +93,21 @@ MOUSER = {
     "1x12 socket|None": ("200-SL112TT12", "Samtec SL-112-TT-12: body 1.27 mm + contact rim 0.38-0.71 mm = ~2 mm tall; 4.83 mm pin (drawing SX-1XX-XX-XX-X-X)"),
     "1x16 socket|None": ("200-SL116TT12", "Samtec SL-116-TT-12: body 1.27 mm + contact rim 0.38-0.71 mm = ~2 mm tall; 4.83 mm pin (drawing SX-1XX-XX-XX-X-X)"),
 }
-# Case stack, top to bottom, at each corner: M3 x 6 screw / lid PCB / 17 mm female-female standoff / carrier / 15 mm
-# male-female standoff (male end up through the carrier into the one above) / base PCB / M3 x 6 screw. The standoffs clamp
-# the carrier on their own, so the case opens without it falling loose, and every part is at Mouser.
-# Top 17 mm: with the header pins left untrimmed they bottom out in the low-profile sockets, and the Thing Plus's underside
-# sits 8.5 mm above the carrier (measured on the first build); its own JST socket then reaches 16 mm. 15 mm was planned from
-# an estimated 5.1 mm gap and turned out too short. The knobs still fit with the lid 2 mm higher (checked on the first build).
-# Bottom 15 mm: a LiPo up to ~9 mm thick with foam tape, plus ~2 mm of trimmed leads, and the hold-down screws' tips and nuts
-# (~4 mm under the carrier). M3 x 6 through a 1.6 mm board leaves ~4.4 mm of thread in each standoff.
+# Case stack, measured on the first builds (2026-11). At each corner, top to bottom: M3 x 30 screw / lid PCB / 16 mm spacer /
+# carrier / 5 mm spacer / base PCB, 25.8 mm in all, so 4.2 mm of screw comes out under the base. In front it takes an M3 nut;
+# at the back a 10 mm female-female hex standoff, which doubles as a taller foot and gives the case a forward rake on a table.
+# Top 16 mm: with the header pins left untrimmed they bottom out in the low-profile sockets, so the Thing Plus's underside
+# sits just under 8 mm above the carrier, and its own JST socket and the knobs set the rest. The battery rides in this layer too,
+# between the pots. Bottom 5 mm: nothing lives there; it only has to clear the hold-down nuts and screw tips (~2 mm min).
+# M3 x 30 is the longest stock length that's easy to find; a bigger corner hole would open up more choices.
+# Touch points: a brass M3 screw through each touch pad's hole in the lid / 16 mm spacer / carrier / brass nut. 22 mm is the
+# length that fits: lid + spacer + carrier is 19.2 mm and the nut 2.4, which leaves the tip 2.2 mm clear of the base. A 25 mm
+# screw touches the base; a 20 mm one leaves too little thread for the nut.
 # Thing Plus hold-down: only three of its four holes are drilled in the carrier - the fourth (top left, by C3) would have cut
-# into the hub hole beside it. Stack: M2.5 x 16 screw / Thing Plus / 8 mm spacer + up to two thin washers (to fill the 8.5 mm
-# gap) / carrier / nut. Snug the screws gently: pulling the Thing Plus down onto its bottomed-out pins strains the header joints.
+# into the hub hole beside it. Stack: M2.5 screw / Thing Plus / 7 mm spacer + thin washers (to fill the gap) / carrier / nut.
+# 11 mm of boards and gap, then the 1.8 mm nut: 12 mm is too short. A 16 mm tip reaches the base, 5 mm under the carrier,
+# but the base is another copy of the carrier, with a hole in the same place, so the tip just goes into it. Snug the screws gently: pulling the Thing Plus down onto its bottomed-out pins
+# strains the header joints.
 # (description, requirements, purpose, qty per board, manufacturer, MPN, references, note, Mouser #)
 EXTRA = [
     ("Knob, 24.1 mm dia x 10.3 mm, black, white indicator", "D-bore to fit the RV112FF shaft", "Knob (small)", 1,
@@ -121,25 +118,30 @@ EXTRA = [
      "Samtec", "TS-112-T-A", "U1", "", "200-TS112TA"),
     ("1x16 male header, 2.54 mm, round pins", "Screw-machine (round) pins", "Solders to the Thing Plus's right column", 1,
      "Samtec", "TS-116-T-A", "U1", "", "200-TS116TA"),
-    ("LiPo battery, 3.7 V 1200 mAh, 34 x 62 x 5 mm", "JST PH 2-pin, + on pin 1, protection circuit, <= 9 mm thick",
-     "Battery; rides under the carrier, foam-taped to the base", 1, "Adafruit", "258", "BT (plugs into J2)",
-     "Check polarity before plugging in. Mouser ships lithium cells by ground only", "485-258"),
-    ("Hex standoff, M3 x 17 mm, female-female", "5.5 mm across flats (fits the corner holes, 4.2 mm from the edges)",
-     "Lid to carrier", 4, "Wurth Elektronik", "970170321", "MH1-MH4", "Clears the Thing Plus's JST socket at 16 mm", "710-970170321"),
-    ("Hex standoff, M3 x 15 mm, male-female", "5.5 mm across flats; male thread passes the 1.6 mm carrier",
-     "Carrier to base; its male end screws into the standoff above, clamping the carrier", 4,
-     "Wurth Elektronik", "971150321", "MH1-MH4", "", "710-971150321"),
-    ("M3 x 6 mm pan Phillips screw", "", "Lid and base into the standoffs", 8, "Essentra", "50M030050P006", "MH1-MH4",
-     "", "144-50M030050P006"),
-    ("Adhesive rubber foot", "Taller than the base screw heads (~2 mm), or placed clear of them", "Feet", 4, "", "", "base",
-     "NOT CHOSEN YET: e.g. 3M Bumpon SJ5023 (Mouser 517-SJ-5023BK, pad of 36)", ""),
-    ("M2.5 x 16 mm pan Phillips screw, black", ">= 14 mm: Thing Plus 1.6 + gap 8.5 + carrier 1.6 + nut 2",
+    ("LiPo battery, 3.7 V 350 mAh", "JST PH 2-pin, + on pin 1, protection circuit, fits between the pots",
+     "Battery; rides in the middle layer, between the pots", 1, "Adafruit", "2750", "BT (plugs into J2)",
+     "Check polarity before plugging in. Mouser ships lithium cells by ground only", "485-2750"),
+    ("Round spacer, 16 mm, M3 clearance, aluminium, 6 mm dia", "Unthreaded, 3.2 mm bore", "Lid to carrier: 4 corners + 2 touch screws", 6,
+     "RAF Electronic Hardware", "M0545-3-AL", "MH1-MH4, TCH1, TCH2", "Mouser stock is modest (181): check before ordering kits",
+     "761-M0545-3-AL"),
+    ("Round spacer, 5 mm, M3 clearance, aluminium, 6 mm dia", "Unthreaded, 3.2 mm bore", "Carrier to base", 4,
+     "RAF Electronic Hardware", "M0534-3-AL", "MH1-MH4", "Not the M2.5 M0504-25-AL, which looks the same", "761-M0534-3-AL"),
+    ("M3 x 30 mm pan Phillips screw, nylon, black", "", "Clamps each corner of the case", 4, "Essentra", "50M030050P030B", "MH1-MH4",
+     "Mouser's search finds no steel M3 x 30; steel from a hardware store works too", "144-50M030050P030B"),
+    ("Hex standoff, M3 x 10 mm, female-female, nickel-plated brass", "5 mm across flats", "Back corners: nut and rear foot", 2,
+     "Wurth Elektronik", "970100354", "MH1-MH4 (back two)", "The screw goes 4.2 mm in. Gives the case its forward rake", "710-970100354"),
+    ("M3 hex nut, zinc-plated steel", "5.5 mm across flats, 2.4 mm thick", "Front corners, under the base", 2,
+     "Keystone", "4708", "MH1-MH4 (front two)", "Silver, to match the back standoffs. A nylock nut works too, if you have one", "534-4708"),
+    ("M3 x 22 mm pan screw, brass", "Brass or other bare metal: it's the touch point", "Touch points, through the lid's touch pads", 2,
+     "", "", "TCH1, TCH2", "Not found at Mouser: hardware store. Or 25 mm with 3 mm of washers under the head", ""),
+    ("M3 hex nut, brass", "", "Under the carrier, for the touch screws", 2, "", "", "TCH1, TCH2", "Not found at Mouser: hardware store", ""),
+    ("M2.5 x 16 mm pan Phillips screw, nylon, black", ">= 13 mm: Thing Plus 1.6 + gap ~7.8 + carrier 1.6 + nut 1.8",
      "Optional Thing Plus hold-down (the sockets hold it already)", 3, "Essentra", "50M025045P016B", "U1 mounting",
-     "Thing Plus holes are 3.05 mm. The plain-steel 50M025045P016 was out of stock", "144-50M025045P016B"),
-    ("Round spacer, 8 mm, M2.5 clearance, aluminium", "Height = Thing Plus underside above the carrier: 8.5 mm measured, untrimmed pins",
-     "Between the Thing Plus and the carrier", 3, "RAF Electronic Hardware", "M0507-25-AL", "U1 mounting",
-     "No 8.5 mm size listed: the washers make up the rest", "761-M0507-25-AL"),
-    ("Flat washer, M2.5, thin", "~0.25-0.5 mm thick, fits under the spacer", "Shims the 8 mm spacer to the 8.5 mm gap", 6,
+     "The tip goes into the base's matching hole and stops short of its far side. Thing Plus holes are 3.05 mm", "144-50M025045P016B"),
+    ("Round spacer, 7 mm, M2.5 clearance, aluminium", "Height = Thing Plus underside above the carrier: just under 8 mm, untrimmed pins",
+     "Between the Thing Plus and the carrier", 3, "RAF Electronic Hardware", "M0506-25-AL", "U1 mounting",
+     "An 8 mm spacer would lift the Thing Plus off its pins: washers make up the rest", "761-M0506-25-AL"),
+    ("Flat washer, M2.5, thin", "~0.25-0.5 mm thick, fits under the spacer", "Shims the 7 mm spacer to the gap", 6,
      "Essentra", "16M02556080", "U1 mounting", "Thickness not listed at Mouser: use one or two per spacer, whichever fills the gap",
      "144-16M02556080"),
     ("M2.5 hex nut", "", "Under the carrier, for the hold-down screws", 3, "Essentra", "04M025045HN", "U1 mounting", "", "144-04M025045HN"),
@@ -164,7 +166,7 @@ def main():
         ref = c.get("ref")
         if ref.startswith(SKIP):
             continue
-        groups[(VARIANT.get(ref, c.findtext("value")), c.findtext("footprint") or "None")].append(ref)
+        groups[(c.findtext("value"), c.findtext("footprint") or "None")].append(ref)
 
     def key(item):                                            # sort by first reference letter group, then number
         first = item[1][0]

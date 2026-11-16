@@ -1256,7 +1256,7 @@
     (effects (font (size 1.27 1.27)) (justify left top))
     (uuid 7c288756-e820-5aa8-883c-6c9b9b8847e7)
   )
-  (text "R1/R2 + C1/C2: one-pole low-pass, fc = 1/(2 pi R C) = 23 kHz. R sits at the DAC pin so the DAC's output"
+  (text "R1/R2 + C1/C2: one-pole low-pass, fc = 1/(2 pi R C) = 31 kHz (~19 kHz into 2 m of cable). R sits at the DAC pin, so the"
     (at 122 101 0)
     (effects (font (size 1.27 1.27)) (justify left top))
     (uuid 7f0926ae-1868-5560-a49d-a8eaba79bed4)
@@ -1276,12 +1276,12 @@
     (effects (font (size 2 2) bold) (justify left top))
     (uuid 93b2b43c-a570-5194-822d-93db3b9e5f4b)
   )
-  (text "C3/C4 (2.2 uF, + toward the DAC) block the DC bias; electrolytic or film fits the same footprint."
+  (text "C3/C4 (2.2 uF film, either way round) block the DC bias. With the DAC amplifiers off, R1/R2 = 1k and C1/C2 = 6.8n."
     (at 122 107 0)
     (effects (font (size 1.27 1.27)) (justify left top))
     (uuid a20a02af-e925-5be4-b336-b727130d87cb)
   )
-  (text "amplifier never sees the capacitor directly (datasheet: 5 kohm min load, 50 pF max). C1/C2 should be C0G or film."
+  (text "DAC's output amplifier (on in firmware) sees >= 5 kohm and never the capacitor directly. C1/C2 should be C0G or film."
     (at 122 104 0)
     (effects (font (size 1.27 1.27)) (justify left top))
     (uuid b2136182-6850-5371-872c-67fd46ac8461)
@@ -1911,7 +1911,7 @@
     (property "Reference" "R2" (at 139.7 76.2 0)
       (effects (font (size 1.27 1.27)))
     )
-    (property "Value" "1k" (at 139.7 81.28 0)
+    (property "Value" "5.1k" (at 139.7 81.28 0)
       (effects (font (size 1.27 1.27)))
     )
     (property "Footprint" "Resistor_THT:R_Axial_DIN0204_L3.6mm_D1.6mm_P7.62mm_Horizontal" (at 139.7 78.74 0)
@@ -2422,7 +2422,7 @@
     (property "Reference" "C1" (at 157.48 54.61 0)
       (effects (font (size 1.27 1.27)) (justify left))
     )
-    (property "Value" "6.8n" (at 157.48 57.15 0)
+    (property "Value" "1.0n" (at 157.48 57.15 0)
       (effects (font (size 1.27 1.27)) (justify left))
     )
     (property "Footprint" "Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P5.00mm" (at 154.94 55.88 0)
@@ -2549,7 +2549,7 @@
     (property "Reference" "R1" (at 139.7 43.18 0)
       (effects (font (size 1.27 1.27)))
     )
-    (property "Value" "1k" (at 139.7 48.26 0)
+    (property "Value" "5.1k" (at 139.7 48.26 0)
       (effects (font (size 1.27 1.27)))
     )
     (property "Footprint" "Resistor_THT:R_Axial_DIN0204_L3.6mm_D1.6mm_P7.62mm_Horizontal" (at 139.7 45.72 0)
@@ -2600,7 +2600,7 @@
     (property "Reference" "C2" (at 157.48 87.63 0)
       (effects (font (size 1.27 1.27)) (justify left))
     )
-    (property "Value" "6.8n" (at 157.48 90.17 0)
+    (property "Value" "1.0n" (at 157.48 90.17 0)
       (effects (font (size 1.27 1.27)) (justify left))
     )
     (property "Footprint" "Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P5.00mm" (at 154.94 88.9 0)

@@ -5,3 +5,8 @@ setSectorCache	KEYWORD2
 clearSectorCache	KEYWORD2
 sectorCacheHits	KEYWORD2
 sectorCacheMisses	KEYWORD2
+transferErrors	KEYWORD2
+transferTimeouts	KEYWORD2
+refusedRequests	KEYWORD2
+missedEvents	KEYWORD2
+resetErrorCounts	KEYWORD2

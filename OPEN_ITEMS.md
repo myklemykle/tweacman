@@ -135,8 +135,25 @@ fixed header), and Info (playback stats and the link log, folded away).
   on USB power so far. Run on battery, playing with effects on, and note
   the settled drain rate - estimated at 50-90mA, or 3-5 hours on a 350mAh
   cell.
+- **The chip's temperature on the Info tab.** The RA6M5 has an on-chip
+  temperature sensor (TSN) the sketch could read and report beside the
+  battery. Asked for 2026-11-15, while chasing SD failures that turned out
+  to be a bad card, not heat.
 
 ## SDResampleDemo - known issues
+
+- **A card that stops answering hangs playback until a reset.** Found
+  2026-11-15 with a month-old SanDisk Ultra 32GB that has unreadable
+  spots: a read there stalls (about 2.5 seconds through the core's
+  driver), and every read after it fails, so files won't open and the
+  page shows underruns while nothing plays. Neither the core's driver nor
+  `RA6M5FastSD` recovers by itself. The fix: after a failed read or open,
+  restart the card the way RA6M5FastSD's `SDBurnIn` example does
+  (unmount, mount - about 22ms) and carry on, re-cueing the file; and
+  count card errors in the status line and on the page. `RA6M5FastSD`
+  0.4.0 already reports failed transfers as failures and gives up after
+  about half a second, instead of 2.5 seconds and sometimes passing bad
+  data on as good.
 
 - **Touch pads went dead on stage (2026-10-30 gig, outdoors, cold).**
   Both pads stopped responding at once, after working fine at the start

@@ -73,7 +73,7 @@ OPENSCAD ?= /Applications/OpenSCAD.app/Contents/MacOS/OpenSCAD
 KNOB_PRESET ?= design default values
 
 .DEFAULT_GOAL := build
-.PHONY: build upload monitor run clean ports boards info help require-port ble-venv ble-test ble-binary-test ble-card-test faust filter-render knob
+.PHONY: build upload monitor run clean ports boards info help require-port ble-venv ble-test ble-binary-test ble-card-test faust filter-render knob serial-log
 
 # ---------------------------------------------------------------------------
 
@@ -98,6 +98,12 @@ upload: require-port build
 
 monitor: require-port
 	$(ARDUINO_CLI) monitor --port $(PORT) --config baudrate=$(BAUD)
+
+# Saves the board's serial output to logs/, time-stamped, through resets -
+# for long unattended runs like RA6M5FastSD's SDBurnIn example. Stop it
+# before unplugging the board (see tools/serial_log.sh).
+serial-log: require-port
+	tools/serial_log.sh $(PORT)
 
 # `Serial` on this board is native USB, so the port vanishes during the reset
 # that follows an upload and comes back under a possibly different name. Wait
@@ -182,6 +188,7 @@ help:
 	@echo "  build     compile SKETCH (default)"
 	@echo "  upload    compile and flash the board"
 	@echo "  monitor   open the serial monitor at $(BAUD) baud"
+	@echo "  serial-log  save the serial output to logs/, time-stamped, through resets"
 	@echo "  run       upload, then open the monitor"
 	@echo "  ble-test  watch the board's Bluetooth LE output (sets up a venv on first run)"
 	@echo "  ble-binary-test  drive the CodeLess Binary mode handshake from here, with a full trace"

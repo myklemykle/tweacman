@@ -33,18 +33,64 @@ alignas(4) static uint8_t bounce[4096];
 
 static bool isAligned(const void *p) { return ((uintptr_t)p & 3) == 0; }
 
+// -- Waiting for a transfer ---------------------------------------------------
+// The core's wait_for_completition() can report a failed transfer as a good
+// one. It marks the transfer "in progress" only once it's already running,
+// so a result that arrives quickly - success or failure - is overwritten;
+// it then falls back on the host's busy flag, which clears either way, and
+// returns success. The caller gets whatever was in its buffer as if it had
+// been read. And it gives up only after about 2.5 seconds. So this class
+// marks the transfer before starting it, waits for the driver's own
+// verdict, and gives up after about half a second.
+
+const uint32_t TRANSFER_TIMEOUT_POLLS = 200000;  // ~2.5us each: about half a second
+const uint32_t MISSED_EVENT_POLLS = 100;         // grace for a verdict after the host goes idle
+
+int FastSDCardBlockDevice::finishTransfer(fsp_err_t started) {
+  if (started != FSP_SUCCESS) {
+    refused_++;  // e.g. the card was marked uninitialised, or a transfer is stuck
+    return (int)started;
+  }
+  uint32_t idlePolls = 0;
+  for (uint32_t i = 0; i < TRANSFER_TIMEOUT_POLLS; i++) {
+    CmdStatus s = SDCardBlockDevice::st;
+    if (s == CmdStatus::SUCCESS) return 0;
+    if (s == CmdStatus::FAILED) {
+      transferErrors_++;
+      return FSP_ERR_TRANSFER_ABORTED;
+    }
+    // The host went idle but no verdict came. Not expected - the driver
+    // reports every transfer's end - so count it, and trust the host.
+    sdmmc_status_t status;
+    if (R_SDHI_StatusGet(&ctrl, &status) == FSP_SUCCESS && !status.transfer_in_progress &&
+        ++idlePolls > MISSED_EVENT_POLLS) {
+      missedEvents_++;
+      return 0;
+    }
+    R_BSP_SoftwareDelay(1, BSP_DELAY_UNITS_MICROSECONDS);
+  }
+  timeouts_++;
+  return FSP_ERR_TIMEOUT;
+}
+
+void FastSDCardBlockDevice::resetErrorCounts() {
+  transferErrors_ = timeouts_ = refused_ = missedEvents_ = 0;
+}
+
 int FastSDCardBlockDevice::readAligned(void *buffer, bd_addr_t addr, bd_size_t size) {
   if (!multiBlock_) return SDCardBlockDevice::read(buffer, addr, size);
 
   if (!is_valid_read(addr, size)) return FSP_ERR_INVALID_ADDRESS;
   if (open() != BLOCK_DEVICE_OK) return FSP_ERR_NOT_OPEN;
-  if (!initialized) return FSP_ERR_NOT_INITIALIZED;
+  if (!initialized) {
+    refused_++;  // marked uninitialised: card-detect blinked, or it was never started
+    return FSP_ERR_NOT_INITIALIZED;
+  }
 
   // One command for the whole request, instead of one per sector.
-  fsp_err_t rv = R_SDHI_Read(&ctrl, (uint8_t *)buffer, addr / read_block_size,
-                             size / read_block_size);
-  if (rv == FSP_SUCCESS) rv = wait_for_completition();
-  return (int)rv;
+  SDCardBlockDevice::st = CmdStatus::IN_PROGRESS;  // before starting - see finishTransfer()
+  return finishTransfer(R_SDHI_Read(&ctrl, (uint8_t *)buffer, addr / read_block_size,
+                                    size / read_block_size));
 }
 
 int FastSDCardBlockDevice::programAligned(const void *buffer, bd_addr_t addr, bd_size_t size) {
@@ -55,12 +101,14 @@ int FastSDCardBlockDevice::programAligned(const void *buffer, bd_addr_t addr, bd
 
   if (!is_valid_program(addr, size)) return FSP_ERR_INVALID_ADDRESS;
   if (open() != BLOCK_DEVICE_OK) return FSP_ERR_NOT_OPEN;
-  if (!initialized) return FSP_ERR_NOT_INITIALIZED;
+  if (!initialized) {
+    refused_++;  // marked uninitialised: card-detect blinked, or it was never started
+    return FSP_ERR_NOT_INITIALIZED;
+  }
 
-  fsp_err_t rv = R_SDHI_Write(&ctrl, (const uint8_t *)buffer, addr / write_block_size,
-                              size / write_block_size);
-  if (rv == FSP_SUCCESS) rv = wait_for_completition();
-  return (int)rv;
+  SDCardBlockDevice::st = CmdStatus::IN_PROGRESS;
+  return finishTransfer(R_SDHI_Write(&ctrl, (const uint8_t *)buffer, addr / write_block_size,
+                                     size / write_block_size));
 }
 
 int FastSDCardBlockDevice::erase(bd_addr_t addr, bd_size_t size) {

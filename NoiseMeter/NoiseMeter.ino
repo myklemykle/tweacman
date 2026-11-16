@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mykle Hansen
+// Specified by Mykle Hansen, implemented by Claude (Anthropic).
+
 /*
   NoiseMeter - measures this board's noise and interference problems
 
@@ -126,11 +130,9 @@
     n - show/hide the noise traces
     x - show/hide the crosstalk traces
   Hiding the biggest traces lets the plotter zoom in on the smaller ones.
-
-  This example code is in the public domain.
 */
 
-#include <CapTouch.h>
+#include <RA6M5CapTouch.h>
 #include <FastLED.h>
 #include "FspTimer.h"  // for experiment d's audio-rate interrupt
 #include "SDCardBlockDevice.h"

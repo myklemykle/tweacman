@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mykle Hansen
+// Specified by Mykle Hansen, implemented by Claude (Anthropic).
+
 /*
   PowerOffLatchTest - SparkFun Thing Plus RA6M5
 
@@ -66,8 +70,6 @@
     1. Blue (press USR if it's green). Ground EN for a couple of seconds,
        then release it. The monitor should reconnect and print the count.
     2. Green. Ground EN and measure the 3V3 and VREF pins, then release.
-
-  This example code is in the public domain.
 */
 
 #include <FastLED.h>

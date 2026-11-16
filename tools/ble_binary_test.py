@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Mykle Hansen
+# Specified by Mykle Hansen, implemented by Claude (Anthropic).
+
 """
 ble_binary_test.py - drives CodeLess "Binary mode" from the laptop.
 

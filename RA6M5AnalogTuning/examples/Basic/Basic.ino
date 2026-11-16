@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Copyright (C) 2026 Mykle Hansen
+// Specified by Mykle Hansen, implemented by Claude (Anthropic).
+
 /*
   Basic - RA6M5AnalogTuning library
 
@@ -12,8 +16,6 @@
 
   On any board other than an RA6M5, begin() does nothing, and this sketch
   still builds and runs - it just says so.
-
-  This example code is in the public domain.
 */
 
 #include <RA6M5AnalogTuning.h>

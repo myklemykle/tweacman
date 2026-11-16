@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mykle Hansen
+// Specified by Mykle Hansen, implemented by Claude (Anthropic).
+
 /*
   Hello World - SparkFun Thing Plus RA6M5
 
@@ -50,8 +54,6 @@
     /dev when you reset it and comes back a moment later.
   - If an upload fails, double-tap the RST button to force the bootloader
     (DFU mode). The STAT LED fades slowly in and out to show it's waiting.
-
-  This example code is in the public domain.
 */
 
 #include <codelessBLEPeripheral.h>

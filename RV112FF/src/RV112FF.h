@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Copyright (C) 2026 Mykle Hansen
+// Specified by Mykle Hansen, implemented by Claude (Anthropic).
+
 /*
   RV112FF.h - Taiwan Alpha RV112FF-40 dual 360-degree potentiometer
 
@@ -28,41 +32,54 @@
   Self-calibrating: each wiper's real-world voltage range varies with
   the individual pot and its wiring, so this tracks the observed
   min/max of each wiper as the shaft turns and uses that instead of
-  assuming a fixed range. read() returns -1 until the shaft has swept
-  enough of its range to trust the calibration - in practice, about one
-  full rotation from power-on.
+  assuming a fixed range. read() returns -1 until calibration is
+  complete: the shaft has turned one full revolution since either
+  wiper's observed range last grew. A full turn carries each wiper
+  through both of its extremes, so a turn that finds nothing new means
+  the whole range has been seen - in practice, about two turns from
+  power-on. To skip that at every boot, save the calibration once with
+  getCalibration() and restore it in setup() with setCalibration().
 
-  Written for boards with a 12-bit ADC (calls analogReadResolution(12)
-  on first use, regardless of what the rest of the sketch has set it
-  to, for the best angular precision this hardware can give).
-
-  Ported from a working implementation on a different platform (Bela) -
-  see that project's notes for the original derivation and a specific
-  pitfall worth knowing about if you modify the calibration logic:
-  don't let the calibration envelope decay back toward the live signal.
-  It seems like a reasonable way to let the calibration "self-heal,"
-  but it makes an idle knob's reported angle drift, because the
-  envelope's center slides toward wherever the knob happens to be
-  sitting rather than staying anchored to the shaft's real range.
+  Takes every bit the board's ADC has: on first use it calls
+  analogReadResolution(16), regardless of what the rest of the sketch
+  has set it to - that setting is board-wide, so other analogRead()s
+  get 16-bit values too. Arduino's convention is that this only scales
+  the result, padding a 12-bit reading with zeros, so it's right
+  whatever the ADC's real resolution: exact on a 12-bit ADC, all 14
+  bits of a 14-bit one. Two exceptions are handled below
+  (RV112FF_ADC_BITS): Teensy 4 stays at 12 bits if asked for more, and
+  classic AVR boards (Uno R3, Mega, Teensy 2) have no
+  analogReadResolution() at all - their ADC is always 10 bits. On AVR,
+  expect each read() to take about half a millisecond: two or more
+  ~112us conversions, and atan2() and exp() in software floating point.
+  AVR support compiles but is untested on real hardware.
 
   A note on NVM wear, if you're persisting getCalibration()'s result
-  (e.g. with the built-in EEPROM library, which is backed by this
-  board's dedicated 8KB data flash rather than the much larger code
-  flash): that storage doesn't wear-level, and EEPROM.put() only skips
-  a write when the new bytes are byte-for-byte identical to what's
-  already there. That's no help here, since the calibration envelope
-  legitimately changes a little on almost every read() while a shaft is
-  actively being calibrated. Call getCalibration() and save its result
+  (e.g. with the EEPROM library, which on many boards is emulated in
+  flash): that storage often doesn't wear-level, and EEPROM.put() only
+  skips a write when the new bytes are byte-for-byte identical to
+  what's already there. That's no help here, since the calibration
+  envelope legitimately changes a little on almost every read() while a
+  shaft is actively being calibrated. Call getCalibration() and save its result
   deliberately - once calibration completes, on a button press, rate-
-  limited - not on every read() or every time isCalibrated() is true.
-
-  This example code is in the public domain.
+  limited - not on every read().
 */
 
 #ifndef RV112FF_h
 #define RV112FF_h
 
 #include <Arduino.h>
+
+// The resolution this library asks analogReadResolution() for, and so the
+// full scale it divides each reading by - see the class comment.
+#if defined(__AVR__)
+#define RV112FF_ADC_BITS 10  // classic AVR: always 10 bits, can't be set (untested)
+#define RV112FF_FIXED_ADC_RESOLUTION
+#elif defined(__IMXRT1062__)
+#define RV112FF_ADC_BITS 12  // Teensy 4: stays at 12 bits if asked for more
+#else
+#define RV112FF_ADC_BITS 16
+#endif
 
 // Snapshot of a pot's calibration state, for storing in NVM (e.g. via
 // EEPROM.put()/EEPROM.get() - see getCalibration()/setCalibration() below)
@@ -82,6 +99,7 @@ struct RV112FFCalibration {
   uint32_t magic;
   uint8_t version;
   uint8_t checksum;
+  uint8_t complete;  // 1 if this snapshot was taken after calibration completed
   float minVal[2];
   float maxVal[2];
 };
@@ -91,8 +109,6 @@ class RV112FF {
     // wiperPinA, wiperPinB: the two analog pins wired to the pot's wipers.
     // smoothTau: time constant (seconds) of the lowpass filter smoothing
     //   each wiper's raw reading - the main defense against ADC noise.
-    // minCalibrationRange: fraction (0-1) of full-scale a wiper's smoothed
-    //   signal must have swept before its calibration is trusted.
     // rpmSmoothTau: time constant (seconds) of rpm()'s own separate
     //   smoothing filter (see that method's comment). The default
     //   (0.15s) was tuned for using this pot as a position control,
@@ -102,8 +118,7 @@ class RV112FF {
     //   noticeable "momentum" once rpm() itself is driving something
     //   audibly in real time.
     RV112FF(uint8_t wiperPinA, uint8_t wiperPinB,
-            float smoothTau = 0.02, float minCalibrationRange = 0.15,
-            float rpmSmoothTau = 0.15);
+            float smoothTau = 0.02, float rpmSmoothTau = 0.15);
 
     // Samples both wipers, updates calibration and the speed estimate,
     // and returns the current shaft angle in degrees [0, 360). Returns
@@ -119,8 +134,19 @@ class RV112FF {
     // more than position does. Returns 0 before calibration.
     float rpm();
 
-    // True once both wipers have swept enough range for read() to
-    // return a real angle instead of -1.
+    // One wiper's reading as of the last read(), 0.0 to 1.0 of the ADC's
+    // range: channel 0 is wiperPinA, 1 is wiperPinB. These are the
+    // smoothed values the angle is decoded from, available even before
+    // calibration completes - handy for plotting, to see what the pot
+    // itself is doing.
+    float wiper(uint8_t channel) const { return _smooth[channel ? 1 : 0]; }
+
+    // True once calibration is complete - the shaft has turned a full
+    // revolution since either wiper's observed range last grew (see the
+    // class comment) - or a complete calibration has been restored with
+    // setCalibration(). Until then read() returns -1 and rpm() returns 0.
+    // Once true it stays true until resetCalibration(). The observed
+    // range can still widen a little after that, and read() uses it.
     bool isCalibrated() const { return _calibrated; }
 
     // Forgets the observed min/max range and starts calibrating again
@@ -131,9 +157,10 @@ class RV112FF {
     void resetCalibration();
 
     // Returns a snapshot of the current calibration, ready to hand to
-    // something like EEPROM.put() for storage across a reboot. Meaningful
-    // even if isCalibrated() is currently false - restoring it later with
-    // setCalibration() will pick up wherever calibration had gotten to.
+    // something like EEPROM.put() for storage across a reboot. Save it
+    // once isCalibrated() is true. A snapshot taken earlier is still
+    // valid, but restoring it just resumes calibrating from that point,
+    // with read() returning -1 until another full turn completes it.
     RV112FFCalibration getCalibration() const;
 
     // Restores a previously-saved calibration (see getCalibration()).
@@ -159,11 +186,11 @@ class RV112FF {
     // to move. A throwaway conversion first is the standard portable
     // remedy, and costs a few microseconds per wiper.
     //
-    // Set it to 0 if your board fixes this properly in hardware - e.g.
-    // this project's RA6M5AnalogTuning library, which lengthens the ADC's
-    // sampling time instead and measured as removing it outright, making
-    // the extra conversion pure overhead. Raise it if you measure crosstalk
-    // left over on a board without such an option.
+    // Set it to 0 if your board fixes this properly in hardware - e.g. by
+    // lengthening the ADC's sampling time, on chips that allow it, which
+    // can remove it outright and make the extra conversion pure overhead.
+    // Raise it if you measure crosstalk left over on a board without such
+    // an option.
     void setSettlingReads(uint8_t reads) { _settlingReads = reads; }
     uint8_t getSettlingReads() const { return _settlingReads; }
 
@@ -179,10 +206,30 @@ class RV112FF {
     void setOversampling(uint8_t readings) { _oversampling = (readings < 1) ? 1 : readings; }
     uint8_t getOversampling() const { return _oversampling; }
 
+    // How much of the ADC's full scale (0.0-1.0) each wiper must have swept
+    // before the pot starts working out an angle at all. Default 0.15.
+    //
+    // Why: the angle comes from each wiper's reading as a fraction of the
+    // range it has swept so far. Over a tiny range, ADC noise alone would
+    // turn into wild swings of angle, and spoil the count of the full turn
+    // that completes calibration (see isCalibrated()) - so nothing is
+    // decoded until the range is big enough to trust. It doesn't set when
+    // calibration completes; that's the full turn. setCalibration() also
+    // refuses a saved range smaller than this, as bad data.
+    //
+    // You'd only lower it if a wiper can't swing that far on your wiring -
+    // say a series resistor in the track, or track ends on a voltage well
+    // below the ADC's reference. Then the pot never calibrates at all, and
+    // nothing says why: plot each wiper() while turning the knob to see
+    // its real swing, and set this comfortably below it. Set it before
+    // setCalibration(), which checks against it.
+    void setMinCalibrationRange(float fraction) { _minCalibrationRange = fraction; }
+    float getMinCalibrationRange() const { return _minCalibrationRange; }
+
   private:
     uint8_t _pinA, _pinB;
     float _smoothTau;
-    float _minCalibrationRange;
+    float _minCalibrationRange = 0.15;
     float _rpmSmoothTau;
     uint8_t _settlingReads = 1;
     uint8_t _oversampling = 1;
@@ -195,15 +242,32 @@ class RV112FF {
     float _prevAngle = -1;
     float _rpm = 0;
     bool _calibrated = false;
+
+    // Progress toward a complete calibration: the observed range as it
+    // stood when the current turn started counting, and the lowest and
+    // highest unwrapped angle reached since then. See read().
+    float _markMin[2];
+    float _markMax[2];
+    float _turnPos = 0;
+    float _turnLow = 0;
+    float _turnHigh = 0;
+
+    // How far, as a fraction of full scale, a wiper's observed range may
+    // grow without restarting the turn count. The smoothed signal creeps
+    // up on a peak in tiny steps, and noise can nudge it, so any growth
+    // at all would make a turn that finds nothing new hard to finish.
+    static constexpr float RANGE_GROWTH_TOLERANCE = 0.005;
     bool _begun = false;
     unsigned long _lastMicros = 0;
 
-    static constexpr float ADC_MAX_VALUE = 4095.0;  // 2^12 - 1
+    static constexpr float ADC_MAX_VALUE = (1UL << RV112FF_ADC_BITS) - 1;
 
     static constexpr uint32_t CALIBRATION_MAGIC = 0x52563132;  // ASCII "RV12"
-    static constexpr uint8_t CALIBRATION_VERSION = 1;
+    static constexpr uint8_t CALIBRATION_VERSION = 2;
 
     float readWiper(uint8_t pin, uint8_t channel, float dtSeconds);
+    bool rangeGrewSinceMark() const;
+    void restartTurnCount();
 
     static uint8_t sumBytes(const void *data, size_t len, uint8_t sum);
     uint8_t calibrationChecksum(const RV112FFCalibration &cal) const;

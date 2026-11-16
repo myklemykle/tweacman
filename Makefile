@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Mykle Hansen
+# Specified by Mykle Hansen, implemented by Claude (Anthropic).
+
 # Makefile for Renesas RA demo projects
 #
 # Drives arduino-cli so you can build, upload and watch the serial monitor
@@ -9,6 +13,7 @@
 #   make run             upload, then immediately open the monitor
 #   make ble-test        watch the board's Bluetooth LE output (Ctrl-C to quit)
 #   make faust           regenerate a Faust-based sketch's synth.h from its .dsp source
+#   make knob            export hardware/scrub_knob.stl from its .scad model and .json presets
 #   make clean           delete build output
 #   make ports           show connected boards
 #   make help            list every target
@@ -20,7 +25,7 @@
 # A sketch that lives inside a library's examples/ folder works the same
 # way, just with the full relative path:
 #
-#   make run SKETCH=RV112FF/examples/SerialPlotterDemo
+#   make run SKETCH=RV112FF/examples/KnobAnglePlotter
 #
 # ---------------------------------------------------------------------------
 
@@ -51,7 +56,7 @@ ARDUINO_CLI ?= arduino-cli
 # future ones), passed via --library rather than installed into the global
 # sketchbook - keeps them versioned with this repo instead of scattered
 # into ~/Documents/Arduino/libraries.
-LIBRARIES ?= RV112FF CapTouch MultiTurnKnob RA6M5AnalogTuning
+LIBRARIES ?= RV112FF RA6M5CapTouch MultiTurnKnob RA6M5AnalogTuning RA6M5FastSD
 LIBRARY_FLAGS = $(foreach lib,$(LIBRARIES),--library $(lib))
 
 # Python virtual environment for tools/ble_test.py. Isolated from system
@@ -61,8 +66,14 @@ BLE_PYTHON ?= $(BLE_VENV)/bin/python3
 
 FAUST ?= faust
 
+# OpenSCAD isn't on PATH by default on macOS - point at the app bundle's
+# own binary. KNOB_PRESET names the parameter set in scrub_knob.json to
+# render with (the name OpenSCAD's Customizer saved it under).
+OPENSCAD ?= /Applications/OpenSCAD.app/Contents/MacOS/OpenSCAD
+KNOB_PRESET ?= design default values
+
 .DEFAULT_GOAL := build
-.PHONY: build upload monitor run clean ports boards info help require-port ble-venv ble-test ble-binary-test faust
+.PHONY: build upload monitor run clean ports boards info help require-port ble-venv ble-test ble-binary-test ble-card-test faust filter-render knob serial-log
 
 # ---------------------------------------------------------------------------
 
@@ -87,6 +98,12 @@ upload: require-port build
 
 monitor: require-port
 	$(ARDUINO_CLI) monitor --port $(PORT) --config baudrate=$(BAUD)
+
+# Saves the board's serial output to logs/, time-stamped, through resets -
+# for long unattended runs like RA6M5FastSD's SDBurnIn example. Stop it
+# before unplugging the board (see tools/serial_log.sh).
+serial-log: require-port
+	tools/serial_log.sh $(PORT)
 
 # `Serial` on this board is native USB, so the port vanishes during the reset
 # that follows an upload and comes back under a possibly different name. Wait
@@ -120,11 +137,35 @@ ble-test: ble-venv
 ble-binary-test: ble-venv
 	$(BLE_PYTHON) -u tools/ble_binary_test.py
 
+# Exercises SDResampleDemo's card management over BLE - upload, overwrite,
+# rename, delete - using only test files it creates itself, and checks the
+# answers. Run `make monitor` alongside to watch the board's cache messages.
+ble-card-test: ble-venv
+	$(BLE_PYTHON) -u tools/ble_card_test.py
+
 # Regenerates AudioKnobsDemo's synth.h from synth.dsp. Not needed for a
 # normal build - the generated header is committed - only after editing
 # the .dsp source. Needs the `faust` compiler on PATH.
 faust:
 	$(FAUST) -cn KnobSynth AudioKnobsDemo/synth.dsp -o AudioKnobsDemo/synth.h
+
+# Builds tools/filter_render, which runs SDResampleDemo's filter on this
+# computer: its frequency response, its self-oscillation, or a WAV filtered
+# for listening - see the top of tools/filter_render.cpp. Needs a C++17
+# compiler with its standard headers; Homebrew's clang works where Apple's
+# Command Line Tools have lost theirs.
+FILTER_CXX ?= $(shell test -x /opt/homebrew/opt/llvm/bin/clang++ && echo /opt/homebrew/opt/llvm/bin/clang++ || echo c++)
+filter-render: tools/filter_render
+tools/filter_render: tools/filter_render.cpp SDResampleDemo/BandFilter.h
+	$(FILTER_CXX) -O2 -std=c++17 -Wno-unknown-attributes -Wno-unknown-pragmas -I SDResampleDemo $< -o $@
+
+# Exports the scrub knob's printable STL, using the tweaked parameter set
+# saved in scrub_knob.json rather than the .scad file's own defaults. Only
+# re-renders (takes a couple of minutes) when the model or presets change.
+knob: hardware/scrub_knob.stl
+
+hardware/scrub_knob.stl: hardware/scrub_knob.scad hardware/scrub_knob.json
+	"$(OPENSCAD)" --render --export-format binstl -p hardware/scrub_knob.json -P "$(KNOB_PRESET)" -o $@ hardware/scrub_knob.scad
 
 clean:
 	rm -rf build
@@ -147,15 +188,19 @@ help:
 	@echo "  build     compile SKETCH (default)"
 	@echo "  upload    compile and flash the board"
 	@echo "  monitor   open the serial monitor at $(BAUD) baud"
+	@echo "  serial-log  save the serial output to logs/, time-stamped, through resets"
 	@echo "  run       upload, then open the monitor"
 	@echo "  ble-test  watch the board's Bluetooth LE output (sets up a venv on first run)"
 	@echo "  ble-binary-test  drive the CodeLess Binary mode handshake from here, with a full trace"
+	@echo "  ble-card-test  test SDResampleDemo's upload/rename/delete over BLE"
 	@echo "  faust     regenerate AudioKnobsDemo/synth.h from synth.dsp (needs faust on PATH)"
+	@echo "  filter-render  build tools/filter_render, SDResampleDemo's filter on this computer"
+	@echo "  knob      export hardware/scrub_knob.stl using the presets in scrub_knob.json"
 	@echo "  clean     remove build output"
 	@echo "  ports     list connected boards"
 	@echo "  boards    list installed Renesas board names"
 	@echo "  info      show the current settings"
 	@echo
-	@echo "Variables: SKETCH, FQBN, PORT, BAUD, LIBRARIES"
+	@echo "Variables: SKETCH, FQBN, PORT, BAUD, LIBRARIES, OPENSCAD, KNOB_PRESET"
 	@echo "Example:   make run SKETCH=HelloWorld"
-	@echo "Example:   make run SKETCH=RV112FF/examples/SerialPlotterDemo"
+	@echo "Example:   make run SKETCH=RV112FF/examples/KnobAnglePlotter"

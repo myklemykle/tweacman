@@ -1,5 +1,9 @@
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Copyright (C) 2026 Mykle Hansen
+// Specified by Mykle Hansen, implemented by Claude (Anthropic).
+
 /*
-  SerialPlotterDemo - RV112FF library
+  KnobAnglePlotter - RV112FF library
 
   Reads two RV112FF-40 dual potentiometers and streams their shaft
   angles to the Arduino Serial Plotter (Tools > Serial Plotter in the
@@ -10,14 +14,13 @@
     Pot 1 wipers -> A2, A3
     Pot 2 wipers -> A4, A5
     Both pots' track ends -> 3.3V and GND
+  On another board, use any four analog pins it has.
 
   Each angle briefly reads -1 right after power-on - that's the pot's
-  self-calibration warm-up (see RV112FF.h); it clears after roughly one
-  full turn of that shaft. Each pot's isCalibrated() is plotted too (as
+  self-calibration warm-up (see RV112FF.h); it clears after about two
+  full turns of that shaft. Each pot's isCalibrated() is plotted too (as
   0 or 1), so the moment calibration completes shows up as a clean step
   right where the angle trace stops sitting at -1.
-
-  This example code is in the public domain.
 */
 
 #include <RV112FF.h>
@@ -33,8 +36,8 @@ void setup() {
 }
 
 void loop() {
-  // Same non-blocking pattern used throughout this project: compare the
-  // clock instead of delay(), so nothing here would ever stall - the
+  // The usual non-blocking pattern: compare the clock instead of
+  // delay(), so nothing here would ever stall - the
   // pots themselves are polled by read() at whatever rate loop() gets
   // to it, not on a hardware timer.
   unsigned long currentMillis = millis();

@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Mykle Hansen
+# Specified by Mykle Hansen, implemented by Claude (Anthropic).
+
 """
 Generate the KiCad 7 schematic (../cassette-carrier.kicad_sch) and the project symbol library (../cassette.kicad_sym).
 
@@ -439,7 +443,9 @@ def build():
     lib_syms = "".join("    " + LIB[k].replace("\n", "\n    ").rstrip() + "\n" for k in LIB)
     return (f'(kicad_sch (version 20230121) (generator eeschema)\n\n  (uuid {ROOT})\n\n  (paper "A3")\n\n'
             f'  (title_block\n    (title "Cassette carrier")\n'
-            f'    (rev "A")\n    (comment 1 "Thing Plus RA6M5, knobs, touch and audio out")\n  )\n\n'
+            f'    (rev "A")\n    (comment 1 "Thing Plus RA6M5, knobs, touch and audio out")\n'
+            f'    (comment 2 "(C) 2026 Mykle Hansen. Specified by Mykle Hansen, implemented by Claude (Anthropic).")\n'
+            f'    (comment 3 "License: CERN-OHL-S-2.0. Footprints derived from SparkFun KiCad libraries (CC BY 4.0).")\n  )\n\n'
             f'  (lib_symbols\n{lib_syms}  )\n\n' + "".join(items) +
             f'\n  (sheet_instances\n    (path "/" (page "1"))\n  )\n)\n')
 

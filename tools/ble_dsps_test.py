@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Mykle Hansen
+# Specified by Mykle Hansen, implemented by Claude (Anthropic).
+
 """
 ble_dsps_test.py - one-off diagnostic: performs the CodeLess Binary mode/
 DSPS handshake against the SparkFun Thing Plus RA6M5's DA14531 module

@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Mykle Hansen
+# Specified by Mykle Hansen, implemented by Claude (Anthropic).
+
 """Write cassette-carrier-bom.csv: one line per distinct part to buy, grouped from the schematic.
 
 Reference designators, values and footprints come from the schematic's netlist, so the counts can't drift

@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mykle Hansen
+// Specified by Mykle Hansen, implemented by Claude (Anthropic).
+
 /*
   WS2812TouchDemo - SparkFun Thing Plus RA6M5
 
@@ -12,15 +16,13 @@
   out mid-breath doesn't look like two unrelated rhythms colliding.
 
   Wiring: D6 to a ~10nF capacitor to GND (TSCAP, shared by both pads -
-  see CapTouch.h), D20 (touch1) and D21 (touch2) each to their own wire
-  or touch pad - same as CapTouch's own SerialPlotterDemo. The RGB LED
+  see RA6M5CapTouch.h), D20 (touch1) and D21 (touch2) each to their own wire
+  or touch pad - same as RA6M5CapTouch's CapTouchPlotter example. The RGB LED
   itself needs no wiring; it's onboard.
-
-  This example code is in the public domain.
 */
 
 #include <FastLED.h>
-#include <CapTouch.h>
+#include <RA6M5CapTouch.h>
 
 // -- LED ----------------------------------------------------------------
 
@@ -75,7 +77,7 @@ void loop() {
   if (currentMillis - previousMillis >= CONTROL_INTERVAL) {
     previousMillis = currentMillis;
 
-    CapTouch::scan();  // one scan() covers both pads - see CapTouch.h
+    CapTouch::scan();  // one scan() covers both pads - see RA6M5CapTouch.h
 
     uint8_t brightness = pulseBrightness();
     leds[0] = CRGB(touch1.isTouched() ? brightness : 0,  // red

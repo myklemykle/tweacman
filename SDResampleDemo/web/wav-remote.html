@@ -1,5 +1,15 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later
+     Copyright (C) 2026 Mykle Hansen
+     Specified by Mykle Hansen, implemented by Claude (Anthropic). -->
+<html lang="en">
 <meta charset="UTF-8">
-<title>WAV Remote</title>
+<!-- Without this a phone lays the page out at desktop width and shrinks it,
+     leaving every button too small to hit with a finger. viewport-fit=cover
+     lets the page run under a phone's notch and home bar; the status line
+     and tab bar pad themselves clear of them (the env() insets below). -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Tweacman</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600&family=Public+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap">
 <style>
   :root {
@@ -44,22 +54,410 @@
 
   * { box-sizing: border-box; }
 
+  [hidden] { display: none !important; }
+
+  /* -- the frame ---------------------------------------------------------
+     The page is the height of the screen and never scrolls as a whole: a
+     status line on top, a tab bar at the bottom, and between them whichever
+     tab is showing, which scrolls on its own. One scroller at a time - the
+     file list used to be a scrolling box inside a scrolling page, and a
+     thumb couldn't tell which one it had hold of. */
+
+  html, body { height: 100%; }
   body {
     background: var(--bg);
     color: var(--text);
     font-family: "Public Sans", -apple-system, "Helvetica Neue", Arial, sans-serif;
-    padding-inline: 16px;
-    padding-block: 28px;
+    margin: 0;
+    overflow: hidden;
     display: flex;
     justify-content: center;
   }
 
-  .panel {
+  .app {
     width: 100%;
-    max-width: 420px;
+    max-width: 480px;
+    height: 100vh;
+    height: 100dvh;  /* the visible height, where a phone's toolbars come and go */
     display: flex;
     flex-direction: column;
-    gap: 18px;
+    min-height: 0;
+  }
+
+  /* -- status line --------------------------------------------------------- */
+
+  .statusLine {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 52px;
+    padding: 4px 12px;
+    padding-top: calc(4px + env(safe-area-inset-top, 0px));
+    padding-left: calc(12px + env(safe-area-inset-left, 0px));
+    padding-right: calc(12px + env(safe-area-inset-right, 0px));
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  /* The app's name - a logo will go here. */
+  .brand {
+    font-family: "Oswald", "Arial Narrow", sans-serif;
+    font-weight: 600;
+    font-size: 1.05rem;
+    letter-spacing: 0.08em;
+    flex-shrink: 0;
+  }
+  .status {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: baseline;
+    justify-content: flex-end;
+    gap: 0.4em;
+    font-size: 0.8rem;
+    color: var(--text-dim);
+  }
+  /* The track's name gives way (with an ellipsis) before its state does. */
+  .statusTrack {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  .statusState { white-space: nowrap; flex-shrink: 0; }
+  .statusState.playing { color: var(--good); font-weight: 600; }
+  /* Play and stop wear the tape-deck symbols: a triangle and a square. */
+  .transportBtn {
+    width: 52px;
+    padding: 0;
+    flex-shrink: 0;
+    display: grid;
+    place-items: center;
+  }
+  .transportBtn svg { width: 22px; height: 22px; }
+
+  /* -- connect screen ------------------------------------------------------
+     Nothing else on the page means anything until there's a board on the
+     other end, so until then this is the page: one button, most of the
+     screen. */
+
+  .connectScreen {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 16px;
+    padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  }
+  .connectBtn {
+    flex: 1 0 220px;
+    background: var(--accent);
+    color: var(--surface-2);
+    border-color: var(--accent-strong);
+    border-radius: 14px;
+    font-size: clamp(1.8rem, 9vw, 2.6rem);
+    font-weight: 600;
+    letter-spacing: 0.08em;
+  }
+  .connectBtn:active:not(:disabled) { background: var(--accent-strong); }
+  /* In a browser without Web Bluetooth the button can never work, so it
+     goes grey rather than just faded, to read as off rather than busy. */
+  .connectBtn.unsupported {
+    background: var(--surface);
+    color: var(--text-dim);
+    border-color: var(--border);
+    border-style: dashed;
+  }
+
+  /* On iOS without Web Bluetooth: links that reopen this page in an app
+     that has it. Links, not buttons, since all they do is navigate. */
+  .openInApp {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .appBtn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface-2);
+    color: var(--text-dim);
+    font-family: "Oswald", "Arial Narrow", sans-serif;
+    font-size: 0.9rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    text-decoration: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .appBtn.primary {
+    min-height: 56px;
+    font-size: 1.2rem;
+    background: var(--accent);
+    border-color: var(--accent-strong);
+    color: var(--surface-2);
+  }
+  .appBtn.primary:active { background: var(--accent-strong); }
+  .about a { color: var(--accent); }
+  .about {
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    text-align: center;
+    margin: 0;
+  }
+  .about.bad { color: var(--bad); }
+
+  /* -- tabs ----------------------------------------------------------------- */
+
+  .tabPanel {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    padding: 12px 12px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .tabPanel > * { flex-shrink: 0; }
+
+  .tabBar {
+    flex-shrink: 0;
+    display: flex;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .tabBar button {
+    flex: 1;
+    min-height: 39px;
+    background: none;
+    border: none;
+    border-top: 3px solid transparent;
+    border-radius: 0;
+    color: var(--text-dim);
+    font-size: 0.85rem;
+    font-weight: 600;
+  }
+  .tabBar button[aria-selected="true"] {
+    color: var(--accent-strong);
+    border-top-color: var(--accent);
+    background: var(--surface-2);
+  }
+
+  /* Results and errors sit just above the tab bar, whichever tab is up. */
+  .notice { margin: 0 12px 8px; flex-shrink: 0; }
+
+  /* -- tweaks: one card per knob mode ---------------------------------------
+     Each card wears its mode's colour, the same hue the board's RGB LED
+     shows (--h, set per card), as a stripe down its left edge. The mode the
+     knobs are in has the colour all the way round and behind it. There are
+     no titles: the settings' own names say which mode a card is, and
+     tapping a card anywhere that isn't a control puts the board in it. */
+
+  .modeCard {
+    --mode: hsl(var(--h) 60% 34%);
+    border: 2px solid var(--border);
+    border-left: 8px solid var(--mode);
+    border-radius: 12px;
+    background: var(--surface);
+    overflow: hidden;
+    cursor: pointer;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .modeCard { --mode: hsl(var(--h) 55% 62%); }
+  }
+  :root[data-theme="dark"] .modeCard { --mode: hsl(var(--h) 55% 62%); }
+  .modeCard.current {
+    border-color: var(--mode);
+    background: color-mix(in srgb, var(--mode) 16%, var(--surface));
+  }
+  .modeCard:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* A mode's two settings sit side by side, as its two knobs do. */
+  .pair {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+  .param {
+    min-width: 0;
+    display: flex;
+    padding: 4px 4px 0 2px;
+  }
+  .param + .param { border-left: 1px solid var(--border); }
+  /* A setting's name lies on its side up the left edge of its controls,
+     reading bottom to top, so it costs no height. */
+  .paramLabel {
+    flex: none;
+    width: 16px;
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    font-family: "Oswald", "Arial Narrow", sans-serif;
+    font-size: 0.72rem;
+    line-height: 16px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .paramBody { flex: 1; min-width: 0; margin-left: 2px; }
+  /* The value, then Reverse (where there is one) and Reset. The value's
+     box takes whatever width the buttons leave. */
+  .paramRow {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  /* The value is a button: tap it to type an exact number. */
+  .paramValue {
+    flex: 1;
+    min-width: 0;
+    background: var(--surface-2);
+    color: var(--text);
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: 0.9rem;
+    text-transform: none;
+    letter-spacing: 0;
+    padding: 4px;
+    text-align: right;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  .paramValue .unit { font-size: 0.7em; color: var(--text-dim); margin-left: 3px; }
+  .paramInput {
+    flex: 1;
+    min-width: 0;
+    width: 0;
+    min-height: 44px;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 16px;  /* 16px or more stops iOS zooming the page on focus */
+    text-align: right;
+    color: var(--text);
+    background: var(--surface-2);
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    padding: 4px 8px;
+  }
+  /* Reset and Reverse: square, a finger wide. */
+  .paramBtn {
+    width: 40px;
+    flex-shrink: 0;
+    padding: 0;
+    display: grid;
+    place-items: center;
+    font-size: 0.62rem;
+  }
+  .paramBtn svg { width: 18px; height: 18px; }
+  /* A reset button lights up when there's something to reset: its setting
+     isn't at its default. */
+  .paramBtn.changed, .resetAllBtn.changed:not(.arming) {
+    color: var(--surface-2);
+    background: var(--accent);
+    border-color: var(--accent-strong);
+  }
+  /* The half of a card whose knob has no setting to show. */
+  .param.byHand {
+    align-items: center;
+    color: var(--text-dim);
+    padding-bottom: 4px;
+  }
+  .param.byHand .paramLabel { align-self: stretch; }
+  .param.byHand p { font-size: 0.75rem; margin: 0 0 0 6px; }
+  .param input[type="range"] {
+    display: block;
+    width: 100%;
+    height: 36px;
+    margin: 0;
+    accent-color: var(--mode);
+    /* A finger that starts on a slider and moves up or down still scrolls
+       the tab; only sideways movement drags the slider. */
+    touch-action: pan-y;
+  }
+  .param input[type="range"]:disabled { opacity: 0.45; }
+  #modeCards { display: flex; flex-direction: column; gap: 6px; }
+  .resetRow { display: flex; justify-content: center; }
+  /* The mode cards run almost edge to edge - sliders want the width. */
+  #tab-tweaks { padding: 6px 1px; gap: 6px; }
+  .smallBtn.arming {
+    background: var(--bad);
+    border-color: var(--bad);
+    color: var(--surface-2);
+  }
+
+  /* -- info tab --------------------------------------------------------------- */
+
+  .readouts {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+  .stat {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    align-items: center;
+    text-align: center;
+  }
+  .stat .label {
+    font-family: "Oswald", "Arial Narrow", sans-serif;
+    font-size: 0.68rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+  .stat .value {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: 1.1rem;
+    line-height: 1.1;
+    white-space: nowrap;
+  }
+  .stat .value.bad { color: var(--bad); }
+  .stat .value.quiet { color: var(--text-dim); }
+  .stat .value .unit { font-size: 0.6em; color: var(--text-dim); margin-left: 3px; }
+
+  /* The link log, newest line first, as long as it likes: it scrolls with
+     whatever it's in (the info tab, or the connect screen while there's no
+     board), not in a box of its own. Folded away until asked for. */
+  .logPanel {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface);
+  }
+  .logPanel summary {
+    font-family: "Oswald", "Arial Narrow", sans-serif;
+    font-size: 0.72rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    padding: 14px 12px;
+    cursor: pointer;
+  }
+  .logToolbar { padding: 0 12px 8px; }
+  .copyLogBtn.copied { color: var(--good); border-color: var(--good); }
+  .logBody {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 0.72rem;
+    line-height: 1.5;
+    color: var(--text-dim);
+    padding: 0 12px 12px;
+    white-space: pre-wrap;
+    word-break: break-word;
   }
 
   .eyebrow {
@@ -71,49 +469,9 @@
     color: var(--text-dim);
   }
 
-  h1 {
-    font-family: "Oswald", "Arial Narrow", sans-serif;
-    font-weight: 600;
-    font-size: clamp(1.6rem, 6vw, 2rem);
-    letter-spacing: 0.01em;
-    margin: 2px 0 0;
-    text-wrap: balance;
-  }
-
-  /* -- header / connection strip ----------------------------------- */
-
-  .headerRow {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 12px;
-  }
-
-  .statusRow {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-top: 10px;
-  }
-
-  .dot {
-    width: 9px;
-    height: 9px;
-    border-radius: 50%;
-    background: var(--bad);
-    flex-shrink: 0;
-    transition: background-color 0.2s ease;
-  }
-  .dot.connected { background: var(--good); }
-
-  .statusText {
-    font-family: "Oswald", "Arial Narrow", sans-serif;
-    font-size: 0.85rem;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--text-dim);
-  }
-
+  /* Every button is at least 44px tall - Apple's and Google's minimum for
+     a finger - and touch-action: manipulation turns off double-tap-to-zoom,
+     which otherwise delays every tap while the browser waits for a second. */
   button {
     font-family: "Oswald", "Arial Narrow", sans-serif;
     letter-spacing: 0.05em;
@@ -121,116 +479,46 @@
     border: 1px solid var(--border);
     border-radius: 6px;
     cursor: pointer;
+    min-height: 44px;
+    touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
   }
   button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button:disabled { opacity: 0.45; cursor: default; }
 
-  .connectBtn {
-    background: var(--accent);
-    color: var(--surface-2);
-    border-color: var(--accent-strong);
-    font-size: 0.8rem;
+  /* Secondary buttons: Refresh, Upload, Reset, Cancel... */
+  .smallBtn {
+    background: var(--surface-2);
+    color: var(--text-dim);
+    font-size: 0.7rem;
     font-weight: 600;
-    padding: 9px 16px;
-    flex-shrink: 0;
+    padding: 6px 12px;
   }
-  .connectBtn:active { background: var(--accent-strong); }
-  .connectBtn[hidden] { display: none; }
-
-  /* -- stat readout tiles ------------------------------------------- */
-
-  .readouts {
-    display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
-    gap: 10px;
-  }
-
-  .stat {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 14px 10px 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    align-items: center;
-    text-align: center;
-  }
-
-  .stat .label {
-    font-family: "Oswald", "Arial Narrow", sans-serif;
-    font-size: 0.68rem;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: var(--text-dim);
-  }
-
-  .stat .value {
-    font-family: "IBM Plex Mono", ui-monospace, monospace;
-    font-variant-numeric: tabular-nums;
-    font-size: clamp(1.1rem, 6vw, 1.4rem);
-    line-height: 1.1;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .stat .value.bad { color: var(--bad); }
-  .stat .value .unit {
-    font-size: 0.6em;
-    color: var(--text-dim);
-    margin-left: 3px;
-  }
-
-  .nowPlaying {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 12px 14px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 10px;
-  }
-  .nowPlaying .label {
-    font-family: "Oswald", "Arial Narrow", sans-serif;
-    font-size: 0.72rem;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: var(--text-dim);
-  }
-  /* Transport state, from the stats line's RUN: field - the board runs only
-     while its touch pad is held, so this flips constantly in normal use. */
-  .transport {
-    font-family: "Oswald", "Arial Narrow", sans-serif;
-    font-size: 0.66rem;
-    letter-spacing: 0.09em;
-    text-transform: uppercase;
-    padding: 2px 8px;
-    border-radius: 999px;
-    border: 1px solid var(--border);
-    color: var(--text-dim);
-    flex-shrink: 0;
-    white-space: nowrap;
-  }
-  /* The speed tile showing what the transport *would* run at, rather than
-     what it is doing - see handleStats(). */
-  .value.potential {
-    color: var(--text-dim);
-  }
-
-  .transport.running {
+  .smallBtn:active:not(:disabled) { background: var(--surface); }
+  .smallBtn.primary {
+    background: var(--accent);
+    border-color: var(--accent-strong);
     color: var(--surface-2);
-    background: var(--good);
-    border-color: var(--good);
+  }
+  .smallBtn.primary:active:not(:disabled) { background: var(--accent-strong); }
+  .smallBtn.danger {
+    background: var(--bad);
+    border-color: var(--bad);
+    color: var(--surface-2);
   }
 
-  .nowPlaying .filename {
-    font-family: "IBM Plex Mono", ui-monospace, monospace;
+  /* -- notice (results and errors of card operations) ----------------- */
+
+  .notice {
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--good);
+    border-radius: 8px;
+    background: var(--surface);
+    padding: 10px 12px;
     font-size: 0.85rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
+  .notice.bad { border-left-color: var(--bad); }
+  .notice[hidden] { display: none; }
 
   /* -- file list ------------------------------------------------------ */
 
@@ -238,45 +526,108 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 8px;
   }
   .filesHeader .eyebrow { margin: 0; }
-  .refreshBtn {
-    background: var(--surface-2);
+  .filesButtons { display: flex; gap: 8px; }
+  .hint {
+    font-size: 0.75rem;
     color: var(--text-dim);
-    font-size: 0.68rem;
-    font-weight: 600;
-    padding: 6px 10px;
+    margin: 0;
   }
-  .refreshBtn:active { background: var(--surface); }
 
+  /* On the files tab the header, and an upload or recording in progress,
+     stay put; the list is the part that scrolls. */
+  #tab-files { overflow: hidden; padding-bottom: 0; }
   .fileList {
     list-style: none;
-    margin: 8px 0 0;
-    padding: 0;
+    margin: 0;
+    padding: 0 0 20px;
     display: flex;
     flex-direction: column;
     gap: 8px;
-    max-height: 260px;
+    flex: 1 1 0;
+    min-height: 0;
     overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
   }
+  .fileList > * { flex-shrink: 0; }
   .fileItem {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 10px;
-    padding: 12px 14px;
-    font-family: "IBM Plex Mono", ui-monospace, monospace;
-    font-size: 0.85rem;
-    cursor: pointer;
-    user-select: none;
-    -webkit-tap-highlight-color: transparent;
+    padding: 4px 4px 4px 0;
+    display: flex;
+    align-items: center;
+    gap: 4px;
     transition: background-color 0.08s ease, border-color 0.08s ease;
   }
-  .fileItem:hover { border-color: var(--accent); }
   .fileItem.playing {
     background: var(--accent);
     border-color: var(--accent-strong);
-    color: var(--surface-2);
   }
+  .fileItem.playing .fileName,
+  .fileItem.playing .iconBtn { color: var(--surface-2); }
+
+  /* The name itself is the "cue" button: the whole width is a target. */
+  .fileName {
+    flex: 1;
+    min-width: 0;
+    background: none;
+    border: none;
+    color: var(--text);
+    text-align: left;
+    text-transform: none;
+    letter-spacing: 0;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 0.85rem;
+    padding: 8px 6px 8px 14px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .iconBtn {
+    width: 44px;
+    height: 44px;
+    flex-shrink: 0;
+    display: grid;
+    place-items: center;
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    padding: 0;
+  }
+  .iconBtn:active:not(:disabled) { background: var(--border); }
+  .iconBtn svg { width: 20px; height: 20px; }
+  .iconBtn.play { color: var(--good); }
+
+  /* Rename and delete-confirm states replace a row's contents in place. */
+  .fileItem.editing, .fileItem.confirming {
+    padding: 6px;
+    flex-wrap: wrap;
+  }
+  .fileItem.confirming { border-color: var(--bad); }
+  .fileItem .prompt {
+    flex: 1 1 100%;
+    font-size: 0.85rem;
+    padding: 4px 8px;
+    overflow-wrap: anywhere;
+  }
+  .fileItem .prompt code { font-family: "IBM Plex Mono", ui-monospace, monospace; }
+  .fileItem .rowButtons { display: flex; gap: 6px; margin-left: auto; }
+  .renameInput {
+    flex: 1 1 100%;
+    min-height: 44px;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 16px;  /* 16px or more stops iOS zooming the page on focus */
+    color: var(--text);
+    background: var(--surface-2);
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    padding: 8px 10px;
+  }
+
   .fileList:empty::after {
     content: "No files yet - connect, then Refresh.";
     font-family: "Public Sans", sans-serif;
@@ -284,111 +635,412 @@
     color: var(--text-dim);
   }
 
-  /* -- debug log -------------------------------------------------------- */
+  /* -- sets ------------------------------------------------------------
+     The card's folders are its sets (see WavList.h in the sketch). The set
+     tab plays one through, for performing; the files tab manages one. Both
+     look at the same set, picked with either tab's selector. */
 
-  details.log {
+  .setPicker {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .setPicker .eyebrow { flex-shrink: 0; }
+  .setSelect {
+    flex: 1;
+    min-width: 0;
+    min-height: 44px;
+    font-family: "Public Sans", sans-serif;
+    font-size: 16px;  /* 16px or more stops iOS zooming the page on focus */
+    color: var(--text);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 10px;
+  }
+
+  #tab-set { overflow: hidden; padding-bottom: 0; }
+  .setNow {
+    background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 10px;
-    background: var(--surface);
-    overflow: hidden;
+    padding: 12px 14px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 4px 12px;
+    align-items: baseline;
   }
-  details.log summary {
+  .setNow.playing { border-color: var(--good); border-left: 4px solid var(--good); }
+  .setNow.gap { border-color: var(--accent); border-left: 4px solid var(--accent); }
+  .setNowLabel {
     font-family: "Oswald", "Arial Narrow", sans-serif;
-    font-size: 0.72rem;
+    font-size: 0.8rem;
     letter-spacing: 0.1em;
     text-transform: uppercase;
     color: var(--text-dim);
-    padding: 10px 14px;
-    cursor: pointer;
   }
-  .logToolbar {
-    padding: 0 14px 8px;
-  }
-  .copyLogBtn {
-    background: var(--surface-2);
-    color: var(--text-dim);
-    font-size: 0.66rem;
-    font-weight: 600;
-    padding: 5px 9px;
-  }
-  .copyLogBtn:active { background: var(--surface); }
-  .copyLogBtn.copied { color: var(--good); border-color: var(--good); }
-  .logBody {
+  .setNow.playing .setNowLabel { color: var(--good); }
+  .setNow.gap .setNowLabel { color: var(--accent-strong); }
+  .setNowTime {
     font-family: "IBM Plex Mono", ui-monospace, monospace;
-    font-size: 0.72rem;
-    line-height: 1.5;
-    color: var(--text-dim);
-    padding: 0 14px 12px;
-    max-height: 140px;
-    overflow-y: auto;
-    white-space: pre-wrap;
-    word-break: break-word;
+    font-size: 1.4rem;
+    font-variant-numeric: tabular-nums;
+    grid-row: span 2;
+    align-self: center;
+  }
+  .setNowName {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 0.9rem;
+    overflow-wrap: anywhere;
   }
 
-  footer {
-    font-size: 0.72rem;
+  .setTransport {
+    display: grid;
+    grid-template-columns: 1fr 1.6fr 1fr;
+    gap: 8px;
+  }
+  .setBtn {
+    min-height: 56px;
+    background: var(--surface-2);
+    color: var(--text);
+    font-size: 0.95rem;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+  }
+  .setBtn svg { width: 20px; height: 20px; }
+  .setBtn:active:not(:disabled) { background: var(--surface); }
+  .setBtn.primary {
+    background: var(--good);
+    border-color: var(--good);
+    color: var(--surface-2);
+  }
+  .setBtn.primary.stops { background: var(--bad); border-color: var(--bad); }
+
+  .setOptions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .gapField {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.85rem;
     color: var(--text-dim);
-    text-align: center;
+  }
+  .gapField input {
+    width: 5.5em;
+    min-height: 44px;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 16px;
+    color: var(--text);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 8px;
+  }
+  .setOptions .hint { flex: 1; min-width: 8em; }
+
+  .trackNumber {
+    flex-shrink: 0;
+    width: 2.6em;
+    text-align: right;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+  }
+  .fileItem.playing .trackNumber { color: var(--surface-2); }
+  .setList .fileName { padding-left: 8px; }
+  .setList:empty::after { content: "No tracks in this set."; }
+
+  /* -- upload panel --------------------------------------------------- */
+
+  .uploadPanel {
+    background: var(--surface);
+    border: 1px solid var(--accent);
+    border-radius: 10px;
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .uploadPanel[hidden] { display: none; }
+  .uploadPanel .prompt { font-size: 0.85rem; overflow-wrap: anywhere; }
+  .uploadPanel code { font-family: "IBM Plex Mono", ui-monospace, monospace; }
+  .progressTrack {
+    height: 8px;
+    border-radius: 4px;
+    background: var(--border);
+    overflow: hidden;
+  }
+  .progressFill {
+    height: 100%;
+    width: 0%;
+    background: var(--accent);
+    transition: width 0.15s linear;
+  }
+  .uploadStats {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 0.75rem;
+    color: var(--text-dim);
+  }
+  .uploadPanel .rowButtons { display: flex; gap: 8px; justify-content: flex-end; }
+
+  /* -- recording (phones and tablets) --------------------------------- */
+
+  /* Press and hold: nothing the browser does on a long press - text
+     selection, the iOS callout menu, scrolling - may start mid-hold, or it
+     steals the touch and the recording stops early. */
+  .recordBtn {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+    touch-action: none;
+  }
+  .recordBtn[hidden] { display: none; }
+  .recordBtn.recording {
+    background: var(--bad);
+    border-color: var(--bad);
+    color: var(--surface-2);
+  }
+
+  .recordPanel {
+    background: var(--surface);
+    border: 1px solid var(--accent);
+    border-radius: 10px;
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .recordPanel.live { border-color: var(--bad); }
+  .recordPanel[hidden] { display: none; }
+  .recordPanel .prompt { font-size: 0.85rem; overflow-wrap: anywhere; }
+  .recordPanel code { font-family: "IBM Plex Mono", ui-monospace, monospace; }
+  .recordPanel .rowButtons { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+  .recLive {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: "Oswald", "Arial Narrow", sans-serif;
+    font-size: 0.85rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--bad);
+  }
+  .recLive[hidden] { display: none; }
+  .recDot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--bad);
+    animation: recPulse 1s ease-in-out infinite;
+  }
+  @keyframes recPulse { 50% { opacity: 0.25; } }
+  @media (prefers-reduced-motion: reduce) { .recDot { animation: none; } }
+  .recTime {
+    margin-left: auto;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0;
+    color: var(--text);
+  }
+  .levelTrack {
+    height: 8px;
+    border-radius: 4px;
+    background: var(--border);
+    overflow: hidden;
+  }
+  .levelTrack[hidden] { display: none; }
+  .levelFill {
+    height: 100%;
+    width: 0%;
+    background: var(--good);
+  }
+
+  .visuallyHidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
   }
 </style>
 
-<div class="panel">
-  <div class="headerRow">
-    <div>
-      <div class="eyebrow">SparkFun Thing Plus RA6M5</div>
-      <h1>WAV&nbsp;Remote</h1>
-      <div class="statusRow">
-        <span class="dot" id="dot"></span>
-        <span class="statusText" id="statusText">Disconnected</span>
+<div class="app">
+  <header class="statusLine">
+    <span class="brand">TWEACMAN</span>
+    <span class="status" role="status">
+      <span class="statusTrack" id="statusTrack" hidden></span>
+      <span class="statusState" id="statusState">disconnected</span>
+    </span>
+    <button class="smallBtn primary transportBtn" id="transportBtn" aria-label="Play" hidden disabled></button>
+  </header>
+
+  <!-- Until a board is connected. -->
+  <div class="connectScreen" id="connectScreen">
+    <button class="connectBtn" id="connectBtn">Connect</button>
+    <p class="about" id="browserNote">On iOS, open this page in Bluefy or WebBLE - Safari has no Web Bluetooth support.</p>
+    <!-- Shown on iOS when this browser has no Web Bluetooth. The hrefs are
+         filled in at startup, from this page's own address. -->
+    <div class="openInApp" id="openInApp" hidden>
+      <a class="appBtn primary" id="openBluefy">Open in Bluefy</a>
+      <a class="appBtn" id="openWebBLE">Open in WebBLE</a>
+      <p class="about">Don't have either? Get
+        <a href="https://apps.apple.com/app/id1492822055">Bluefy</a> or
+        <a href="https://apps.apple.com/app/id1193531073">WebBLE</a>
+        from the App Store, then scan the code again.</p>
+    </div>
+    <div id="logSlotConnect"></div>
+  </div>
+
+  <!-- Tweaks: every knob setting, by mode. Built by buildTweaks(). -->
+  <main class="tabPanel" id="tab-tweaks" hidden>
+    <div class="resetRow">
+      <button class="smallBtn resetAllBtn" disabled>Reset all tweaks</button>
+    </div>
+    <div id="modeCards"></div>
+    <div class="resetRow">
+      <button class="smallBtn resetAllBtn" disabled>Reset all tweaks</button>
+    </div>
+  </main>
+
+  <!-- Set: one of the card's sets, played through for performing - each
+       track once, with a gap between. See "Sets" in the sketch. -->
+  <main class="tabPanel" id="tab-set" hidden>
+    <div class="setPicker">
+      <label class="eyebrow" for="setSelect">Set</label>
+      <select class="setSelect" id="setSelect"></select>
+    </div>
+    <div class="setNow" id="setNow">
+      <div class="setNowLabel" id="setNowLabel">Setlist off</div>
+      <div class="setNowTime" id="setNowTime"></div>
+      <div class="setNowName" id="setNowName"></div>
+    </div>
+    <div class="setTransport">
+      <button class="setBtn" id="setPrevBtn" aria-label="Previous track" disabled></button>
+      <button class="setBtn primary" id="setPlayBtn" disabled></button>
+      <button class="setBtn" id="setNextBtn" aria-label="Next track" disabled></button>
+    </div>
+    <div class="setOptions">
+      <label class="gapField">Gap
+        <input type="number" id="gapInput" min="0" max="600" step="0.5" inputmode="decimal" disabled> s</label>
+      <button class="smallBtn" id="prepBtn" disabled>Prepare</button>
+      <span class="hint" id="prepStatus"></span>
+    </div>
+    <p class="hint">The setlist plays each track once. Whenever the deck is stopped and you're hands-off, it counts down the gap and starts the next; while you're playing, it stands by. Latch a track (&#9654; up top, or the pads) and it loops until you stop it. Tap a track to start the setlist there.</p>
+    <ol class="fileList setList" id="setList"></ol>
+  </main>
+
+  <!-- Files: what's on the card. -->
+  <main class="tabPanel" id="tab-files" hidden>
+    <div class="setPicker">
+      <label class="eyebrow" for="filesSetSelect">Set</label>
+      <select class="setSelect" id="filesSetSelect"></select>
+    </div>
+    <div class="filesHeader">
+      <div class="eyebrow">Files in set</div>
+      <div class="filesButtons">
+        <button class="smallBtn" id="uploadBtn" disabled>Upload</button>
+        <button class="smallBtn recordBtn" id="recordBtn" hidden disabled>Hold to record</button>
+        <button class="smallBtn" id="refreshBtn" disabled>Refresh</button>
+        <button class="smallBtn" id="diskBtn" disabled>USB disk</button>
       </div>
     </div>
-    <button class="connectBtn" id="connectBtn">Connect</button>
-  </div>
+    <p class="hint">Tap a name to cue it for the touch pads; &#9654; plays it and latches.</p>
+    <input type="file" id="fileInput" class="visuallyHidden" accept=".wav,audio/wav,audio/x-wav" tabindex="-1">
 
-  <div class="nowPlaying">
-    <span class="label">Now&nbsp;Playing</span>
-    <span class="filename" id="nowPlaying">&mdash;</span>
-    <span class="transport" id="transport">&mdash;</span>
-  </div>
+    <!-- USB disk mode: the card is on the computer at the other end of the
+         board's USB cable, until it's ejected there - see the sketch's
+         "USB disk mode". -->
+    <div class="uploadPanel" id="diskPanel" hidden>
+      <div class="prompt">The card is a USB disk on the computer the board is plugged into.
+        Copy WAVs on or off it there, then <strong>eject it</strong> (or unplug the cable)
+        to bring the board back. Playback is off until then.</div>
+    </div>
 
-  <div class="readouts">
-    <div class="stat">
-      <div class="label">Speed</div>
-      <div class="value" id="speed">&mdash;<span class="unit">x</span></div>
+    <div class="uploadPanel" id="uploadPanel" hidden>
+      <div class="prompt" id="uploadPrompt"></div>
+      <div class="progressTrack" id="progressTrack"><div class="progressFill" id="progressFill"></div></div>
+      <div class="uploadStats" id="uploadStats"></div>
+      <div class="rowButtons" id="uploadButtons"></div>
     </div>
-    <div class="stat">
-      <div class="label">Buffer</div>
-      <div class="value" id="buffer">&mdash;<span class="unit">%</span></div>
-    </div>
-    <div class="stat">
-      <div class="label">Underruns</div>
-      <div class="value" id="underruns">&mdash;</div>
-    </div>
-    <div class="stat">
-      <div class="label">Pitch</div>
-      <div class="value" id="pitch">&mdash;<span class="unit">x</span></div>
-    </div>
-  </div>
 
-  <div>
-    <div class="filesHeader">
-      <div class="eyebrow">Files on card</div>
-      <button class="refreshBtn" id="refreshBtn" disabled>Refresh</button>
+    <div class="recordPanel" id="recordPanel" hidden>
+      <div class="recLive" id="recLive" hidden>
+        <span class="recDot"></span>Recording
+        <span class="recTime" id="recTime">0.0 s</span>
+      </div>
+      <div class="levelTrack" id="levelTrack" hidden><div class="levelFill" id="levelFill"></div></div>
+      <div class="prompt" id="recordPrompt"></div>
+      <div class="rowButtons" id="recordButtons"></div>
     </div>
+
     <ul class="fileList" id="fileList"></ul>
-  </div>
+  </main>
 
-  <details class="log">
-    <summary>Link log</summary>
-    <div class="logToolbar">
-      <button class="copyLogBtn" id="copyLogBtn">Copy log</button>
+  <!-- Info: how playback and the link are doing. -->
+  <main class="tabPanel" id="tab-info" hidden>
+    <div class="readouts">
+      <div class="stat">
+        <div class="label">Buffer</div>
+        <div class="value" id="buffer">&mdash;<span class="unit">%</span></div>
+      </div>
+      <div class="stat">
+        <div class="label">Underruns</div>
+        <div class="value" id="underruns">&mdash;</div>
+      </div>
+      <div class="stat">
+        <div class="label">Playing from</div>
+        <div class="value" id="level">&mdash;</div>
+      </div>
+      <div class="stat">
+        <div class="label">Cache</div>
+        <div class="value" id="cache">&mdash;<span class="unit">%</span></div>
+      </div>
+      <div class="stat">
+        <div class="label">Battery</div>
+        <div class="value" id="battery">&mdash;<span class="unit">%</span></div>
+      </div>
+      <div class="stat">
+        <div class="label">Cell voltage</div>
+        <div class="value" id="batteryVolts">&mdash;<span class="unit">V</span></div>
+      </div>
+      <div class="stat">
+        <div class="label">Drain</div>
+        <div class="value" id="batteryRate">&mdash;<span class="unit">%/h</span></div>
+      </div>
+      <div class="stat">
+        <div class="label">Time left</div>
+        <div class="value" id="batteryLeft">&mdash;</div>
+      </div>
     </div>
-    <div class="logBody" id="logBody">Not connected yet.</div>
-  </details>
+    <div id="logSlotInfo">
+      <details class="logPanel" id="logPanel">
+        <summary>Link log</summary>
+        <div class="logToolbar">
+          <button class="smallBtn copyLogBtn" id="copyLogBtn">Copy log</button>
+        </div>
+        <div class="logBody" id="logBody">Not connected yet.</div>
+      </details>
+    </div>
+    <p class="about">SparkFun Thing Plus RA6M5, over Bluetooth LE through its DA14531MOD's CodeLess link.</p>
+  </main>
 
-  <footer id="footer">
-    Bluetooth LE via the DA14531MOD's CodeLess link. On iOS, open this page in Bluefy or WebBLE - Safari has no Web Bluetooth support.
-  </footer>
+  <div class="notice" id="notice" role="status" hidden></div>
+
+  <nav class="tabBar" id="tabBar" hidden>
+    <button data-tab="tweaks" aria-selected="true">Tweaks</button>
+    <button data-tab="set" aria-selected="false">Set</button>
+    <button data-tab="files" aria-selected="false">Files</button>
+    <button data-tab="info" aria-selected="false">Info</button>
+  </nav>
 </div>
 
 <script>
@@ -417,75 +1069,367 @@
   const DSPS_FLOWCTRL_UUID = "0783b03e-8535-b5a0-7140-a304d2495cb9";  // notify + write: part of the handshake
   const DSPS_RX_UUID       = "0783b03e-8535-b5a0-7140-a304d2495cba";  // write-without-response: phone -> board
 
-  const dot = document.getElementById("dot");
-  const statusText = document.getElementById("statusText");
-  const connectBtn = document.getElementById("connectBtn");
-  const refreshBtn = document.getElementById("refreshBtn");
-  const nowPlaying = document.getElementById("nowPlaying");
-  const speedEl = document.getElementById("speed");
-  const bufferEl = document.getElementById("buffer");
-  const underrunsEl = document.getElementById("underruns");
-  const transportEl = document.getElementById("transport");
-  const pitchEl = document.getElementById("pitch");
-  const fileListEl = document.getElementById("fileList");
-  const logBody = document.getElementById("logBody");
-  const copyLogBtn = document.getElementById("copyLogBtn");
-  const footer = document.getElementById("footer");
+  // Uploads. The board acknowledges every 128 bytes it writes to the card,
+  // and this page never lets more than UPLOAD_WINDOW_BYTES go
+  // unacknowledged: the UART between the Bluetooth module and the RA6M5 has
+  // no hardware flow control and the sketch's receive buffer is 512 bytes,
+  // so anything beyond that would simply be lost. See startUpload() in
+  // SDResampleDemo.ino.
+  //
+  // UPLOAD_PACKET_BYTES is the size of each Bluetooth write, which must fit
+  // in one packet: anything bigger is dropped without an error, and the
+  // upload fails with "timed out waiting for data". This board's module
+  // negotiates an MTU of 65 (measured from a Mac), leaving 62 bytes per
+  // write. If some browser doesn't negotiate at all it gets the BLE minimum
+  // of 23, and uploads need this set to 20 - which works everywhere, just
+  // slower.
+  //
+  // Measured speed is about 1.8KB/s, so a 100KB sample takes about a
+  // minute. That's the rate the Bluetooth stack will send writes at: a
+  // bigger window or bigger packets barely change it (20-byte packets gave
+  // 1.25KB/s, a 1KB window made no difference at all).
+  const UPLOAD_WINDOW_BYTES = 384;
+  const UPLOAD_PACKET_BYTES = 60;
+  const UPLOAD_ACK_TIMEOUT_MS = 8000;
+
+  const $ = (id) => document.getElementById(id);
+  const statusTrack = $("statusTrack");
+  const statusState = $("statusState");
+  const connectBtn = $("connectBtn");
+  const connectScreen = $("connectScreen");
+  const tabBar = $("tabBar");
+  const modeCardsEl = $("modeCards");
+  const resetAllBtns = [...document.querySelectorAll(".resetAllBtn")];  // one above the tweaks, one below
+  const logPanel = $("logPanel");
+  const refreshBtn = $("refreshBtn");
+  const diskBtn = $("diskBtn");
+  const diskPanel = $("diskPanel");
+  const uploadBtn = $("uploadBtn");
+  const recordBtn = $("recordBtn");
+  const recordPanel = $("recordPanel");
+  const recLive = $("recLive");
+  const recTime = $("recTime");
+  const levelTrack = $("levelTrack");
+  const levelFill = $("levelFill");
+  const recordPrompt = $("recordPrompt");
+  const recordButtons = $("recordButtons");
+  const fileInput = $("fileInput");
+  const transportBtn = $("transportBtn");
+  const bufferEl = $("buffer");
+  const underrunsEl = $("underruns");
+  const levelEl = $("level");
+  const cacheEl = $("cache");
+  const batteryEl = $("battery");
+  const batteryVoltsEl = $("batteryVolts");
+  const batteryRateEl = $("batteryRate");
+  const batteryLeftEl = $("batteryLeft");
+  const fileListEl = $("fileList");
+  const setSelect = $("setSelect");
+  const filesSetSelect = $("filesSetSelect");
+  const setNowEl = $("setNow");
+  const setNowLabel = $("setNowLabel");
+  const setNowTime = $("setNowTime");
+  const setNowName = $("setNowName");
+  const setPrevBtn = $("setPrevBtn");
+  const setPlayBtn = $("setPlayBtn");
+  const setNextBtn = $("setNextBtn");
+  const gapInput = $("gapInput");
+  const prepBtn = $("prepBtn");
+  const prepStatus = $("prepStatus");
+  const setListEl = $("setList");
+  const noticeEl = $("notice");
+  const uploadPanel = $("uploadPanel");
+  const uploadPrompt = $("uploadPrompt");
+  const progressTrack = $("progressTrack");
+  const progressFill = $("progressFill");
+  const uploadStats = $("uploadStats");
+  const uploadButtons = $("uploadButtons");
+  const logBody = $("logBody");
+  const copyLogBtn = $("copyLogBtn");
+  const browserNote = $("browserNote");
+  const openInApp = $("openInApp");
+
+  // Safari and Chrome on iOS have no Web Bluetooth; only third-party
+  // browser apps like Bluefy and WebBLE do. Without it, Connect can't work.
+  const HAS_BLUETOOTH = !!navigator.bluetooth;
+
+  // The log is also kept in sessionStorage, which survives a reload of the
+  // same tab. On iOS a browser that crashes the page reloads it with no
+  // error shown, which would otherwise wipe the only record of what went
+  // wrong. Storage can be unavailable (private browsing), hence the try.
+  //
+  // logText is the whole log in the order it happened, which is what gets
+  // stored and copied. The page shows it newest line first, and only the
+  // last LOG_SHOW_LINES of it, so the latest is always at the top of the
+  // info tab without a scrolling box of its own.
+  const LOG_KEY = "wav-remote-log";
+  const LOG_KEEP_CHARS = 20000;
+  const LOG_SHOW_LINES = 150;
+  let logText = "Not connected yet.";
+
+  function showLog() {
+    logBody.textContent = logText.split("\n").slice(-LOG_SHOW_LINES).reverse().join("\n");
+  }
 
   function log(line) {
     const stamp = new Date().toLocaleTimeString();
-    logBody.textContent += `\n[${stamp}] ${line}`;
-    logBody.scrollTop = logBody.scrollHeight;
+    logText = (logText + `\n[${stamp}] ${line}`).slice(-LOG_KEEP_CHARS);
+    showLog();
+    try {
+      sessionStorage.setItem(LOG_KEY, logText);
+    } catch (err) {
+      // not kept - fine
+    }
+  }
+
+  try {
+    const previous = sessionStorage.getItem(LOG_KEY);
+    if (previous) logText = previous + "\n--- page reloaded ---";
+  } catch (err) {
+    // nothing to restore
+  }
+  showLog();
+
+  // Results of card operations, and errors, shown where they can be seen
+  // whichever tab is up - the link log is on the info tab.
+  let noticeTimer = null;
+  function notice(text, bad = false) {
+    noticeEl.textContent = text;
+    noticeEl.classList.toggle("bad", bad);
+    noticeEl.hidden = false;
+    clearTimeout(noticeTimer);
+    noticeTimer = setTimeout(() => { noticeEl.hidden = true; }, bad ? 8000 : 4000);
   }
 
   let device = null;
   let dspsRxChar = null;
   let dspsBuffer = "";  // accumulates raw DSPS TX bytes until a newline
-  let currentFile = null;
+  let heardFromBoard = false;  // any line at all on DSPS TX since the last openLink()
+  let regranting = false;      // hanging up on purpose mid-handshake - see establishLink()
+  let connected = false;
+  let currentFile = null;  // a path: <set>/<name>, or just <name> for the card's root
+  let latched = false;
+  let fileNames = [];      // the names in viewSet, in the board's order
 
-  function setConnected(connected) {
-    dot.classList.toggle("connected", connected);
-    statusText.textContent = connected ? "Connected" : "Disconnected";
-    connectBtn.hidden = connected;
-    refreshBtn.disabled = !connected;
-    if (!connected) {
-      nowPlaying.textContent = "—";
-      transportEl.textContent = "—";
-      pitchEl.innerHTML = "&mdash;<span class=\"unit\">x</span>";
-      transportEl.classList.remove("running");
-      speedEl.innerHTML = "&mdash;<span class=\"unit\">x</span>";
-      speedEl.classList.remove("potential");
+  // The card's sets - see WavList.h in the sketch. A set is named as the
+  // board names it: its folder, or "/" for the WAVs at the card's root.
+  // Each has its gap between tracks, in seconds.
+  let sets = [];           // [{ name, gap }], in the board's order
+  let viewSet = null;      // the set both tabs are showing
+  const setOfPath = (path) => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "/");
+  const leafOfPath = (path) => path.slice(path.lastIndexOf("/") + 1);
+  const pathIn = (set, name) => (!set || set === "/" ? name : `${set}/${name}`);
+  const setLabel = (set) => (set === "/" ? "Card root" : set);
+
+  // From the stats line: whether a set is playing through, the seconds left
+  // in its gap (null when not in one), how far preparing a set has got
+  // ([done, total], or null), and where the cursor is in the window.
+  let setlistOn = false;
+  let looping = false;   // latched by hand in the setlist: loops until stopped, then the gap
+  let gapLeft = null;
+  let prepProgress = null;
+  let playhead = null;     // { cur, ws, we, spd } in seconds, and the speed
+
+  // The upload in progress, if any - see runUpload(). While it is set the
+  // board is reading raw file data rather than commands, so every other
+  // command is held back (see sendCommand()).
+  let upload = null;
+  // True while the card is a USB disk on a computer (DISKMODE:ON from the board),
+  // when nothing that touches the card or playback can work.
+  let diskMode = false;
+
+  // Which row, if any, is showing its rename box or delete confirmation:
+  // { name, kind: "rename" | "delete" }.
+  let rowMode = null;
+
+  const sameName = (a, b) => a != null && b != null && a.toLowerCase() === b.toLowerCase();
+
+  // Where the link has got to, for the status line:
+  // "disconnected" | "connecting" | "reading" (connected, file list not in
+  // yet) | "ready".
+  let linkState = "disconnected";
+  let running = false;  // the transport, from the stats line's RUN:
+
+  // The status line: what the link is doing until there are tracks to show,
+  // then the cued track and whether it's playing.
+  function renderStatus() {
+    const showTrack = linkState === "ready" && currentFile;
+    statusTrack.hidden = !showTrack;
+    statusTrack.textContent = showTrack ? leafOfPath(currentFile) : "";
+    statusState.classList.toggle("playing", !!showTrack && running);
+    if (showTrack) statusState.textContent = running ? ": playing" : ": stopped";
+    else if (linkState === "ready") statusState.textContent = "no track";
+    else if (linkState === "reading") statusState.textContent = "reading tracks";
+    else statusState.textContent = linkState;  // "disconnected" or "connecting"
+  }
+
+  function setLinkState(state) {
+    linkState = state;
+    connectBtn.disabled = !HAS_BLUETOOTH || state === "connecting";
+    connectBtn.textContent = !HAS_BLUETOOTH ? "No Bluetooth"
+      : state === "connecting" ? "Connecting…" : "Connect";
+    renderStatus();
+  }
+
+  // -- tabs -----------------------------------------------------------------
+  //
+  // Four tabs, one showing at a time, each scrolling by itself. Which one
+  // was up is remembered for next time (localStorage can be unavailable in
+  // private browsing, hence the try).
+  const TAB_KEY = "wav-remote-tab";
+  const TABS = ["tweaks", "set", "files", "info"];
+  let currentTab = "tweaks";
+  try {
+    const saved = localStorage.getItem(TAB_KEY);
+    if (TABS.includes(saved)) currentTab = saved;
+  } catch (err) {
+    // starts on tweaks
+  }
+
+  function showTab(name) {
+    currentTab = name;
+    for (const tab of TABS) $("tab-" + tab).hidden = !connected || tab !== name;
+    for (const btn of tabBar.querySelectorAll("button")) {
+      btn.setAttribute("aria-selected", String(btn.dataset.tab === name));
+    }
+    try {
+      localStorage.setItem(TAB_KEY, name);
+    } catch (err) {
+      // not remembered - fine
+    }
+  }
+
+  for (const btn of tabBar.querySelectorAll("button")) {
+    btn.addEventListener("click", () => showTab(btn.dataset.tab));
+  }
+
+  // Enables and disables everything that talks to the board, in one place.
+  function updateControls() {
+    const ready = connected && !upload && !diskMode;
+    refreshBtn.disabled = !ready;
+    diskBtn.disabled = !ready;
+    uploadBtn.disabled = !ready;
+    // Not while a take is being recorded - a disabled button stops getting
+    // the pointer events that end the recording.
+    if (!recording) recordBtn.disabled = !ready;
+    for (const btn of resetAllBtns) btn.disabled = !ready;
+    transportBtn.disabled = !ready || (!latched && !currentFile);
+    transportBtn.innerHTML = latched ? ICONS.stop : ICONS.play;
+    transportBtn.setAttribute("aria-label", latched ? "Stop" : "Play");
+    updateFilePlayButtons();
+    for (const btn of fileListEl.querySelectorAll("button")) btn.disabled = !ready;
+    for (const select of [setSelect, filesSetSelect]) select.disabled = !ready;
+    updateSetControls();
+    updateTweakControls(ready);
+  }
+
+  function setConnected(isConnected) {
+    connected = isConnected;
+    // Connected, the page is the tabs; otherwise it's the connect screen,
+    // which borrows the link log so a failed connection can be read.
+    connectScreen.hidden = isConnected;
+    tabBar.hidden = !isConnected;
+    transportBtn.hidden = !isConnected;
+    $(isConnected ? "logSlotInfo" : "logSlotConnect").appendChild(logPanel);
+    showTab(currentTab);
+    setLinkState(isConnected ? "reading" : "disconnected");
+    if (!isConnected) {
       bufferEl.innerHTML = "&mdash;<span class=\"unit\">%</span>";
       underrunsEl.textContent = "—";
       underrunsEl.classList.remove("bad");
+      levelEl.textContent = "—";
+      cacheEl.innerHTML = "&mdash;<span class=\"unit\">%</span>";
+      showBattery({});
       fileListEl.textContent = "";
+      fileNames = [];
+      sets = [];
+      viewSet = null;
+      setlistOn = false;
+      gapLeft = null;
+      prepProgress = null;
+      playhead = null;
+      renderSetPickers();
+      renderSetList();
+      rowMode = null;
       currentFile = null;
+      latched = false;
+      running = false;
+      forgetTweaks();
+      if (upload) upload.error = "disconnected";
+      wakeWaiters();
+    }
+    updateControls();
+  }
+
+  // -- waiting for replies -----------------------------------------------
+  //
+  // An upload is a conversation: send PUT:, wait for READY:, send data, wait
+  // for ACK:s, wait for SAVED:. waitUntil() resolves once a condition on the
+  // page's state holds, re-checking it after every line from the board, so
+  // the order in which a reply and the wait arrive can never lose a reply.
+
+  const waiters = new Set();
+
+  function waitUntil(condition, timeoutMs) {
+    return new Promise((resolve, reject) => {
+      const waiter = { condition, resolve };
+      waiter.timer = setTimeout(() => {
+        waiters.delete(waiter);
+        reject(new Error("the board stopped answering"));
+      }, timeoutMs);
+      waiters.add(waiter);
+      wakeWaiters();
+    });
+  }
+
+  function wakeWaiters() {
+    for (const waiter of [...waiters]) {
+      if (waiter.condition()) {
+        clearTimeout(waiter.timer);
+        waiters.delete(waiter);
+        waiter.resolve();
+      }
     }
   }
+
+  // -- file list ------------------------------------------------------------
 
   // File list arrives as a block: "FILES:BEGIN", one filename per line,
   // "FILES:END" - not a single line, so it's handled outside
   // handleTelemetry()'s one-line-at-a-time key:value parsing.
   let collectingFiles = false;
   let fileListBuffer = [];
+  let collectingSets = false;
+  let setsBuffer = [];
 
-  // The board doesn't always cleanly complete its side of the Binary
-  // mode handshake on every connection - confirmed live that the
-  // module can simply fail to relay a fresh +CONNECTED/+BINREQ pair to
-  // it on some reconnects, for reasons outside this page's or the
-  // sketch's control. When that happens, this page is genuinely
-  // connected at the Bluetooth layer, but the board can never dispatch
-  // LIST, so no response ever comes - not a slow response, no response
-  // at all. Retry a couple of times with a timeout rather than hanging
-  // silently forever.
+  // A safety net. establishLink() only reports a connection once the board
+  // has been heard from through the pipe, so LIST should always be
+  // answered - but if it isn't, retry a couple of times, then reconnect,
+  // rather than hanging silently forever.
   let listRetryTimer = null;
+  let listShortRetries = 0;  // lists that came through short, asked for again in a row
   let listRetryCount = 0;
   const LIST_RETRY_TIMEOUT_MS = 1500;  // a working board answers near-instantly
   const LIST_MAX_RETRIES = 2;
 
+  // LIST brings the sets, and the tracks of the set the board's file is in;
+  // LIST:<set> the sets and that set's tracks - see startFileList() in the
+  // sketch. Refresh asks again for whichever set is in view.
   function requestFileList() {
+    if (upload) return;  // the board is taking file data, not commands
     listRetryCount = 0;
     sendListWithRetry();
+  }
+
+  function requestSet(set) {
+    if (upload) return;
+    viewSet = set;
+    fileNames = [];
+    rowMode = null;
+    if (!prepProgress) prepStatus.textContent = "";
+    renderFileList();
+    renderSetPickers();
+    sendCommand("LIST:" + set);
   }
 
   function sendListWithRetry() {
@@ -503,88 +1447,1474 @@
     }, LIST_RETRY_TIMEOUT_MS);
   }
 
-  function renderFileList(names) {
+  // Small inline icons, so rows stay compact on a phone without an icon font.
+  const ICONS = {
+    play: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4.5v15l13-7.5z"/></svg>',
+    stop: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 6h12v12H6z"/></svg>',
+    rename: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></svg>',
+    delete: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>',
+  };
+
+  function makeButton(className, label, onClick, html) {
+    const btn = document.createElement("button");
+    btn.className = className;
+    if (html) {
+      btn.innerHTML = html;
+      btn.setAttribute("aria-label", label);
+      btn.title = label;
+    } else {
+      btn.textContent = label;
+    }
+    btn.addEventListener("click", onClick);
+    return btn;
+  }
+
+  function renderFileList() {
     fileListEl.textContent = "";
-    for (const name of names) {
+    let renameInput = null;
+    for (const name of fileNames) {
       const li = document.createElement("li");
-      li.className = "fileItem" + (name === currentFile ? " playing" : "");
-      li.textContent = name;
-      li.addEventListener("click", () => sendCommand("PLAY:" + name));
+      li.className = "fileItem";
+      li.dataset.name = name;
+      const mode = rowMode && sameName(rowMode.name, name) ? rowMode.kind : null;
+
+      if (mode === "rename") {
+        renameInput = renderRenameRow(li, name);
+      } else if (mode === "delete") {
+        li.classList.add("confirming");
+        const prompt = document.createElement("div");
+        prompt.className = "prompt";
+        prompt.append("Delete ", Object.assign(document.createElement("code"), { textContent: name }), " from the card?");
+        const buttons = document.createElement("div");
+        buttons.className = "rowButtons";
+        buttons.append(
+          makeButton("smallBtn", "Cancel", () => setRowMode(null)),
+          makeButton("smallBtn danger", "Delete", () => {
+            setRowMode(null);
+            sendCommand("DEL:" + pathIn(viewSet, name));
+          })
+        );
+        li.append(prompt, buttons);
+      } else {
+        const path = pathIn(viewSet, name);
+        li.classList.toggle("playing", sameName(path, currentFile));
+        li.append(
+          makeButton("fileName", name, () => sendCommand("PLAY:" + path)),
+          makeButton("iconBtn play", `Play and latch ${name}`, () => {
+            // On the file that's playing, this is the stop button.
+            sendCommand(latched && sameName(path, currentFile) ? "STOP" : "LATCH:" + path);
+          }, ICONS.play),
+          makeButton("iconBtn", `Rename ${name}`, () => setRowMode({ name, kind: "rename" }), ICONS.rename),
+          makeButton("iconBtn", `Delete ${name}`, () => setRowMode({ name, kind: "delete" }), ICONS.delete)
+        );
+      }
       fileListEl.appendChild(li);
+    }
+    renderSetList();
+    updateControls();
+
+    // Focus the rename box once it is in the page, selecting the name but
+    // not the extension, so typing replaces just that.
+    if (renameInput) {
+      renameInput.focus();
+      const dotAt = renameInput.value.lastIndexOf(".");
+      renameInput.setSelectionRange(0, dotAt > 0 ? dotAt : renameInput.value.length);
     }
   }
 
-  function setNowPlaying(name) {
-    currentFile = name === "NONE" ? null : name;
-    nowPlaying.textContent = currentFile || "—";
+  // Each row's play button - except on the file that's latched playing,
+  // where it's a stop button, the same one as on the status line.
+  function updateFilePlayButtons() {
     for (const li of fileListEl.children) {
-      li.classList.toggle("playing", li.textContent === currentFile);
+      const btn = li.querySelector(".iconBtn.play");
+      if (!btn) continue;
+      const name = li.dataset.name;
+      const stops = latched && sameName(pathIn(viewSet, name), currentFile);
+      if (btn.dataset.stops === String(stops)) continue;
+      btn.dataset.stops = String(stops);
+      btn.innerHTML = stops ? ICONS.stop : ICONS.play;
+      btn.setAttribute("aria-label", stops ? `Stop ${name}` : `Play and latch ${name}`);
+      btn.title = btn.getAttribute("aria-label");
     }
+  }
+
+  function renderRenameRow(li, name) {
+    li.classList.add("editing");
+    const input = document.createElement("input");
+    input.className = "renameInput";
+    input.value = name;
+    input.setAttribute("aria-label", `New name for ${name}`);
+    input.autocapitalize = "off";
+    input.autocomplete = "off";
+    input.spellcheck = false;
+
+    const save = () => {
+      const newName = cleanWavName(input.value);
+      if (!newName) {
+        notice("Enter a name.", true);
+        return;
+      }
+      setRowMode(null);
+      if (newName === name) return;
+      if (!sameName(newName, name) && fileNames.some((n) => sameName(n, newName))) {
+        notice(`${newName} is already on the card.`, true);
+        return;
+      }
+      sendCommand(`REN:${pathIn(viewSet, name)}|${pathIn(viewSet, newName)}`);
+    };
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") save();
+      if (e.key === "Escape") setRowMode(null);
+    });
+
+    const buttons = document.createElement("div");
+    buttons.className = "rowButtons";
+    buttons.append(
+      makeButton("smallBtn", "Cancel", () => setRowMode(null)),
+      makeButton("smallBtn primary", "Save", save)
+    );
+    li.append(input, buttons);
+    return input;
+  }
+
+  function setRowMode(mode) {
+    rowMode = mode;
+    renderFileList();
+  }
+
+  // Makes a name the board will accept: the characters FAT forbids become
+  // "_", and it must end in .wav - the board only lists .wav files, so a
+  // file saved under any other name would vanish from this page. Mirrors
+  // isValidWavName() in the sketch. A name within a set - the set is added
+  // separately.
+  function cleanWavName(raw) {
+    let name = raw.trim().replace(/[\/\\:*?"<>|\x00-\x1f]/g, "_");
+    if (!name || name === ".wav") return "";
+    if (!/\.wav$/i.test(name)) name += ".wav";
+    if (name.length > 200) name = name.slice(0, 196) + name.slice(-4);
+    return name;
+  }
+
+  // PLAYING:<path>. A file in another set than the last one brings that set
+  // into view - the board moved there, so the page follows.
+  function setNowPlaying(path) {
+    const previous = currentFile;
+    currentFile = path === "NONE" ? null : path;
+    renderStatus();
+    if (currentFile && viewSet !== null &&
+        (!previous || setOfPath(previous) !== setOfPath(currentFile)) &&
+        setOfPath(currentFile) !== viewSet) {
+      requestSet(setOfPath(currentFile));
+    }
+    for (const li of fileListEl.children) {
+      li.classList.toggle("playing", !rowMode && sameName(pathIn(viewSet, li.dataset.name), currentFile));
+    }
+    renderSetList();
+    updateControls();
+  }
+
+  // rest is "<filename>:<reason>" - only the first colon in it is ours
+  // to split on, the reason itself is free text and isn't parsed further.
+  function splitError(rest) {
+    const sep = rest.indexOf(":");
+    return sep === -1 ? [rest, ""] : [rest.slice(0, sep), rest.slice(sep + 1)];
   }
 
   function showError(rest) {
-    // rest is "<filename>:<reason>" - only the first colon in it is ours
-    // to split on, the reason itself is free text and isn't parsed further.
-    const sep = rest.indexOf(":");
-    const filename = sep === -1 ? rest : rest.slice(0, sep);
-    const reason = sep === -1 ? "" : rest.slice(sep + 1);
+    const [filename, reason] = splitError(rest);
     log(`! ${filename}: ${reason}`);
+    if (upload && sameName(filename, upload.name)) {
+      upload.error = reason;  // runUpload() reports it
+    } else {
+      notice(`${filename}: ${reason}`, true);
+    }
   }
 
+  // -- sets ---------------------------------------------------------------
+  //
+  // The set tab plays one of the card's sets through, for performing: each
+  // track once, then the set's gap, then the next - see "Sets" in the
+  // sketch. It and the files tab share the set in view.
+
+  const SET_ICONS = {
+    prev: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 5h2v14H6zM20 5v14L9 12z"/></svg>',
+    next: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16 5h2v14h-2zM4 5v14l11-7z"/></svg>',
+  };
+  setPrevBtn.innerHTML = SET_ICONS.prev + "Prev";
+  setNextBtn.innerHTML = "Next" + SET_ICONS.next;
+
+  function renderSetPickers() {
+    for (const select of [setSelect, filesSetSelect]) {
+      select.textContent = "";
+      const names = sets.map((set) => set.name);
+      // The set in view, even before the list of sets is in.
+      if (viewSet !== null && !names.includes(viewSet)) names.push(viewSet);
+      for (const name of names) {
+        select.append(new Option(setLabel(name), name, false, name === viewSet));
+      }
+    }
+    renderGap();
+  }
+
+  // The gap shown is the set in view's - unless it's being typed into.
+  function renderGap() {
+    if (document.activeElement === gapInput) return;
+    const set = sets.find((x) => x.name === viewSet);
+    gapInput.value = set ? String(set.gap) : "";
+  }
+
+  function onSetPicked(event) {
+    const set = event.target.value;
+    if (set !== viewSet) requestSet(set);
+  }
+
+  function onGapChanged() {
+    if (gapInput.value.trim() === "") return;  // still being typed
+    const seconds = Number(gapInput.value);
+    const set = sets.find((x) => x.name === viewSet);
+    if (!set || !Number.isFinite(seconds) || seconds < 0) {
+      renderGap();
+      return;
+    }
+    const gap = Math.min(600, seconds);
+    set.gap = gap;
+    // Once the tapping stops: each GAP: is a write to the board's card. The
+    // board's stats line goes on reporting the old gap meanwhile, and for a
+    // moment after - it's not let back over this one until then.
+    clearTimeout(gapSendTimer);
+    const name = viewSet;
+    gapSendTimer = setTimeout(() => sendCommand(`GAP:${name}|${gap}`), GAP_SEND_DELAY_MS);
+    gapTypedUntil = performance.now() + GAP_SEND_DELAY_MS + GAP_ECHO_MS;
+  }
+  const GAP_SEND_DELAY_MS = 700;
+  const GAP_ECHO_MS = 2000;  // for the board to save it and say so
+  let gapSendTimer = null;
+  let gapTypedUntil = 0;  // performance.now() until which the board's GAP: is ignored
+
+  // Where the playing track is in the set in view: 0-based, or -1.
+  function currentTrackIndex() {
+    if (!currentFile || viewSet === null || setOfPath(currentFile) !== viewSet) return -1;
+    return fileNames.findIndex((n) => sameName(n, leafOfPath(currentFile)));
+  }
+
+  function renderSetList() {
+    setListEl.textContent = "";
+    const playingAt = currentTrackIndex();
+    fileNames.forEach((name, i) => {
+      const li = document.createElement("li");
+      li.className = "fileItem";
+      li.classList.toggle("playing", i === playingAt);
+      const number = document.createElement("span");
+      number.className = "trackNumber";
+      number.textContent = String(i + 1);
+      li.append(number, makeButton("fileName", name, () => sendCommand("SETPLAY:" + pathIn(viewSet, name))));
+      setListEl.appendChild(li);
+    });
+    renderSetNow();
+  }
+
+  function formatTime(seconds) {
+    const whole = Math.max(0, Math.ceil(seconds));
+    return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
+  }
+
+  // The panel at the top: what the setlist and the deck are doing, the
+  // track, and its time - the time left at the speed it's playing, or the gap
+  // counting down.
+  function renderSetNow() {
+    const at = currentTrackIndex();
+    const position = at >= 0 ? `Track ${at + 1} of ${fileNames.length}` : "";
+    const inGap = setlistOn && gapLeft !== null;
+    setNowEl.classList.toggle("playing", setlistOn && running && !inGap);
+    setNowEl.classList.toggle("gap", inGap);
+    if (inGap) {
+      const next = at >= 0 ? fileNames[at + 1] : null;
+      setNowLabel.textContent = next ? `Setlist counting down · then track ${at + 2}` : "Setlist counting down · then the end";
+      setNowName.textContent = next || (currentFile ? leafOfPath(currentFile) : "");
+      setNowTime.textContent = gapLeft.toFixed(1);
+      return;
+    }
+    if (setlistOn) {
+      // Not counting down means you have the deck: it's playing, or a pad or
+      // scrub is in use, so the setlist stands by.
+      const deck = looping ? "Deck looping" : running ? "Deck playing" : "Setlist standing by";
+      setNowLabel.textContent = [position, deck].filter(Boolean).join(" · ");
+    } else {
+      setNowLabel.textContent = currentFile ? "Setlist off · track cued" : "Setlist off";
+    }
+    setNowName.textContent = currentFile ? leafOfPath(currentFile) : "";
+    // Time left: what's between the cursor and the window's far edge, at the
+    // speed it's going.
+    let time = "";
+    if (looping) {
+      time = "";  // it loops - there's no end to count to
+    } else if (playhead && running && Math.abs(playhead.spd) > 0.001) {
+      const ahead = playhead.spd > 0 ? playhead.we - playhead.cur : playhead.cur - playhead.ws;
+      time = formatTime(ahead / Math.abs(playhead.spd));
+    } else if (playhead) {
+      time = formatTime(playhead.we - playhead.ws);
+    }
+    setNowTime.textContent = time;
+  }
+
+  // SET:, GAP:, GL:, PREP: and CUR: from the stats line - see the sketch's
+  // header comment.
+  function setFromBoard(parts) {
+    setlistOn = parts.SET === "1";
+    looping = parts.HLD === "1";
+    gapLeft = parts.GL !== undefined ? Number(parts.GL) : null;
+    if (parts.GAP !== undefined && currentFile && performance.now() >= gapTypedUntil) {
+      const set = sets.find((x) => x.name === setOfPath(currentFile));
+      if (set) set.gap = Number(parts.GAP);
+      renderGap();
+    }
+    if (parts.PREP !== undefined) {
+      const [done, total] = parts.PREP.split("/").map(Number);
+      prepProgress = [done, total];
+      prepStatus.textContent = `Preparing ${Math.max(1, done)} of ${total}…`;
+    } else if (prepProgress) {
+      prepProgress = null;
+      prepStatus.textContent = "Set prepared.";
+    }
+    playhead = parts.CUR === undefined ? null : {
+      cur: Number(parts.CUR), ws: Number(parts.WS), we: Number(parts.WE), spd: Number(parts.SPD),
+    };
+    renderSetNow();
+    updateSetControls();
+  }
+
+  function updateSetControls() {
+    const ready = connected && !upload && !diskMode;
+    const hasTracks = fileNames.length > 0;
+    setPlayBtn.disabled = !ready || (!setlistOn && !hasTracks);
+    setPlayBtn.classList.toggle("stops", setlistOn);
+    setPlayBtn.innerHTML = setlistOn ? ICONS.stop + "Stop setlist" : ICONS.play + "Start setlist";
+    setPrevBtn.disabled = !ready || !currentFile;
+    setNextBtn.disabled = !ready || !currentFile;
+    gapInput.disabled = !ready || viewSet === null;
+    prepBtn.disabled = !ready || !hasTracks || !!prepProgress;
+    for (const btn of setListEl.querySelectorAll("button")) btn.disabled = !ready;
+  }
+
+  // Start setlist: from the cued track, if it's in the set in view, otherwise from
+  // the top.
+  function onSetPlay() {
+    if (setlistOn) {
+      sendCommand("SETSTOP");
+      return;
+    }
+    const at = currentTrackIndex();
+    const name = fileNames[at >= 0 ? at : 0];
+    if (name) sendCommand("SETPLAY:" + pathIn(viewSet, name));
+  }
+
+  // -- upload -------------------------------------------------------------
+
+  function showUploadPanel({ prompt, progress, stats, buttons }) {
+    uploadPanel.hidden = false;
+    uploadPrompt.textContent = "";
+    uploadPrompt.append(...prompt);
+    progressTrack.hidden = progress == null;
+    progressFill.style.width = `${(progress || 0) * 100}%`;
+    uploadStats.textContent = stats || "";
+    uploadStats.hidden = !stats;
+    uploadButtons.textContent = "";
+    uploadButtons.append(...buttons);
+  }
+
+  function hideUploadPanel() {
+    uploadPanel.hidden = true;
+  }
+
+  const code = (text) => Object.assign(document.createElement("code"), { textContent: text });
+
+  function onFilePicked() {
+    const file = fileInput.files[0];
+    fileInput.value = "";  // so picking the same file again still fires
+    if (!file) return;
+    log(`Picked ${file.name} (${file.size} bytes).`);
+    const name = cleanWavName(file.name);
+    if (!name) {
+      notice("That file has no usable name.", true);
+      return;
+    }
+
+    const existing = fileNames.find((n) => sameName(n, name));
+    if (existing) {
+      showUploadPanel({
+        prompt: [code(existing), " is already in this set. Replace it?"],
+        buttons: [
+          makeButton("smallBtn", "Cancel", hideUploadPanel),
+          makeButton("smallBtn danger", "Replace", () => runUpload(file, pathIn(viewSet, existing))),
+        ],
+      });
+    } else {
+      runUpload(file, pathIn(viewSet, name));
+    }
+  }
+
+  function formatKB(bytes) {
+    return (bytes / 1024).toFixed(1);
+  }
+
+  function updateUploadProgress() {
+    const { name, size, acked, started } = upload;
+    const seconds = (performance.now() - started) / 1000;
+    const rate = seconds > 0.5 ? acked / seconds : 0;
+    const left = rate > 0 ? Math.ceil((size - acked) / rate) : null;
+    const eta = left == null ? "" : ` · ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")} left`;
+    showUploadPanel({
+      prompt: [upload.cancelled ? "Cancelling " : "Uploading ", code(name)],
+      progress: acked / size,
+      stats: `${formatKB(acked)} / ${formatKB(size)} KB` + (rate ? ` · ${formatKB(rate)} KB/s` : "") + eta,
+      buttons: [upload.cancelButton],
+    });
+  }
+
+  // Reads the file a few KB at a time as the upload reaches each part,
+  // rather than all of it up front. An iOS browser that runs out of memory
+  // doesn't report an error - it just reloads the page - and a sample can
+  // easily be tens of MB.
+  const READ_CHUNK_BYTES = 4096;
+
+  function fileReader(file) {
+    let chunk = null;
+    let chunkStart = 0;
+    return async (offset, n) => {
+      if (!chunk || offset < chunkStart || offset + n > chunkStart + chunk.length) {
+        chunkStart = offset;
+        chunk = new Uint8Array(await file.slice(offset, offset + READ_CHUNK_BYTES).arrayBuffer());
+      }
+      return chunk.subarray(offset - chunkStart, offset - chunkStart + n);
+    };
+  }
+
+  // A write that never settles would otherwise hang the upload forever with
+  // nothing on screen to say why.
+  function withTimeout(promise, ms, what) {
+    let timer;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${what} never completed`)), ms);
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+  }
+
+  // file can be any Blob - a picked File, or a recording (see saveTake()).
+  // Returns whether the board saved it.
+  async function runUpload(file, name) {
+    const size = file.size;
+    const readBytes = fileReader(file);
+    if (size === 0) {
+      hideUploadPanel();
+      notice("That file is empty.", true);
+      return false;
+    }
+
+    clearTimeout(listRetryTimer);
+    rowMode = null;
+    upload = {
+      name,
+      size,
+      sent: 0,
+      acked: 0,
+      ready: false,
+      saved: false,
+      error: null,
+      cancelled: false,
+      started: performance.now(),
+    };
+    upload.cancelButton = makeButton("smallBtn", "Cancel", () => {
+      upload.cancelled = true;
+      upload.cancelButton.disabled = true;
+      updateUploadProgress();
+    });
+    renderFileList();
+    updateUploadProgress();
+    log(`Uploading ${name} (${size} bytes)...`);
+
+    const u = upload;
+    let result;
+    try {
+      await withTimeout(sendCommand(`PUT:${size}:${name}`, true), 5000, "sending PUT");
+      await waitUntil(() => u.ready || u.error, 3000);
+      if (u.error) throw new Error(u.error);
+      log("Board is ready - sending data.");
+      u.started = performance.now();  // time the data, not the handshake
+
+      // Keep the window full: send while there's room, otherwise wait for
+      // the board to acknowledge what it has written so far.
+      while (u.sent < u.size && !u.cancelled) {
+        if (u.error) throw new Error(u.error);
+        const room = UPLOAD_WINDOW_BYTES - (u.sent - u.acked);
+        if (room <= 0) {
+          const ackedBefore = u.acked;
+          await waitUntil(() => u.acked > ackedBefore || u.error || u.cancelled, UPLOAD_ACK_TIMEOUT_MS);
+          continue;
+        }
+        const n = Math.min(UPLOAD_PACKET_BYTES, room, u.size - u.sent);
+        const bytes = await readBytes(u.sent, n);
+        await withTimeout(writeToBoard(bytes), 5000, `the Bluetooth write at byte ${u.sent}`);
+        if (u.sent === 0) log(`First data packet sent (${n} bytes).`);
+        u.sent += n;
+      }
+
+      if (u.cancelled) {
+        // The board can't be told to stop mid-stream - anything sent now
+        // would be taken as file data. Going quiet is the signal: it gives
+        // up after a few seconds without data, and deletes the partial copy.
+        await waitUntil(() => u.error, 8000);
+        result = { text: `Upload of ${name} cancelled - nothing on the card was changed.`, bad: false };
+      } else {
+        await waitUntil(() => u.saved || u.error, UPLOAD_ACK_TIMEOUT_MS);
+        if (u.error) throw new Error(u.error);
+        result = { text: `Saved ${name} (${formatKB(u.size)} KB).`, bad: false };
+      }
+    } catch (err) {
+      result = { text: `Upload of ${name} failed: ${err.message}`, bad: true };
+    }
+
+    log(result.text);
+    upload = null;
+    hideUploadPanel();
+    notice(result.text, result.bad);
+    if (connected) requestFileList(); else updateControls();
+    return u.saved;
+  }
+
+  // -- recording (phones and tablets) ---------------------------------------
+  //
+  // On a phone, the files worth uploading are mostly sounds you haven't
+  // recorded yet, so the Upload button becomes Hold to record. Press to
+  // start, release to stop, then listen back and save or discard.
+  //
+  // Recordings are 16kHz mono. Every byte crosses the ~1.8KB/s Bluetooth
+  // upload (see UPLOAD_PACKET_BYTES), so the sample rate is a direct trade
+  // against waiting: at the phone's own 48kHz one second of audio would take
+  // about 53 seconds to send, at 16kHz about 18. Still fine for voice and
+  // drum hits, and the sketch's resampler plays any rate. For the same
+  // reason takes are capped at RECORD_MAX_SECONDS.
+  //
+  // Phone browsers only record compressed audio (AAC or Opus) through
+  // MediaRecorder, and the sketch plays only 16-bit PCM WAV. So this takes
+  // the raw samples through Web Audio instead and writes the WAV itself.
+
+  const RECORD_SAMPLE_RATE = 16000;
+  const RECORD_MAX_SECONDS = 10;
+  const UPLOAD_BYTES_PER_SECOND = 1800;  // measured - only used for the time estimate
+
+  // "A phone or tablet whose browser lets the page use the mic": a
+  // touchscreen as the main pointer, rather than guessing from browser names.
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  const CAN_RECORD = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && AudioCtx) &&
+    matchMedia("(pointer: coarse)").matches;
+
+  let mic = null;         // { ctx, stream, processor } while the mic is open
+  let recording = null;   // the take in progress: { chunks, samples, rate, started }
+  let holding = false;    // finger is down on the record button
+  let micOpening = false; // a press is waiting for the mic to open
+  let take = null;        // the finished take: { wav, seconds }
+  let takeAudio = null;   // the <audio> element playing the take back, if it is
+
+  // The mic is open only while the button is held. Leaving it open between
+  // takes would be quicker, but while any page has the mic, iOS keeps audio
+  // in its record-and-play mode, and in Bluefy that sends all playback to
+  // the earpiece instead of the speaker - confirmed on an iPhone, where
+  // takes played back inaudibly quietly. So each press opens the mic and
+  // each release closes it, audio context and all. The price is a fraction
+  // of a second at the start of each take while the mic opens.
+  //
+  // The ScriptProcessorNode is deprecated in favour of AudioWorklet, but it
+  // works in every browser this page runs in and needs no separate module
+  // file; it only copies samples out.
+  async function openMic(ctx) {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+    });
+    const source = ctx.createMediaStreamSource(stream);
+    const processor = ctx.createScriptProcessor(4096, 1, 1);
+    processor.onaudioprocess = (e) => {
+      if (!recording) return;
+      const input = e.inputBuffer.getChannelData(0);
+      recording.chunks.push(new Float32Array(input));
+      recording.samples += input.length;
+
+      let sum = 0;
+      for (let i = 0; i < input.length; i++) sum += input[i] * input[i];
+      const rms = Math.sqrt(sum / input.length);
+      levelFill.style.width = `${Math.min(100, rms * 400)}%`;  // x400: speech sits mid-scale
+    };
+    // A processor only runs while connected to the output. It writes
+    // nothing to its output buffer, so nothing is heard.
+    source.connect(processor);
+    processor.connect(ctx.destination);
+    mic = { ctx, stream, processor };
+  }
+
+  function closeMic() {
+    if (!mic) return;
+    mic.processor.onaudioprocess = null;
+    for (const track of mic.stream.getTracks()) track.stop();
+    mic.ctx.close();
+    mic = null;
+  }
+
+  async function onRecordDown(e) {
+    e.preventDefault();
+    if (recordBtn.disabled) return;
+    try {
+      recordBtn.setPointerCapture(e.pointerId);  // keep recording if the finger slides off
+    } catch (err) {
+      // no capture - the take still ends on release over the button
+    }
+    holding = true;
+    stopTakePlayback();
+
+    // Created and resumed here, synchronously, before any await: iOS only
+    // lets audio start from inside the tap itself, and a context created
+    // after the mic opens would stay suspended and record silence.
+    if (micOpening || mic) return;  // a previous press is still using it
+    micOpening = true;
+    const ctx = new AudioCtx();
+    const resumed = ctx.resume();
+
+    try {
+      await openMic(ctx);
+      await resumed;
+    } catch (err) {
+      holding = false;
+      if (mic) closeMic(); else ctx.close();
+      notice(`No microphone: ${err.message}`, true);
+      return;
+    } finally {
+      micOpening = false;
+    }
+    // Let go before the mic was ready - a tap, or a permission prompt that
+    // took the press.
+    if (!holding) {
+      closeMic();
+      notice("Hold the button down while you record.");
+      return;
+    }
+    startRecording();
+  }
+
+  function onRecordUp() {
+    holding = false;
+    if (recording) stopRecording();
+  }
+
+  let recTimer = null;
+
+  function startRecording() {
+    recording = { chunks: [], samples: 0, rate: mic.ctx.sampleRate, started: performance.now() };
+    recordBtn.classList.add("recording");
+    recordBtn.textContent = "Recording…";
+    recordPanel.hidden = false;
+    recordPanel.classList.add("live");
+    recLive.hidden = false;
+    levelTrack.hidden = false;
+    levelFill.style.width = "0%";
+    recordPrompt.textContent = `Release to stop - up to ${RECORD_MAX_SECONDS} seconds.`;
+    recordButtons.textContent = "";
+    recTimer = setInterval(() => {
+      const seconds = (performance.now() - recording.started) / 1000;
+      recTime.textContent = `${seconds.toFixed(1)} s`;
+      if (seconds >= RECORD_MAX_SECONDS) stopRecording();
+    }, 100);
+  }
+
+  async function stopRecording() {
+    clearInterval(recTimer);
+    const done = recording;
+    recording = null;
+    closeMic();
+    recordBtn.classList.remove("recording");
+    recordBtn.textContent = "Hold to record";
+    recordPanel.classList.remove("live");
+    recLive.hidden = true;
+    levelTrack.hidden = true;
+    updateControls();
+
+    if (done.samples < done.rate * 0.1) {
+      // Under a tenth of a second is a tap, not a take.
+      recordPanel.hidden = !take;
+      if (take) showTake();
+      notice("Hold the button down while you record.", true);
+      return;
+    }
+
+    const samples = await resample(done.chunks, done.samples, done.rate);
+    take = { wav: encodeWav(samples, RECORD_SAMPLE_RATE), seconds: samples.length / RECORD_SAMPLE_RATE };
+    log(`Recorded ${take.seconds.toFixed(1)} s (${formatKB(take.wav.size)} KB).`);
+    showTake();
+  }
+
+  // Resamples to RECORD_SAMPLE_RATE through an OfflineAudioContext, which
+  // uses the browser's own properly filtered resampler - naively dropping
+  // samples would fold everything above 8kHz back down as aliasing.
+  async function resample(chunks, length, fromRate) {
+    const OfflineCtx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    const outLength = Math.ceil(length * RECORD_SAMPLE_RATE / fromRate);
+    const offline = new OfflineCtx(1, outLength, RECORD_SAMPLE_RATE);
+    const buffer = offline.createBuffer(1, length, fromRate);
+    const data = buffer.getChannelData(0);
+    let at = 0;
+    for (const chunk of chunks) { data.set(chunk, at); at += chunk.length; }
+    const source = offline.createBufferSource();
+    source.buffer = buffer;
+    source.connect(offline.destination);
+    source.start();
+    const rendered = await offline.startRendering();
+    return rendered.getChannelData(0);
+  }
+
+  // Mono 16-bit PCM WAV: the canonical 44-byte header, then the samples,
+  // little-endian - exactly what WavReader in the sketch accepts.
+  function encodeWav(samples, rate) {
+    const view = new DataView(new ArrayBuffer(44 + samples.length * 2));
+    const text = (at, str) => { for (let i = 0; i < str.length; i++) view.setUint8(at + i, str.charCodeAt(i)); };
+    text(0, "RIFF");
+    view.setUint32(4, 36 + samples.length * 2, true);
+    text(8, "WAVE");
+    text(12, "fmt ");
+    view.setUint32(16, 16, true);        // fmt chunk size
+    view.setUint16(20, 1, true);         // PCM
+    view.setUint16(22, 1, true);         // mono
+    view.setUint32(24, rate, true);
+    view.setUint32(28, rate * 2, true);  // bytes per second
+    view.setUint16(32, 2, true);         // bytes per sample frame
+    view.setUint16(34, 16, true);        // bits per sample
+    text(36, "data");
+    view.setUint32(40, samples.length * 2, true);
+    for (let i = 0; i < samples.length; i++) {
+      const v = Math.max(-1, Math.min(1, samples[i]));
+      view.setInt16(44 + i * 2, v < 0 ? v * 0x8000 : v * 0x7fff, true);
+    }
+    return new Blob([view.buffer], { type: "audio/wav" });
+  }
+
+  // The first userNNN.wav not already on the card.
+  function nextUserName() {
+    for (let n = 1; ; n++) {
+      const name = `user${String(n).padStart(3, "0")}.wav`;
+      if (!fileNames.some((f) => sameName(f, name))) return name;
+    }
+  }
+
+  function showTake() {
+    const name = nextUserName();
+    const uploadSeconds = Math.ceil(take.wav.size / UPLOAD_BYTES_PER_SECOND);
+    recordPanel.hidden = false;
+    recordPrompt.textContent =
+      `${take.seconds.toFixed(1)} s take, ${formatKB(take.wav.size)} KB - about ` +
+      `${uploadSeconds < 90 ? uploadSeconds + " s" : Math.round(uploadSeconds / 60) + " min"} to save. ` +
+      "Hold the button again to re-record.";
+    const playBtn = makeButton("smallBtn", takeAudio ? "Stop" : "Play", () => {
+      if (takeAudio) stopTakePlayback(); else playTake();
+    });
+    recordButtons.textContent = "";
+    recordButtons.append(
+      makeButton("smallBtn", "Discard", discardTake),
+      playBtn,
+      makeButton("smallBtn primary", `Save as ${name}`, () => saveTake(name))
+    );
+  }
+
+  // Plays the take as it will be saved - the resampled WAV itself, so what
+  // you hear is what the board will play. Through an <audio> element rather
+  // than Web Audio: on iPhone, Web Audio is also muted by the ring/silent
+  // switch, and an <audio> element isn't.
+  function playTake() {
+    takeAudio = new Audio(URL.createObjectURL(take.wav));
+    takeAudio.onended = stopTakePlayback;
+    takeAudio.play().catch((err) => {
+      notice(`Couldn't play the take: ${err.message}`, true);
+      stopTakePlayback();
+    });
+    showTake();
+  }
+
+  function stopTakePlayback() {
+    if (!takeAudio) return;
+    const audio = takeAudio;
+    takeAudio = null;
+    audio.onended = null;
+    audio.pause();
+    URL.revokeObjectURL(audio.src);
+    if (take) showTake();
+  }
+
+  function discardTake() {
+    stopTakePlayback();
+    take = null;
+    recordPanel.hidden = true;
+  }
+
+  // Hands the take to the ordinary upload path. It is kept until the board
+  // confirms the save, so a failed upload can simply be retried.
+  async function saveTake(name) {
+    stopTakePlayback();
+    recordPanel.hidden = true;
+    const saving = take;
+    if (await runUpload(saving.wav, pathIn(viewSet, name))) {
+      if (take === saving) take = null;
+    } else if (take === saving) {
+      showTake();
+    }
+  }
+
+  // -- tweaks ----------------------------------------------------------------
+  //
+  // Every setting the board's knobs change, laid out the way the knobs are:
+  // one card per knob mode, in the board's order (the rows of MODES in
+  // SDResampleDemo.ino), each with the one or two settings its knobs turn.
+  // The card for the mode the knobs are in is highlighted, whoever chose it
+  // - the stats line's MODE: says, twice a second. Tapping a card (anywhere
+  // but on one of its controls) puts the board in that mode.
+  //
+  // A card's two settings sit side by side, the way its two knobs do: knob 1's
+  // on the left, knob 2's on the right.
+  //
+  // Each setting has a slider, a button that puts it back to its default
+  // (lit when the setting isn't at it, so what's been changed shows at a
+  // glance), and its value is a button that opens a box for typing an exact
+  // number. The sliders cover the useful middle of each
+  // range rather than all of it - the speed knob goes to 1024x, which no
+  // slider a thumb's width could do justice to - and typing reaches the rest.
+  //
+  // The page and the knobs are both in charge. Whatever the stats line
+  // reports is shown, except for a setting the page itself has just changed:
+  // for TWEAK_HOLD_MS after a touch the page's own value stands, or the
+  // slider would jump back to a half-second-old reading under the thumb.
+
+  const TWEAK_HOLD_MS = 1500;
+  const TWEAK_SEND_MS = 120;        // how often a dragged slider sends
+  const WINDOW_MIN_SECONDS = 0.02;  // as in the sketch
+  const SLIDER_STEPS = 1000;
+
+  // The settings themselves, as the board last reported them or the page
+  // last set them: speed (a ratio, negative for backward), heard (the pitch
+  // you hear, a ratio), the window's start and end and the file's length in
+  // seconds, the echo's delay in seconds and its amount, and the filter's
+  // centre in Hz and its width in octaves (10 is wide open).
+  const tweaks = {
+    speed: null, heard: null, winStart: null, winEnd: null, length: null,
+    echoTime: null, echoAmount: null, filterCentre: null, filterWidth: null,
+  };
+  const tweakHeldUntil = {};  // per setting: performance.now() until which the board's value is ignored
+  let boardMode = null;
+  let boardModeHeldUntil = 0;
+
+  const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+  const num = (v, digits) => String(Number(v.toFixed(digits)));  // no trailing zeros
+
+  // Speed sliders run -4x to +4x with zero in the middle and the square of
+  // the distance from it, so 1x sits halfway out and slow speeds get room.
+  const speedSlider = {
+    fromPos: (p) => { const x = p * 2 - 1; return 4 * x * Math.abs(x); },
+    toPos: (v) => (Math.sign(v) * Math.sqrt(Math.min(Math.abs(v), 4) / 4) + 1) / 2,
+  };
+  const formatSpeed = (v) => [v.toFixed(Math.abs(v) < 1 ? 3 : 2), "x"];
+  const windowCommand = () => `WINDOW:${num(tweaks.winStart, 3)},${num(tweaks.winEnd, 3)}`;
+  const echoCommand = () => `ECHO:${num(tweaks.echoTime, 3)},${num(tweaks.echoAmount, 2)}`;
+  const ECHO_MIN = 0.001, ECHO_MAX = 2.73, ECHO_MAX_AMOUNT = 0.95;
+  const FILTER_CENTRE = 640;  // as in the sketch
+  // The centre reaches 15 octaves either way, far past hearing, so a band
+  // can slide right out of it to silence; the slider follows the knob's
+  // curve, filterCentreOctaves() in the sketch - 5 octaves a turn in the
+  // middle, faster toward the ends, two turns each way.
+  const CENTRE_REACH = 15, CENTRE_PER_TURN = 5, CENTRE_TURNS = 2;
+  const CENTRE_CUBE = (CENTRE_REACH - CENTRE_PER_TURN * CENTRE_TURNS) / CENTRE_TURNS ** 3;
+  const centreOctaves = (turns) => CENTRE_PER_TURN * turns + CENTRE_CUBE * turns ** 3;
+  const centreTurns = (octaves) => {  // solving the cubic, as the sketch does
+    const p = CENTRE_PER_TURN / CENTRE_CUBE / 3, q = octaves / CENTRE_CUBE / 2, d = Math.sqrt(q * q + p ** 3);
+    return Math.cbrt(q + d) + Math.cbrt(q - d);
+  };
+  const CENTRE_LOWEST = FILTER_CENTRE / 2 ** CENTRE_REACH, CENTRE_HIGHEST = FILTER_CENTRE * 2 ** CENTRE_REACH;
+  const formatHz = (v) =>
+    v < 10 ? [num(v, 3), "Hz"] : v < 1000 ? [String(Math.round(v)), "Hz"]
+      : v < 1e6 ? [num(v / 1000, v < 10000 ? 2 : 1), "kHz"] : [num(v / 1e6, 1), "MHz"];
+  const FILTER_OPEN = 10;  // octaves: the whole range, and no filter
+  const filterCommand = () => {
+    const c = tweaks.filterCentre;
+    return `BAND:${c < 10 ? num(c, 4) : Math.round(c)},${num(tweaks.filterWidth, 3)}`;
+  };
+
+  // Each control: which setting it shows, how its slider maps onto it, how
+  // the value reads, what typing a number means, and the command to send.
+  const PARAMS = {
+    speed: {
+      // Tape style: the pitch follows.
+      setting: "speed", label: "Speed", initial: () => 1,
+      ...speedSlider, format: formatSpeed, reverse: true,
+      command: () => `TAPE:${num(tweaks.speed, 4)}`,
+    },
+    stretch: {
+      // The same speed, with the pitch you hear held where it is.
+      setting: "speed", label: "Stretch", initial: () => 1,
+      ...speedSlider, format: formatSpeed, reverse: true,
+      command: () => `STRETCH:${num(tweaks.speed, 4)}`,
+    },
+    pitch: {
+      // The pitch you hear. Two octaves either way.
+      setting: "heard", label: "Pitch", initial: () => 1,
+      fromPos: (p) => 2 ** ((p * 2 - 1) * 2),
+      toPos: (v) => (clamp(Math.log2(v), -2, 2) / 2 + 1) / 2,
+      format: (v) => [v.toFixed(3), "x"],
+      typed: (n) => (n > 0 ? n : null),
+      command: () => `HEARD:${num(tweaks.heard, 4)}`,
+    },
+    winStart: {
+      setting: "winStart", label: "Start", needsFile: true, initial: () => 0,
+      fromPos: (p) => p * tweaks.length,
+      toPos: (v) => v / tweaks.length,
+      format: (v) => [v.toFixed(3), "s"],
+      // The board keeps the two ends apart by pushing the other one along;
+      // doing the same here keeps the page's picture of it right meanwhile.
+      apply: (v) => {
+        tweaks.winStart = clamp(v, 0, tweaks.length - WINDOW_MIN_SECONDS);
+        tweaks.winEnd = Math.max(tweaks.winEnd, tweaks.winStart + WINDOW_MIN_SECONDS);
+      },
+      holds: ["winStart", "winEnd"],
+      command: windowCommand,
+    },
+    winEnd: {
+      setting: "winEnd", label: "End", needsFile: true, initial: () => tweaks.length,
+      fromPos: (p) => p * tweaks.length,
+      toPos: (v) => v / tweaks.length,
+      format: (v) => [v.toFixed(3), "s"],
+      apply: (v) => {
+        tweaks.winEnd = clamp(v, WINDOW_MIN_SECONDS, tweaks.length);
+        tweaks.winStart = Math.min(tweaks.winStart, tweaks.winEnd - WINDOW_MIN_SECONDS);
+      },
+      holds: ["winStart", "winEnd"],
+      command: windowCommand,
+    },
+    echoTime: {
+      // A millisecond to 2.7 seconds, evenly by ratio - as the knob is.
+      setting: "echoTime", label: "Delay", initial: () => 0.3,
+      fromPos: (p) => ECHO_MIN * (ECHO_MAX / ECHO_MIN) ** p,
+      toPos: (v) => Math.log(clamp(v, ECHO_MIN, ECHO_MAX) / ECHO_MIN) / Math.log(ECHO_MAX / ECHO_MIN),
+      format: (v) => [String(Math.round(v * 1000)), "ms"],
+      typed: (n) => clamp(n / 1000, ECHO_MIN, ECHO_MAX),  // typed in ms, as shown
+      holds: ["echoTime", "echoAmount"],
+      command: echoCommand,
+    },
+    echoAmount: {
+      // One amount: the echo's level and its feedback.
+      setting: "echoAmount", label: "Amount", initial: () => 0,
+      fromPos: (p) => p * ECHO_MAX_AMOUNT,
+      toPos: (v) => v / ECHO_MAX_AMOUNT,
+      format: (v) => [v.toFixed(2), ""],
+      typed: (n) => clamp(n, 0, ECHO_MAX_AMOUNT),
+      holds: ["echoTime", "echoAmount"],
+      command: echoCommand,
+    },
+    filterWidth: {
+      // The space between the band's two edges, half either side of the
+      // centre. It stays what it's set to even when the centre pushes an
+      // edge off the end of the range. On the same curve as the knob: the
+      // slider's distance from the left, squared, so the widths you hear
+      // the most of get the most room.
+      setting: "filterWidth", label: "Width", initial: () => FILTER_OPEN,
+      fromPos: (p) => FILTER_OPEN * p * p,
+      toPos: (v) => Math.sqrt(clamp(v, 0, FILTER_OPEN) / FILTER_OPEN),
+      format: (v) => (v >= FILTER_OPEN - 0.005 ? ["Open", ""] : [num(v, 2), "oct"]),
+      typed: (n) => (n >= 0 ? Math.min(n, FILTER_OPEN) : null),  // typed in octaves
+      tolerance: 0.005,
+      holds: ["filterCentre", "filterWidth"],
+      command: filterCommand,
+    },
+    filterCentre: {
+      // On the knob's curve - see centreOctaves(). Moving it slides both
+      // edges of the band along, leaving the width alone; far enough either
+      // way, the band slides out of hearing.
+      setting: "filterCentre", label: "Centre", initial: () => FILTER_CENTRE,
+      fromPos: (p) => FILTER_CENTRE * 2 ** centreOctaves((p * 2 - 1) * CENTRE_TURNS),
+      toPos: (v) => (centreTurns(Math.log2(clamp(v, CENTRE_LOWEST, CENTRE_HIGHEST) / FILTER_CENTRE)) / CENTRE_TURNS + 1) / 2,
+      format: formatHz,
+      typed: (n) => (n > 0 ? clamp(n, CENTRE_LOWEST, CENTRE_HIGHEST) : null),  // typed in Hz
+      tolerance: 0.5,  // the board reports whole Hz in the middle
+      holds: ["filterCentre", "filterWidth"],
+      command: filterCommand,
+    },
+  };
+
+  // The board's knob modes, in its order, with its LED hues, and what knob 1
+  // and knob 2 set in each. A knob with no setting gets a word about what it
+  // does instead.
+  const MODES = [
+    { name: "Speed", hue: 120, params: ["speed", { label: "Scrub", text: "Turn knob 2: the tape, by hand." }] },
+    { name: "Pitch", hue: 180, params: ["pitch", "stretch"] },
+    { name: "Window", hue: 268, params: ["winStart", "winEnd"] },
+    { name: "Echo", hue: 335, params: ["echoTime", "echoAmount"] },
+    { name: "Filter", hue: 30, params: ["filterWidth", "filterCentre"] },
+  ];
+
+  // Whether a setting is at its default, near enough: the board reports
+  // three decimals, and its own knobs don't land on exact values.
+  function atDefault(param) {
+    const value = tweaks[param.setting];
+    if (value == null || (param.needsFile && !tweaks.length)) return true;
+    const tolerance = param.tolerance ?? (param.setting === "echoAmount" ? 0.005 : 0.002);
+    return Math.abs(value - param.initial()) < tolerance;
+  }
+
+  const tweakControls = [];  // { id, param, slider, valueBtn, resetBtn, buttons, dragging }
+  const modeCards = [];      // the cards, in MODES' order
+
+  function el(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text != null) node.textContent = text;
+    return node;
+  }
+
+  function buildTweaks() {
+    MODES.forEach((mode, index) => {
+      const card = el("section", "modeCard");
+      card.style.setProperty("--h", mode.hue);
+      card.tabIndex = 0;
+      card.setAttribute("role", "button");
+      card.setAttribute("aria-label", `${mode.name} mode`);
+      // A tap on the card chooses its mode - but not a tap on a control,
+      // which is just that control being used.
+      card.addEventListener("click", (e) => {
+        if (!e.target.closest("button, input")) selectMode(index);
+      });
+      // Taking hold of a slider chooses its mode too, so the knobs follow
+      // whatever is being adjusted here. ("input" covers the keyboard.)
+      for (const type of ["pointerdown", "input"]) {
+        card.addEventListener(type, (e) => {
+          if (e.target.matches('input[type="range"]')) selectMode(index);
+        });
+      }
+      card.addEventListener("keydown", (e) => {
+        if (e.target === card && (e.key === "Enter" || e.key === " ")) {
+          e.preventDefault();
+          selectMode(index);
+        }
+      });
+
+      const pair = el("div", "pair");
+      for (const id of mode.params) pair.append(buildParam(id));
+      card.append(pair);
+      modeCardsEl.append(card);
+      modeCards.push(card);
+    });
+    renderMode();
+  }
+
+  const RESET_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.6-5.9"/><path d="M4 4v4.5h4.5"/></svg>';
+
+  // One half of a card: the name up the side, then the value with its
+  // buttons above the slider.
+  function buildParam(id) {
+    if (typeof id !== "string") {
+      const row = el("div", "param byHand");
+      row.append(el("div", "paramLabel", id.label), el("p", null, id.text));
+      return row;
+    }
+    const param = PARAMS[id];
+    const row = el("div", "param");
+    row.dataset.param = id;
+    const body = el("div", "paramBody");
+
+    const valueRow = el("div", "paramRow");
+    const valueBtn = el("button", "paramValue");
+    valueBtn.setAttribute("aria-label", `${param.label}: type a value`);
+    const control = { id, param, valueBtn, buttons: [valueBtn], dragging: false };
+    valueRow.append(valueBtn);
+
+    if (param.reverse) {
+      const reverseBtn = makeButton("smallBtn paramBtn", "Rev", () => {
+        if (tweaks.speed != null) changeTweak(control, -tweaks.speed);
+      });
+      reverseBtn.setAttribute("aria-label", `Reverse ${param.label.toLowerCase()}`);
+      valueRow.append(reverseBtn);
+      control.buttons.push(reverseBtn);
+    }
+    const resetBtn = makeButton("smallBtn paramBtn", `Reset ${param.label.toLowerCase()}`,
+      () => changeTweak(control, param.initial()), RESET_ICON);
+    control.buttons.push(resetBtn);
+    control.resetBtn = resetBtn;
+    valueRow.append(resetBtn);
+
+    const slider = el("input");
+    slider.type = "range";
+    slider.min = 0;
+    slider.max = SLIDER_STEPS;
+    slider.step = 1;
+    slider.setAttribute("aria-label", param.label);
+    control.slider = slider;
+
+    slider.addEventListener("input", () => {
+      control.dragging = true;
+      changeTweak(control, param.fromPos(slider.value / SLIDER_STEPS));
+    });
+    // "change" marks the end of a drag, but not every browser sends it
+    // when the value ends where it started - so lifting the finger counts too.
+    const endDrag = () => {
+      control.dragging = false;
+      renderTweaks();
+    };
+    for (const type of ["change", "pointerup", "pointercancel", "touchend", "blur"]) {
+      slider.addEventListener(type, endDrag);
+    }
+    valueBtn.addEventListener("click", () => typeTweak(control));
+
+    body.append(valueRow, slider);
+    row.append(el("div", "paramLabel", param.label), body);
+    tweakControls.push(control);
+    return row;
+  }
+
+  // A setting changed from the page: note it, show it, send it.
+  function changeTweak(control, value) {
+    const param = control.param;
+    if (!Number.isFinite(value)) return;
+    if (param.apply) param.apply(value); else tweaks[param.setting] = value;
+    const until = performance.now() + TWEAK_HOLD_MS;
+    for (const name of param.holds || [param.setting]) tweakHeldUntil[name] = until;
+    renderTweaks();
+    queueTweak(control.id);
+  }
+
+  // Dragging a slider makes far more changes than are worth sending. The
+  // first goes at once; after that, whatever is newest goes every
+  // TWEAK_SEND_MS, so the last position always gets there.
+  const tweaksToSend = new Set();
+  let tweakSendTimer = null;
+
+  function queueTweak(id) {
+    tweaksToSend.add(id);
+    if (!tweakSendTimer) sendTweaks();
+  }
+
+  function sendTweaks() {
+    tweakSendTimer = null;
+    if (tweaksToSend.size === 0) return;
+    const commands = new Set([...tweaksToSend].map((id) => PARAMS[id].command()));
+    tweaksToSend.clear();
+    for (const command of commands) sendCommand(command);
+    tweakSendTimer = setTimeout(sendTweaks, TWEAK_SEND_MS);
+  }
+
+  // The value becomes a box to type in; Enter or leaving it sets the value,
+  // Escape gives up.
+  function typeTweak(control) {
+    const { param, valueBtn } = control;
+    const current = tweaks[param.setting];
+    if (current == null) return;
+    const input = el("input", "paramInput");
+    input.type = "text";
+    input.inputMode = "decimal";
+    input.autocomplete = "off";
+    input.value = param.format(current)[0];
+    input.setAttribute("aria-label", param.label);
+
+    let done = false;
+    const finish = (commit) => {
+      if (done) return;
+      done = true;
+      const typed = Number(input.value.trim().replace(",", "."));
+      input.replaceWith(valueBtn);
+      if (!commit || input.value.trim() === "" || !Number.isFinite(typed)) return;
+      const value = param.typed ? param.typed(typed) : typed;
+      if (value == null) {
+        notice(`${param.label} can't be ${input.value.trim()}.`, true);
+        return;
+      }
+      changeTweak(control, value);
+    };
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") finish(true);
+      if (e.key === "Escape") finish(false);
+    });
+    input.addEventListener("blur", () => finish(true));
+
+    valueBtn.replaceWith(input);
+    input.focus();
+    input.select();
+  }
+
+  function renderTweaks() {
+    let anyChanged = false;
+    for (const control of tweakControls) {
+      const { param, slider, valueBtn } = control;
+      const changed = !atDefault(param);
+      control.resetBtn.classList.toggle("changed", changed);
+      anyChanged = anyChanged || changed;
+      const value = tweaks[param.setting];
+      const known = value != null && !(param.needsFile && !tweaks.length);
+      if (!known) {
+        valueBtn.textContent = "—";
+        continue;
+      }
+      const [text, unit] = param.format(value);
+      valueBtn.textContent = text;
+      if (unit) valueBtn.append(el("span", "unit", unit));
+      // Not the slider under a thumb: it's where the value came from.
+      if (!control.dragging) slider.value = Math.round(clamp(param.toPos(value), 0, 1) * SLIDER_STEPS);
+    }
+    for (const btn of resetAllBtns) btn.classList.toggle("changed", anyChanged);
+  }
+
+  function updateTweakControls(ready) {
+    for (const { param, slider, buttons } of tweakControls) {
+      const usable = ready && tweaks[param.setting] != null && !(param.needsFile && !tweaks.length);
+      slider.disabled = !usable;
+      for (const btn of buttons) btn.disabled = !usable;
+    }
+  }
+
+  function renderMode() {
+    modeCards.forEach((card, index) => {
+      const current = index === boardMode;
+      card.classList.toggle("current", current);
+      card.setAttribute("aria-pressed", String(current));
+    });
+  }
+
+  function selectMode(index) {
+    if (!connected || upload || index === boardMode) return;
+    boardMode = index;
+    boardModeHeldUntil = performance.now() + TWEAK_HOLD_MS;
+    renderMode();
+    sendCommand(`MODE:${index}`);
+  }
+
+  // The stats line's settings. A file's length comes with its window, and
+  // goes when no file is loaded.
+  const TWEAK_FIELDS = {
+    REQ: "speed", HRD: "heard", WS: "winStart", WE: "winEnd",
+    ECT: "echoTime", ECA: "echoAmount", FLC: "filterCentre", FLW: "filterWidth",
+  };
+
+  function tweaksFromBoard(parts) {
+    const now = performance.now();
+    const wasUsable = tweaks.speed != null && tweaks.length != null;
+    for (const [field, name] of Object.entries(TWEAK_FIELDS)) {
+      if (parts[field] === undefined || now < (tweakHeldUntil[name] || 0)) continue;
+      tweaks[name] = Number(parts[field]);
+    }
+    if (parts.REQ !== undefined) tweaks.length = parts.LEN !== undefined ? Number(parts.LEN) : null;
+    if (parts.MODE !== undefined && now >= boardModeHeldUntil && Number(parts.MODE) !== boardMode) {
+      boardMode = Number(parts.MODE);
+      renderMode();
+    }
+    renderTweaks();
+    if (wasUsable !== (tweaks.speed != null && tweaks.length != null)) updateControls();
+  }
+
+  function forgetTweaks() {
+    for (const name of Object.keys(tweaks)) tweaks[name] = null;
+    boardMode = null;
+    tweaksToSend.clear();
+    renderMode();
+    renderTweaks();
+  }
+
+  // Resetting can't be undone, so the button asks once: the first tap arms
+  // it for a few seconds, the second does it.
+  let resetArmedTimer = null;
+  function disarmReset() {
+    clearTimeout(resetArmedTimer);
+    resetArmedTimer = null;
+    for (const btn of resetAllBtns) {
+      btn.classList.remove("arming");
+      btn.textContent = "Reset all tweaks";
+    }
+  }
+  for (const btn of resetAllBtns) {
+    btn.addEventListener("click", () => {
+      if (resetArmedTimer) {
+        disarmReset();
+        for (const name of Object.keys(tweakHeldUntil)) tweakHeldUntil[name] = 0;
+        sendCommand("RESET:ALL");
+        return;
+      }
+      btn.classList.add("arming");
+      btn.textContent = "Tap again to reset this file";
+      resetArmedTimer = setTimeout(disarmReset, 3000);
+    });
+  }
+
+  // -- incoming data --------------------------------------------------------
+
   // The board sends a stats line like
-  // "SPD:2.35,REQ:2.35,BUF:78,UND:0,RUN:1\n"
-  // (see SDResampleDemo.ino's header
-  // comment) over the DSPS pipe once Binary mode is active.
+  // "SPD:2.35,REQ:2.35,PIT:1.000,ECT:0.300,ECA:0.00,FLC:640,FLW:10.00,BUF:78,UND:0,RUN:1,LAT:0,
+  //  LVL:3,CACHE:100,MODE:0,HRD:1.000,WS:0.000,WE:10.000,LEN:10.000,
+  //  BAT:87.5,BV:3.912,BCR:-21.4\n"
+  // (the BAT:/BV:/BCR: battery fields only if the board's fuel gauge answers)
+  // (see SDResampleDemo.ino's header comment) over the DSPS pipe once
+  // Binary mode is active, twice a second.
   function handleTelemetry(line) {
     const parts = Object.fromEntries(
       line.split(",").map((p) => p.split(":")).filter((kv) => kv.length === 2)
     );
-    // While stopped, SPD: is the effective ratio and so reads 0.00 - which
-    // would throw away the speed setting every time the tape is stopped.
-    // Show REQ: (what the knob is asking for) instead, dimmed, so the tile
-    // reads as "this is what it would run at" rather than a live value.
-    const running = parts.RUN === "1";
-    const showPotential = !running && parts.REQ !== undefined;
-    const shownSpeed = showPotential ? parts.REQ : parts.SPD;
-    if (shownSpeed !== undefined) {
-      speedEl.innerHTML = `${Number(shownSpeed).toFixed(2)}<span class="unit">x</span>`;
-      speedEl.classList.toggle("potential", showPotential);
-    }
     if (parts.BUF !== undefined) {
       bufferEl.innerHTML = `${parts.BUF}<span class="unit">%</span>`;
     }
-    if (parts.RUN !== undefined) {
-      transportEl.textContent = running ? "Running" : "Stopped";
-      transportEl.classList.toggle("running", running);
+    if (parts.LAT !== undefined) {
+      latched = parts.LAT === "1";
+      updateControls();
     }
-    if (parts.PIT !== undefined) {
-      // Dimmed at unity, because "not shifted" is the resting state and
-      // should not compete for attention with a value that is doing work.
-      pitchEl.innerHTML = `${Number(parts.PIT).toFixed(3)}<span class="unit">x</span>`;
-      pitchEl.classList.toggle("potential", Math.abs(Number(parts.PIT) - 1) < 0.001);
+    if (parts.RUN !== undefined) {
+      running = parts.RUN === "1";
+      renderStatus();
     }
     if (parts.UND !== undefined) {
       underrunsEl.textContent = parts.UND;
       underrunsEl.classList.toggle("bad", Number(parts.UND) > 0);
     }
+    // LVL: which copy of the file is playing - 0 is the original, k the
+    // board's cached copy at 1/2^k of its sample rate (see MipCache.h).
+    if (parts.LVL !== undefined) {
+      const level = Number(parts.LVL);
+      levelEl.textContent = level === 0 ? "original" : `1/${2 ** level} rate`;
+    }
+    // CACHE: how far the board has got building those copies. Until 100%,
+    // the fastest speeds are held back.
+    if (parts.CACHE !== undefined) {
+      cacheEl.innerHTML = `${parts.CACHE}<span class="unit">%</span>`;
+      cacheEl.classList.toggle("quiet", parts.CACHE === "100");
+    }
     if (parts.FILE !== undefined) setNowPlaying(parts.FILE);
+    if (parts.BAT !== undefined) showBattery(parts);
+    if (parts.SET !== undefined) setFromBoard(parts);
+    tweaksFromBoard(parts);
+  }
+
+  // BAT:, BV: and BCR: come from the board's fuel gauge (see FuelGauge.h):
+  // the charge in percent, the cell's voltage, and how fast the charge is
+  // changing in percent per hour, negative while it runs down. The time
+  // left is just the one divided by the other. The gauge takes a few
+  // minutes to settle on a new rate after the load changes, and on USB
+  // power its numbers mean little. Called with {} to blank the readouts.
+  function showBattery(parts) {
+    const dash = (unit) => `&mdash;<span class="unit">${unit}</span>`;
+    if (parts.BAT === undefined) {
+      batteryEl.innerHTML = dash("%");
+      batteryVoltsEl.innerHTML = dash("V");
+      batteryRateEl.innerHTML = dash("%/h");
+      batteryLeftEl.textContent = "—";
+      batteryLeftEl.classList.remove("quiet");
+      return;
+    }
+    const percent = Number(parts.BAT);
+    const rate = Number(parts.BCR);
+    batteryEl.innerHTML = `${Math.min(100, percent).toFixed(0)}<span class="unit">%</span>`;
+    batteryEl.classList.toggle("bad", percent < 10);
+    batteryVoltsEl.innerHTML = `${Number(parts.BV).toFixed(2)}<span class="unit">V</span>`;
+    batteryRateEl.innerHTML = `${rate.toFixed(1)}<span class="unit">%/h</span>`;
+    // Below half a percent an hour the rate is mostly the gauge's noise.
+    if (rate < -0.5) {
+      const minutes = Math.round((percent / -rate) * 60);
+      batteryLeftEl.textContent = `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m`;
+      batteryLeftEl.classList.remove("quiet");
+    } else {
+      batteryLeftEl.textContent = rate > 0.5 ? "charging" : "—";
+      batteryLeftEl.classList.add("quiet");
+    }
   }
 
   // One line at a time, dispatched by prefix ahead of the plain
-  // key:value telemetry parser - FILES:/PLAYING:/ERR: are structurally
+  // key:value telemetry parser - FILES:/PLAYING:/ERR:/... are structurally
   // different (a multi-line block, or a payload that itself may contain
   // a colon) from the flat SPD:/BUF:/UND:/... stats line.
+  // DISKMODE:ON and DISKMODE:OFF. The board repeats DISKMODE:ON in place of its status
+  // line while the card is a USB disk, so a page that connects meanwhile
+  // finds out too.
+  function setDiskMode(on) {
+    if (on === diskMode) return;
+    diskMode = on;
+    diskPanel.hidden = !on;
+    fileListEl.hidden = on;
+    if (on) {
+      showTab("files");
+    } else {
+      notice("The card is back on the board.");
+      requestFileList();
+    }
+    updateControls();
+  }
+
   function handleLine(line) {
-    if (line === "FILES:BEGIN") {
+    if (line === "SETS:BEGIN") {
       clearTimeout(listRetryTimer);  // a response is actually coming - stop retrying
-      collectingFiles = true;
-      fileListBuffer = [];
+      collectingSets = true;
+      setsBuffer = [];
       return;
     }
-    if (line === "FILES:END") { collectingFiles = false; renderFileList(fileListBuffer); return; }
+    if (line === "SETS:END") {
+      collectingSets = false;
+      sets = setsBuffer;
+      renderSetPickers();
+      return;
+    }
+    if (collectingSets) {
+      const sep = line.lastIndexOf("|");
+      setsBuffer.push(sep === -1 ? { name: line, gap: 10 } : { name: line.slice(0, sep), gap: Number(line.slice(sep + 1)) });
+      return;
+    }
+    if (line.startsWith("FILES:BEGIN")) {
+      clearTimeout(listRetryTimer);
+      collectingFiles = true;
+      fileListBuffer = [];
+      viewSet = line.startsWith("FILES:BEGIN:") ? line.slice(12) : "/";
+      renderSetPickers();
+      return;
+    }
+    if (line === "FILES:END" || line.startsWith("FILES:END:")) {
+      collectingFiles = false;
+      // FILES:END:<n> says how many names the board sent. Fewer arriving
+      // means the link lost some on the way - two names can even run
+      // together into one that isn't on the card - so ask again.
+      const sent = line.length > 10 ? Number(line.slice(10)) : fileListBuffer.length;
+      if (fileListBuffer.length !== sent && listShortRetries < LIST_MAX_RETRIES) {
+        listShortRetries++;
+        log(`File list came through short (${fileListBuffer.length} of ${sent}) - asking again`);
+        sendCommand("LIST:" + viewSet);
+        return;
+      }
+      listShortRetries = 0;
+      // Already sorted by the board, in the order its file knob steps
+      // through them (see WavList.h) - kept as it comes, so the two agree.
+      fileNames = fileListBuffer;
+      if (rowMode && !fileNames.some((n) => sameName(n, rowMode.name))) rowMode = null;
+      renderFileList();
+      if (linkState === "reading") setLinkState("ready");
+      return;
+    }
     if (collectingFiles) { fileListBuffer.push(line); return; }
     if (line.startsWith("PLAYING:")) { setNowPlaying(line.slice(8)); return; }
+    if (line === "DISKMODE:ON") { setDiskMode(true); return; }
+    if (line === "DISKMODE:OFF") { setDiskMode(false); return; }
     if (line.startsWith("ERR:")) { showError(line.slice(4)); return; }
+
+    // Upload replies - see runUpload().
+    if (line.startsWith("READY:")) { if (upload) upload.ready = true; return; }
+    if (line.startsWith("ACK:")) {
+      if (upload) {
+        upload.acked = Number(line.slice(4));
+        updateUploadProgress();
+      }
+      return;
+    }
+    if (line.startsWith("SAVED:")) { if (upload) upload.saved = true; return; }
+
+    if (line.startsWith("RENAMED:")) {
+      const [from, to] = line.slice(8).split("|");
+      notice(`Renamed ${leafOfPath(from)} to ${leafOfPath(to)}.`);
+      requestSet(viewSet);
+      return;
+    }
+    if (line.startsWith("DELETED:")) {
+      notice(`Deleted ${leafOfPath(line.slice(8))}.`);
+      requestSet(viewSet);
+      return;
+    }
     handleTelemetry(line);
   }
 
@@ -593,6 +2923,7 @@
   // into one. Buffer and split on newlines rather than assuming each
   // notification is exactly one line.
   function onDspsData(event) {
+    heardFromBoard = true;
     const bytes = new Uint8Array(event.target.value.buffer);
     dspsBuffer += new TextDecoder().decode(bytes);
     let nl;
@@ -600,102 +2931,213 @@
       const line = dspsBuffer.slice(0, nl).trim();
       dspsBuffer = dspsBuffer.slice(nl + 1);
       if (line.length === 0) continue;
-      log(`< ${line}`);
+      // ACKs arrive several a second during an upload - too many to log.
+      if (!line.startsWith("ACK:")) log(`< ${line}`);
       handleLine(line);
+      wakeWaiters();
     }
   }
 
-  async function sendCommand(text) {
+  // -- outgoing data -----------------------------------------------------
+
+  // The two platforms this page runs on need opposite write calls, and
+  // both fail silently - the promise resolves, no error, and the bytes
+  // never reach the board:
+  //
+  //   - Desktop Chrome needs writeValueWithoutResponse(). Its plain
+  //     writeValue() is meant to pick the write type the characteristic
+  //     declares (DSPS RX is write-without-response only), but for this
+  //     characteristic it doesn't deliver - confirmed live.
+  //   - Bluefy on iOS needs plain writeValue(). Its
+  //     writeValueWithoutResponse() drops writes - confirmed live in
+  //     AudioKnobsWebBLEDemo, whose page uses writeValue() for that reason.
+  //
+  // Every iOS browser with Web Bluetooth is a third-party app built on
+  // WebKit, so "running on iOS" picks Bluefy's side. iPads report
+  // themselves as Macs, hence the touch-point test.
+  const IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent) ||
+    (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+
+  async function writeToBoard(view) {
+    if (!dspsRxChar) throw new Error("not connected");
+    // Upload packets are views into a larger read buffer (subarray()). A
+    // browser should send only the bytes the view covers, but a WebBLE app
+    // bridging to native code may send the whole underlying buffer instead -
+    // too big for one Bluetooth write, so it would be dropped. Commands,
+    // which are fresh arrays, got through on Bluefy while upload data did
+    // not, which fits exactly that. A copy of exactly the right size is
+    // cheap and rules it out.
+    const bytes = view.byteOffset === 0 && view.byteLength === view.buffer.byteLength
+      ? view
+      : view.slice();
+    if (IS_IOS) {
+      await dspsRxChar.writeValue(bytes);
+    } else {
+      await dspsRxChar.writeValueWithoutResponse(bytes);
+    }
+  }
+
+  // duringUpload is only for runUpload()'s own PUT: - once the board has
+  // said READY:, anything else sent would be written into the file.
+  //
+  // A command longer than one Bluetooth write - one naming a long path,
+  // say - goes in pieces of UPLOAD_PACKET_BYTES, since a write too big for
+  // a packet is dropped without an error (see UPLOAD_PACKET_BYTES). The
+  // board puts the pieces back together (see pumpBLEInput() in the
+  // sketch). Commands go one at a time, in order, so two long ones can't
+  // have their pieces interleaved.
+  let commandChain = Promise.resolve();
+
+  function sendCommand(text, duringUpload = false) {
+    const sent = commandChain.then(() => writeCommand(text, duringUpload));
+    commandChain = sent.catch(() => {});
+    return sent;
+  }
+
+  async function writeCommand(text, duringUpload) {
     if (!dspsRxChar) return;
+    if (upload && !duringUpload) {
+      log(`(held back "${text}" - an upload is in progress)`);
+      return;
+    }
     try {
-      // writeValueWithoutResponse(), not plain writeValue(): confirmed
-      // live on desktop Chrome that writeValue() resolves successfully
-      // (no thrown error) without the write actually reaching the
-      // board's Serial2 at all - DSPS RX is declared write-without-
-      // response-only, and Chrome's automatic type-selection fallback
-      // for plain writeValue() doesn't seem to relay correctly for this
-      // characteristic. NOTE: AudioKnobsWebBLEDemo's page uses plain
-      // writeValue() instead, specifically because Bluefy on iOS
-      // silently drops writeValueWithoutResponse() - if this page also
-      // needs to run in a phone WebBLE app rather than a desktop
-      // browser, that trade-off needs revisiting (possibly detecting
-      // the environment, or accepting one platform doesn't work).
-      await dspsRxChar.writeValueWithoutResponse(new TextEncoder().encode(text));
+      // A newline ends the command, so two sent close together (a slider
+      // being dragged) can't run into one. Not after PUT: though - what
+      // follows that is the file itself, byte for byte.
+      const bytes = new TextEncoder().encode(duringUpload ? text : text + "\n");
+      for (let at = 0; at < bytes.length; at += UPLOAD_PACKET_BYTES) {
+        await writeToBoard(bytes.subarray(at, at + UPLOAD_PACKET_BYTES));
+      }
       log(`> ${text}`);
     } catch (err) {
       log(`! write failed: ${err.message}`);
+      if (duringUpload) throw err;
     }
   }
 
-  // Negotiates CodeLess's "Binary mode" (UM-140 manual, section 8.6,
-  // "Enter Binary mode using Generic GATT Client") so the DSPS
-  // characteristics below carry real application data instead of the
-  // AT-command link rejecting everything written to it. Confirmed live
-  // (in AudioKnobsWebBLEDemo) that the module waits for the *local* host
-  // (the RA6M5 sketch) to approve this before it actually activates -
-  // that approval isn't anything this page does, it's SDResampleDemo.ino's
-  // own job.
+  // -- connection ---------------------------------------------------------
+
+  // -- connecting -----------------------------------------------------------
   //
-  // Step order matters here: steps 1-4 must all finish before step 5 (the
-  // actual Binary-mode request), or the module never grants it even
-  // though every individual GATT call still succeeds with no error.
-  async function enterBinaryMode(atService, dspsTxChar, dspsFlowChar) {
-    const inboundChar = await atService.getCharacteristic(AT_INBOUND_UUID);
-    const atFlowChar = await atService.getCharacteristic(AT_FLOWCTRL_UUID);
+  // The DSPS characteristics below only carry real data once CodeLess's
+  // "Binary mode" is on (UM-140 manual, section 8.6, "Enter Binary mode
+  // using Generic GATT Client") - otherwise the module's AT-command parser
+  // gets everything written to it. Two things about Binary mode shape how
+  // this page connects, both traced on the wire:
+  //
+  //   - It lasts exactly one connection. Asked for on one connection, it
+  //     only takes effect when that connection *ends*, and the module drops
+  //     back to command mode when the *next* one ends. So a fresh visit
+  //     nearly always needs two connections: one to ask, one to use.
+  //   - The board has to approve it: the module passes the request on to
+  //     the sketch, which answers (SDResampleDemo.ino's handleBLELine()).
+  //
+  // So: connect, and if the board isn't already talking through the pipe
+  // within PIPE_LIVE_WAIT_MS (it sends stats every 0.5s once it is), ask
+  // for Binary mode, give the board a moment to approve, hang up, and
+  // reconnect - this time to a live pipe. That used to be done the slow
+  // way round: the page stayed on the first connection, waited for a LIST
+  // reply that could never come there, and only reconnected after its
+  // retries ran out.
+  const PIPE_LIVE_WAIT_MS = 700;
+  const GRANT_SETTLE_MS = 500;      // the board approves within ~40ms
+  const RECONNECT_PIPE_WAIT_MS = 3000;
 
-    await atFlowChar.startNotifications();    // step 1
-    await dspsTxChar.startNotifications();    // step 2
-    await dspsFlowChar.startNotifications();  // step 3
-    dspsTxChar.addEventListener("characteristicvaluechanged", onDspsData);
+  const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-    await dspsFlowChar.writeValue(new Uint8Array([0x01]));  // step 4 - see sendCommand()'s comment on writeValue() vs writeValueWithoutResponse()
-
-    log("Requesting Binary mode...");
-    const atBinreq = new Uint8Array([0x41, 0x54, 0x2b, 0x42, 0x49, 0x4e, 0x52, 0x45, 0x51, 0x00]);  // "AT+BINREQ\0"
-    await inboundChar.writeValue(atBinreq);  // step 5
+  async function pipeIsLive(ms) {
+    try {
+      await waitUntil(() => heardFromBoard, ms);
+      return true;
+    } catch (err) {
+      return false;
+    }
   }
 
-  // The GATT-connect-through-file-list sequence, factored out so
-  // reconnectAndRetry() below can redo it without requestDevice() -
-  // that API requires a direct user gesture and can't be called from a
-  // timeout, but reconnecting an already-granted device reference has
-  // no such restriction.
-  async function establishLink() {
+  // Connects, finds the characteristics, and switches notifications and
+  // DSPS flow control on. Order matters: these must all be done before
+  // Binary mode is requested, or the module never grants it, even though
+  // every individual call succeeds. Returns the AT service, which is where
+  // that request goes.
+  async function openLink() {
     const server = await device.gatt.connect();
-
     const atService = await server.getPrimaryService(AT_SERVICE_UUID);
     const dspsService = await server.getPrimaryService(DSPS_SERVICE_UUID);
+    const atFlowChar = await atService.getCharacteristic(AT_FLOWCTRL_UUID);
     const dspsTxChar = await dspsService.getCharacteristic(DSPS_TX_UUID);
     const dspsFlowChar = await dspsService.getCharacteristic(DSPS_FLOWCTRL_UUID);
     dspsRxChar = await dspsService.getCharacteristic(DSPS_RX_UUID);
 
-    await enterBinaryMode(atService, dspsTxChar, dspsFlowChar);
-
-    setConnected(true);
-    log("Connected. Waiting for telemetry...");
-    requestFileList();
+    heardFromBoard = false;
+    dspsBuffer = "";
+    await atFlowChar.startNotifications();
+    await dspsTxChar.startNotifications();
+    await dspsFlowChar.startNotifications();
+    // A browser may hand back the same characteristic object after a
+    // reconnect - remove first, so lines are never handled twice.
+    dspsTxChar.removeEventListener("characteristicvaluechanged", onDspsData);
+    dspsTxChar.addEventListener("characteristicvaluechanged", onDspsData);
+    await dspsFlowChar.writeValue(new Uint8Array([0x01]));  // see writeToBoard()'s comment on writeValue() vs writeValueWithoutResponse()
+    return atService;
   }
 
-  // Used when the board never completes its side of the handshake (see
-  // the LIST-retry comment above). Confirmed live: this reliably
-  // happens in an exact alternating (ABAB) pattern across repeated page
-  // reloads - a reload doesn't always give the module a clean, immediate
-  // disconnect signal (the browser can tear the tab down without
-  // completing the BLE disconnect procedure), so the module only
-  // notices via its own supervision timeout; reconnecting faster than
-  // that timeout lands on a module that still thinks the old link is
-  // live and never sends a fresh +CONNECTED/+BINREQ. An explicit
-  // disconnect()/reconnect() cycle from inside the page gives the
-  // module that clean signal immediately instead.
-  async function reconnectAndRetry() {
-    if (!device) return;
-    log("Reconnecting to recover...");
+  async function requestBinaryMode(atService) {
+    const inboundChar = await atService.getCharacteristic(AT_INBOUND_UUID);
+    const atBinreq = new Uint8Array([0x41, 0x54, 0x2b, 0x42, 0x49, 0x4e, 0x52, 0x45, 0x51, 0x00]);  // "AT+BINREQ\0"
+    await inboundChar.writeValue(atBinreq);
+  }
+
+  // Hangs up without the page treating it as the end of the session - the
+  // gattserverdisconnected handler in connect() ignores it.
+  async function hangUpQuietly() {
+    regranting = true;
     try {
       if (device.gatt.connected) device.gatt.disconnect();
     } catch (err) {
-      // ignore - proceed to reconnect regardless
+      // already gone - fine
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await pause(300);
+  }
+
+  // Everything from a picked device to a working pipe. Factored out of
+  // connect() so reconnectAndRetry() can redo it without requestDevice(),
+  // which needs a fresh user gesture.
+  async function establishLink() {
+    setLinkState("connecting");
+    const started = performance.now();
+    try {
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        const atService = await openLink();
+        regranting = false;
+        if (await pipeIsLive(PIPE_LIVE_WAIT_MS)) break;
+
+        log("Requesting Binary mode, then reconnecting...");
+        await requestBinaryMode(atService);
+        await pause(GRANT_SETTLE_MS);
+        await hangUpQuietly();
+        await openLink();
+        regranting = false;
+        if (await pipeIsLive(RECONNECT_PIPE_WAIT_MS)) break;
+
+        await hangUpQuietly();
+        if (attempt === 2) throw new Error("the board never opened its data pipe");
+        log("The pipe didn't open - trying once more...");
+      }
+    } finally {
+      regranting = false;
+    }
+
+    setConnected(true);
+    log(`Connected in ${((performance.now() - started) / 1000).toFixed(1)}s.`);
+    requestFileList();
+  }
+
+  // Used if LIST still isn't answered after its retries - see
+  // sendListWithRetry().
+  async function reconnectAndRetry() {
+    if (!device) return;
+    log("Reconnecting to recover...");
+    await hangUpQuietly();
     try {
       await establishLink();
     } catch (err) {
@@ -746,8 +3188,9 @@
               optionalServices: [AT_SERVICE_UUID, DSPS_SERVICE_UUID],
             }
       );
-      log(`Picked ${device.name || device.id}.`);
+      log(`Picked ${device.name || device.id}. Writing with ${IS_IOS ? "writeValue() (iOS)" : "writeValueWithoutResponse()"}.`);
       device.addEventListener("gattserverdisconnected", () => {
+        if (regranting) return;  // establishLink() hanging up on purpose
         log("Disconnected.");
         dspsRxChar = null;
         dspsBuffer = "";
@@ -762,20 +3205,44 @@
     }
   }
 
+  // -- controls ------------------------------------------------------------
+
   connectBtn.addEventListener("click", connect);
-  refreshBtn.addEventListener("click", requestFileList);
+  refreshBtn.addEventListener("click", () => (viewSet === null ? requestFileList() : requestSet(viewSet)));
+  diskBtn.addEventListener("click", () => sendCommand("DISK:ON"));
+  uploadBtn.addEventListener("click", () => fileInput.click());
+  if (CAN_RECORD) {
+    uploadBtn.hidden = true;
+    recordBtn.hidden = false;
+    recordBtn.addEventListener("pointerdown", onRecordDown);
+    recordBtn.addEventListener("pointerup", onRecordUp);
+    recordBtn.addEventListener("pointercancel", onRecordUp);
+    recordBtn.addEventListener("contextmenu", (e) => e.preventDefault());
+  }
+  fileInput.addEventListener("change", onFilePicked);
+  setSelect.addEventListener("change", onSetPicked);
+  filesSetSelect.addEventListener("change", onSetPicked);
+  gapInput.addEventListener("input", onGapChanged);
+  setPlayBtn.addEventListener("click", onSetPlay);
+  setPrevBtn.addEventListener("click", () => sendCommand("SETPREV"));
+  setNextBtn.addEventListener("click", () => sendCommand("SETNEXT"));
+  prepBtn.addEventListener("click", () => {
+    prepStatus.textContent = "Preparing…";
+    sendCommand("PREP:" + viewSet);
+  });
+  // Play latches the cued file, from the top; Stop releases the latch.
+  transportBtn.addEventListener("click", () => {
+    if (latched) sendCommand("STOP");
+    else if (currentFile) sendCommand("LATCH:" + currentFile);
+  });
 
   // Explicitly disconnect before the page actually goes away, rather
-  // than leaving the module to notice via its own supervision timeout.
-  // This is the real fix for the ABAB reconnect-failure pattern seen
-  // in testing: a plain reload/navigate/close doesn't always complete
-  // the BLE disconnect procedure before the tab is torn down, so the
-  // module can still think the old link is live when the very next
-  // connection attempt arrives - it then never sends a fresh
-  // +CONNECTED/+BINREQ to the board for that attempt. pagehide fires
-  // reliably in all of those cases (unlike beforeunload, which modern
-  // browsers increasingly restrict); reconnectAndRetry() above is the
-  // fallback for whatever this doesn't catch (e.g. a crashed tab).
+  // than leaving the module to notice via its own supervision timeout: a
+  // plain reload/navigate/close doesn't always complete the BLE disconnect
+  // before the tab is torn down, and a module that still thinks the old
+  // link is live won't treat the next connection as a fresh one. pagehide
+  // fires reliably in all of those cases (unlike beforeunload, which modern
+  // browsers increasingly restrict).
   window.addEventListener("pagehide", () => {
     if (device && device.gatt && device.gatt.connected) {
       device.gatt.disconnect();
@@ -784,7 +3251,7 @@
 
   copyLogBtn.addEventListener("click", async () => {
     try {
-      await navigator.clipboard.writeText(logBody.textContent);
+      await navigator.clipboard.writeText(logText);
       copyLogBtn.textContent = "Copied!";
       copyLogBtn.classList.add("copied");
     } catch (err) {
@@ -796,9 +3263,27 @@
     }, 1500);
   });
 
-  if (!navigator.bluetooth) {
-    footer.textContent = "Web Bluetooth isn't available in this browser - on iOS, open this page in Bluefy or WebBLE instead of Safari.";
-    footer.style.color = "var(--bad)";
+  // No Web Bluetooth: grey out Connect, and on iOS offer to reopen this
+  // page in an app that has it. A page can't tell whether an app is
+  // installed, and in Safari a link to a missing app gets an "address is
+  // invalid" alert - so these are links to tap, not an automatic redirect.
+  // Each app has its own link format: Bluefy's (found by trial - it isn't
+  // documented) takes the whole address as a parameter; WebBLE's (from its
+  // release notes) swaps "https://" for "webble://".
+  if (!HAS_BLUETOOTH) {
+    connectBtn.classList.add("unsupported");
+    browserNote.classList.add("bad");
+    if (IS_IOS) {
+      browserNote.textContent = "Safari and Chrome on iOS can't use Bluetooth from a web page. Open this page in Bluefy or WebBLE, browsers that can.";
+      $("openBluefy").href = "bluefy://open?url=" + encodeURIComponent(location.href);
+      $("openWebBLE").href = location.href.replace(/^https?:\/\//, "webble://");
+      openInApp.hidden = false;
+    } else {
+      browserNote.textContent = "This browser has no Web Bluetooth - try Chrome or Edge.";
+    }
   }
+
+  buildTweaks();
+  setConnected(false);
 })();
 </script>

@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Mykle Hansen
+# Specified by Mykle Hansen, implemented by Claude (Anthropic).
+
 """
 ble_reset.py - forces the SparkFun Thing Plus RA6M5's DA14531 CodeLess
 module out of a stuck Binary mode / DSPS state, without needing to

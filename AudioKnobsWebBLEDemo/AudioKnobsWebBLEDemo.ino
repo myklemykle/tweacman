@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mykle Hansen
+// Specified by Mykle Hansen, implemented by Claude (Anthropic).
+
 /*
   AudioKnobsWebBLEDemo - SparkFun Thing Plus RA6M5
 
@@ -120,14 +124,12 @@
       wrappers - they were never AT-aware themselves; only the module's
       own firmware parses AT syntax, and Binary mode is precisely what
       turns that parsing off).
-
-  This example code is in the public domain.
 */
 
 #include <RV112FF.h>
 #include <MultiTurnKnob.h>
 #include <RA6M5AnalogTuning.h>
-#include <CapTouch.h>
+#include <RA6M5CapTouch.h>
 #include <codelessBLEPeripheral.h>
 #include "faust_support.h"
 #include "synth.h"
@@ -149,7 +151,6 @@ const float TURNS_PER_SWEEP_FAST = 0.5;
 const float TURNS_PER_SWEEP_SLOW = 2.0;
 
 float knobAngle(float accumulatedDegrees, float turnsPerSweep) {
-  if (accumulatedDegrees == -1.0f) return -1;
   float wrapped = fmodf(accumulatedDegrees / (turnsPerSweep * 2.0f), 360.0f);
   if (wrapped < 0) wrapped += 360.0f;
   return wrapped;
@@ -619,12 +620,12 @@ void loop() {
     float turnsPerSweep1 = effectiveTouched1 ? TURNS_PER_SWEEP_FAST : TURNS_PER_SWEEP_SLOW;
     float angle1 = knobAngle(knob1.read(), turnsPerSweep1);
     *freq1Ptr = angleToFrequency(angle1);
-    *gain1Ptr = pot1.isCalibrated() ? 1.0 : 0.0;
+    *gain1Ptr = knob1.isCalibrated() ? 1.0 : 0.0;
 
     float turnsPerSweep2 = effectiveTouched2 ? TURNS_PER_SWEEP_FAST : TURNS_PER_SWEEP_SLOW;
     float angle2 = knobAngle(knob2.read(), turnsPerSweep2);
     *freq2Ptr = angleToFrequency(angle2);
-    *gain2Ptr = pot2.isCalibrated() ? 1.0 : 0.0;
+    *gain2Ptr = knob2.isCalibrated() ? 1.0 : 0.0;
 
     // Gated on linkMode, not on bleConnected: while the module is still on
     // the AT-command link, a telemetry line is not data, it is nonsense fed

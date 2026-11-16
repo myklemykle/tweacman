@@ -1,105 +1,315 @@
 # Open items
 
-Things discussed but not yet done, as of 2026-09-21. Written for offline
-review - nothing here is in progress. Roughly grouped, and within each group
-roughly in the order they'd be worth doing.
+Things discussed but not yet done. Updated alongside the commits that finish
+or add items, so this should match the code on `main`; last reviewed
+2026-10-30. Roughly grouped, and within each group roughly in the order
+they'd be worth doing.
 
 Design proposals large enough to have their own document are linked rather
-than repeated: see `CodelessPipe_design.md`.
+than repeated: see `CodelessPipe_design.md`. The investigation behind the pot
+and touch noise fixes is in `NOISE_DEBUGGING.md`.
 
-## SDResampleDemo - tape transport
+## SDResampleDemo - planned features
 
-- **Spurious transport latching: a common-mode disturbance on TSCAP.**
-  PARKED for the PCB, where better shielding should make it straightforward.
-  Measured 2026-09-21, and the measurements rule out every software fix tried
-  or considered:
-  - Touch deltas are sharply *bimodal* - either ~20 (idle) or ~3500-7800.
-    Across 209 samples exactly one landed in the whole 100-2999 band. So the
-    spurious events are full-strength capacitive signals reaching more than
-    twice the 3000 threshold, not marginal noise. **No threshold and no
-    debounce can reject them**, because they are larger than a real touch.
-  - They are *common-mode*: 8 of 11 events fired on both pads at once, and
-    when both fired the two channels agreed to within 163 counts on ~7000
-    (2.3%). A finger is local to one pad; this moves both together, which
-    points at the TSCAP reference they share on D6.
-  - It happens with hands completely away from the board, so it is not
-    proximity to the bare-wire pads.
-  - It correlates weakly with system load: 340k loop passes/sec during
-    events versus 358k without, so supply or reference coupling from CPU and
-    SD activity is the likely path.
-  - **Rejecting by similarity does not work either.** A deliberate two-pad
-    chord was measured at 0.0%-7.9% mismatch (mean 4.0%), overlapping the
-    2.3% of the disturbance - with real chord samples *tighter* than it. No
-    separating threshold exists.
-  - **D31/TS11 is not usable as a common-mode reference.** It is the onboard
-    USR button with its own circuitry attached, and swings 0 to ~12000 on its
-    own while both real pads sit quiet.
-  Remaining avenues are all physical: TSCAP capacitor value, a grounded guard
-  between the pads, and supply decoupling - i.e. the carrier board.
-  **Probably fixed - re-test.** On 2026-09-23 a separate CapTouch bug was
-  found and fixed: under interrupt load, `scan()` could file one pad's result
-  under the other (holding D21 put ~4150-count single-scan spikes on D20; 22
-  in 15s before the fix, 0 after, with NoiseMeter's DAC/SD/LED loads on).
-  The spurious latching only ever happened while touch2 (D21) was held down,
-  which is exactly when that bug shows, so this is very likely the same
-  thing - the "common-mode" readings above would then have been one pad's
-  value filed under both. Confirm in SDResampleDemo before unparking the
-  physical avenues.
-- **Touch chatter now has consequences.** Latching play is implemented (D20
-  chorded with D21). A momentary hold forgives a spurious touch edge as a
-  brief dropout, but a latch does not: a stray rising edge on D21 silently
-  clears the latch, and you only find out when lifting your finger stops
-  playback unexpectedly. If this shows up in use, debounce D21's rising edge
-  specifically rather than the pads in general.
-- **`FastLED.show()` versus the audio interrupt.** show() bit-bangs WS2812
-  timing and blocks for tens of microseconds - long enough to straddle a
-  48kHz audio tick, and on most platforms it masks interrupts while doing it.
-  Mitigated by only calling it when the colour actually changes (a few times
-  a second while blinking, not 100Hz), but it has not been confirmed
-  click-free by ear. Listen at blink transitions.
-- **Pause versus restart.** Every start rewinds to the top, including after
-  the latch is cleared and the transport stopped. Consistent, and chosen
-  deliberately, but once a latch exists people tend to expect stop-then-play
-  to resume rather than restart. Revisit if it feels wrong in use.
-- **Clicks on start/stop.** Deferred until actually heard. Stopping mid-waveform
-  holds a DC value on the DAC and resuming jumps back into the waveform; through
-  A1's 4.7uF coupling cap that is a click, and A0 has no cap at all. Now that
-  stopping is a routine action rather than something that never happened, this
-  is much more likely to show up. The fix is to ramp `lastGoodSample` toward
-  midscale over a few ms rather than stepping.
-- **Scrub: override instead of add.** Scrub is currently summed onto knob1's
-  ratio, so forward playback partially cancels a backward scrub. Raising
-  `SCRUB_SCALE` outran the cancellation but did not remove it. Overriding
-  knob1 while `|scrub|` is above a threshold would remove it properly, and
-  would make the pause-deadband parking trick unnecessary.
-- **Scrub gain cap.** `scrubGain` is `max(1, |effective ratio|)` with no upper
-  limit, so at 40x a small hand movement is a 40x cursor jump - and at those
-  speeds the SD card is already near its bandwidth wall, so a big scrub may
-  slam the buffer into underruns. Left uncapped deliberately rather than
-  guessing a limit; revisit if it feels unmanageable up there.
+Modes are rows of the `MODES` table in the sketch, stepped through by
+touch1 (or picked with knob1 while it's held). Five are built: speed mode
+(knob1 speed, knob2 scrub), pitch mode (knob1 pitch, knob2 time-stretch),
+window mode (knob1 start, knob2 end), echo mode (knob1 delay time, knob2
+amount) and filter mode (knob1 the band's width, knob2 its centre). Each further mode gets its own feature branch, and its
+parameters should be added to the per-file settings (`FileSettings.h`),
+which hold speed, pitch, window, echo and filter so far, and to the web
+page's tweaks tab.
 
-## ADC noise on the pots
+### Modes
 
-Resolved 2026-09-23 - see `NOISE_DEBUGGING.md` for the whole investigation.
-Crosstalk between the pots is gone (`RA6M5AnalogTuning`: longer ADC sampling
-time plus discharge-before-sample, 230-280 counts down to about 1), and the
-scrub "crumbs" at rest are gone (4x oversampling on the scrub knob, plus
-capacitors from the wiper pins to ground). What's left, for the record:
+- **Mode colours.** Six hues clear of the board's red and blue LEDs: green
+  120, aqua 180, purple 268, pink 335 and orange 30 degrees are in use;
+  yellow 60 is picked and waiting for mode 6 (it was tried on the LED as a
+  placeholder mode, then taken out). Green, aqua and yellow are dimmed
+  to match the rest. Revisit if any pair is hard to tell apart.
+- **One description of the modes, not two.** The web page has its own list
+  of the modes and their settings (`MODES` and `PARAMS` in
+  `wav-remote.html`), which has to be kept in step with the sketch's `MODES`
+  table by hand. The board could describe them instead (name, hue, each
+  setting's range and units) for the page to build itself from.
+- **Time-stretch: fixed-length grains at high speeds.** Above about 8
+  samples per tick, pitch mode's time-stretch goes dull and then nearly
+  silent - congaTam.wav (a 22kHz file, almost all its energy at 155-310Hz)
+  vanishes when the 1/64 copy takes over, and t_08000_16.wav's tune when
+  the 1/8 and 1/16 do. Two causes, both by design rather than bugs. The
+  grains stream the copy past at the playback speed, and a voice can only
+  read about 8 samples of its copy per tick, so the copy choice
+  (`levelRateFor()`, the `s / 4` floor) keeps moving to lower-rate copies,
+  each with half the bandwidth - fine in speed mode, where what a copy
+  drops would be above hearing anyway, but in time-stretch the pitch is
+  held, so it's sound you'd still hear. And the grains restart every time
+  the cursor moves a grain length (2048 samples), so at high speed they
+  are a few ticks long and mostly heard as a buzz at that rate, which
+  follows the knob. The fix: above about 8x, every ~23ms load a fresh
+  46ms grain straight from the WAV (or a low copy) at the cursor, in
+  `loop()` - one ~4KB card read per grain whatever the speed - and play
+  it at the held pitch, two overlapping with Hann windows as now. No copy
+  switching, full treble, and a steady grain rate that could become a
+  setting. Needs grain buffers, a new read path in the audio interrupt,
+  and a bench check of the card's timing. (The cheap alternative,
+  letting the cursor read each copy twice as fast before switching, only
+  moves the problem up an octave and keeps the buzz.)
+- **Window that wraps round the file's ends.** Mode 3's start and end stop
+  at the ends of the file; letting the window carry on round from the end
+  to the beginning would be cool.
+- **Shorter windows.** The minimum is 20ms (`WINDOW_MIN_SECONDS`). Much
+  shorter and the loop becomes a pitched buzz - worth trying.
+- **Echo: a longer delay.** Mode 4's delay line is in RAM (`EchoDelay.h`):
+  mono, 24kHz, 2.7 seconds. Longer means keeping it on the SD card - a
+  pre-allocated file used as a circle, written behind the write head and
+  read ahead of the tap like a third voice. Mono is comfortable on average
+  (about 96KB/s of writes against the card's 350KB/s); the risks are the
+  card's occasional long write stalls underrunning playback, and 25ms
+  writes stuttering the control tick. Measure the worst-case write time
+  during playback first. Kept as a file, it's also most of a
+  sound-on-sound looper.
+- **Echo: runaway feedback.** The amount stops at 0.95. Past 1 the echo
+  feeds itself for ever, tape-echo style, but needs a soft clipper in the
+  loop rather than today's hard limit. Loud material with a lot of echo
+  already clips at the output - the same clipper would help there.
+- **Echo: finish the feedback trial.** Knob2 sets one amount, which is
+  both how loud the echoes are and how much they feed back. Play with it
+  for a while and decide whether that's right or the two want separate
+  controls. `EchoDelay` already keeps them as separate gains inside (it
+  needed to, to damp the echo on a stop), so splitting them is only a
+  question of what sets the second one - there's no third knob.
+- **Echo: delay time locked to the window**, so the repeats fall in step
+  with the loop.
+- **Filter: tune it by ear.** Mode 5's character is in a few constants in
+  `BandFilter.h`, set from measurements (`make filter-render`) rather than
+  some listening: the bump at each edge (`FILTER_BUMP`, k = 1.5, about
+  +5dB - raised from 1.2 after the first listen), how hard it screams
+  (`FILTER_SCREAM`), where in the narrowing the scream starts
+  (`FILTER_RESONANCE_OCTAVES`, at about 0.5 octaves wide now), and how hard
+  the resonance clipping bites (the `1 +` in the stage's `a`). The scream
+  sits at about -11dBFS. Each knob moves its cutoff 5 octaves per turn.
+- **Filter: its CPU cost.** About 570 cycles per stereo sample, 12% of the
+  audio interrupt (56% to 68% on a stereo file with pitch shifting),
+  while narrowed; nothing wide open. Written in Faust first, it measured
+  925 - Faust's per-call overhead with one sample per call - so it's plain
+  C++. Most of what's left is chained floating-point arithmetic and four
+  divisions. If the planned post-processing needs the room: a mono filter
+  would halve it, or the divisions could be traded for an approximation.
+- **Filter: other shapes.** It's a band-pass only (a high-pass and a
+  low-pass in series). Low-pass-only or a notch could be further modes, or
+  a third parameter.
 
-- **~~Differentiate over a longer baseline.~~ Rejected.** It would cut rpm()
-  noise, but adds tens of milliseconds of lag to a scrub; the rule for this
-  project's controls is no UI artifact longer than 10ms. Oversampling did the
-  job with no lag instead.
-- **~~Reverse-order double pass.~~ Not possible through `analogRead()`.**
-  The core's `analogRead()` converts every pin ever read on that ADC unit, in
-  fixed channel order (A5, A4, A3, A2), whatever order the sketch asks in.
-- **`SCRUB_DEADBAND_RPM` stays at 0.5.** Its source comment invites re-tuning
-  it down once the noise is lower; tried by feel after the fixes and judged
-  right as it is - scrub is already very sensitive.
-- **Buffer the wipers (hardware)** - op-amp followers, for the `feature/pcb`
-  schematic. Probably unnecessary now; the capacitors on the wiper pins and
-  the ADC settings cover what they would have. Keep in mind if the PCB's
-  pots misbehave.
+### Audio output
+
+- **Dither the DAC output.** `audioCallback()` turns each 16-bit sample
+  into 12 bits by dropping the bottom four (`>> 4`), so quiet audio
+  distorts: measured on the Apogee Duet (2026-11-08), THD at 1kHz is
+  0.5% at -40dBFS and 8% at -60dBFS with the DAC's amplifiers off, 1.5%
+  and 15% with them on (SDResampleDemo now turns them on -
+  `DAC_OUTPUT_AMPS`). TPDF dither - two cheap random numbers added
+  before the shift - would trade that for a little steady hiss. Measure
+  before and after with `tools/audio_test` (on branch `feature/audio-test`).
+
+### Web UI (`web/wav-remote.html`)
+
+Redesigned 2026-10-13 (`feature/web-redesign`): a one-line status bar, a
+full-screen Connect button until there's a board, and three tabs at the
+bottom - Tweaks (a card per knob mode, its two settings side by side like
+the knobs, each with a slider and a reset; the board's current mode
+highlighted, tap a card to change mode), Files (the list scrolls under a
+fixed header), and Info (playback stats and the link log, folded away).
+
+- **Try the redesign on a phone.** It has only been run in desktop Chrome
+  against a stand-in for the board. Things to check on the real thing:
+  sliders against the half-second stats (do they fight the thumb?), the
+  slider ranges (speed -4x to 4x, pitch two octaves either way; typing
+  reaches the rest), the decimal keypad for typed values, and the layout
+  under the notch and home bar.
+- **Status line: a logo and a playing animation.** "TWEACMAN" is text for
+  now, and playing/stopped is a word.
+- **Bottom tab bar: on trial.** Move it to the top if it doesn't suit.
+- **Normalize and compress recordings.** Audio recorded on the phone comes
+  out too quiet.
+- **Measure the battery runtime.** The Info tab now shows the fuel gauge's
+  charge, voltage, drain rate and time left (`FuelGauge.h`); only checked
+  on USB power so far. Run on battery, playing with effects on, and note
+  the settled drain rate - estimated at 50-90mA, or 3-5 hours on a 350mAh
+  cell.
+- **The chip's temperature on the Info tab.** The RA6M5 has an on-chip
+  temperature sensor (TSN) the sketch could read and report beside the
+  battery. Asked for 2026-11-15, while chasing SD failures that turned out
+  to be a bad card, not heat.
+
+## SDResampleDemo - known issues
+
+- **A card that stops answering hangs playback until a reset.** Found
+  2026-11-15 with a month-old SanDisk Ultra 32GB that has unreadable
+  spots: a read there stalls (about 2.5 seconds through the core's
+  driver), and every read after it fails, so files won't open and the
+  page shows underruns while nothing plays. Neither the core's driver nor
+  `RA6M5FastSD` recovers by itself. The fix: after a failed read or open,
+  restart the card the way RA6M5FastSD's `SDBurnIn` example does
+  (unmount, mount - about 22ms) and carry on, re-cueing the file; and
+  count card errors in the status line and on the page. `RA6M5FastSD`
+  0.4.0 already reports failed transfers as failures and gives up after
+  about half a second, instead of 2.5 seconds and sometimes passing bad
+  data on as good.
+
+- **Touch pads went dead on stage (2026-10-30 gig, outdoors, cold).**
+  Both pads stopped responding at once, after working fine at the start
+  of the show: a latched loop couldn't be stopped from the pads, and
+  touch1 wouldn't step modes. Knobs and BLE kept working; switching to a
+  set from the phone and leaving it alone played on, and some time later
+  the pads worked again by themselves. Never partly working. Two
+  theories:
+  1. Both pads stuck reading *touched* (condensation, something resting
+     across them, a ground change), cleared by the library's 60s
+     stuck-touch recalibration. It fits the pads' logic - touch2 held
+     keeps the deck running, a mode step needs touch1 released, and both
+     held is a chord, so the knobs stay normal - but probably not the
+     set: its gap only counts down while no pad reads touched.
+  2. The CTSU stopped measuring (an ESD zap is likelier in cold dry air,
+     or a TSCAP voltage error, `CTSUERRS.CTSUICOMP`). `scan()` then times
+     out without updating anything, so each pad keeps its last state.
+     Fits better, but nothing in the library recovers from that.
+  To do: show each pad's raw reading, baseline and state (and scan
+  timeouts/CTSU errors) on the Serial status line and the page's Info
+  tab; have `scan()` count failures and re-initialise the CTSU, treating
+  the pads as released meanwhile; let the page's Stop work even with
+  touch2 held; maybe a shorter stuck timeout in this sketch. A bench
+  test from cold (freezer, condensation) might reproduce it.
+
+- **USB disk mode: speed.** With the core's `UsbMsd` library as it is,
+  copying onto the card runs at about 115KB/s and reading off it about
+  550KB/s (4MB each way, 2026-10-16); full-speed USB allows about 1MB/s.
+  A Finder copy of 12MB of files off the card took about 30s (~400KB/s),
+  so many files cost a little more than one big one. Copying that same
+  folder back onto the card took 4:17 (~47KB/s) - under half the
+  single-file write speed, since every file adds scattered single-sector
+  writes (file table, directory entry, macOS's "._" file), each of which
+  the library turns into a read and a write. Spotlight's share is
+  unmeasured. Not copying `cache/`
+  avoids most of that - the board rebuilds it - and marking it hidden on
+  the card would keep Finder from showing or copying it (untested whether
+  the core's FATFileSystem lets the sketch set that attribute).
+  Writes are slow because the library gets 512 bytes at a time from the
+  computer and, for each sector, reads it back from the card, erases it
+  and writes it again, each as its own command - the worst case for an SD
+  card. `RA6M5FastSD` now skips the erase (2026-11-01). Timed from the
+  Mac's shell (`cp`, then `sync`), before and after: one 4MB file 61 ->
+  235KB/s, twenty 100KB files 43 -> 135KB/s, reading 4MB back 479 ->
+  575KB/s (on a fresh mount; data verified both times) - and 753KB/s
+  with the sector cache, since the library reads a sector at a time. The card itself
+  writes 8MB/s in 32KB commands, so what's left is the per-sector
+  read-then-write and USB's ~1MB/s ceiling. The plan, if
+  it's worth it: our own `tud_msc_*` handlers that gather consecutive
+  sectors into a ~32KB buffer and write them as one multi-sector command
+  through `RA6M5FastSD`, flushed when the computer jumps elsewhere, asks
+  for a sync, or ejects. Reads could go through the multi-sector path too.
+  Test first, to see where the time really goes: Finder copies of a real
+  sample folder both ways (many small files as well as a few big ones),
+  and how long the mount takes, including macOS's checks.
+- **USB disk mode: Spotlight holds up ejecting.** Soon after the card
+  mounts, macOS's Spotlight indexer (`mds_stores`) starts reading it, and
+  ejecting is refused until it's done - 40 seconds once, at USB disk mode's
+  ~550KB/s. A `.metadata_never_index` file in the card's root used to stop
+  that; whether current macOS still honours it is untested (the file list
+  would skip it, being a dot-file). Otherwise it's `mdutil -i off` on the
+  Mac, per volume.
+- **USB disk mode: try it on Windows (and Linux).** Only tested on macOS
+  so far. Worth checking: how long the card takes to appear, that "Safely
+  remove" brings the board back as Finder's eject does, and what hidden
+  files Windows leaves on the card (names starting with a dot are already
+  skipped; folders such as `System Volume Information` aren't listed
+  anyway, since only files are).
+- **USB disk mode: the BLE link hiccups while the computer is busy with the
+  card.** The computer's requests are served inside the USB interrupt, so
+  loop() is starved while it reads or writes; a Binary mode probe's echo
+  then arrives after `BINARY_PROBE_TIMEOUT`, the link is wrongly promoted,
+  and the next echo demotes it again (seen as "Unrecognized BLE command"
+  lines on Serial). It recovers by itself, and only matters with no phone
+  connected; the real fix is the probe noticing bytes waiting before it
+  gives up.
+- **Other pot sketches relearn calibration every boot.** Since 2026-10-09
+  `RV112FF` reports nothing until a pot's calibration is complete (about two
+  turns). SDResampleDemo saves it; AudioKnobsDemo, AudioKnobsWebBLEDemo,
+  NoiseMeter and the library examples don't, so their knobs need two turns
+  after every power-on. Each could save it the same way if wanted.
+- **Playback cursor stranded outside its buffer.** The "This shouldn't
+  happen; please report it" warning came up twice on 2026-10-30, both times
+  just after moving the window (window mode) on a long, latched stereo
+  file - HALLOWEEN CLIPS/046, 13s, at 201s into a session. It recovers by
+  reloading at the cursor; the cause, presumably something in
+  `moveVoiceWindow()`'s re-anchoring, isn't found yet.
+- **BLE link going quiet.** Twice on 2026-10-30 the phone lost the board
+  mid-use while the firmware ran on; only a reset brought it back, and the
+  board logged nothing from the module (no Binary mode exit, no restart).
+  The file list was found that day to be outrunning the module - long
+  names at 2.5KB/s against its ~1.8KB/s - and dropping bytes, and is now
+  paced by length; whether that was also behind the hangs is unknown.
+  If it happens again: before resetting, have the sketch poke the module
+  and see if it answers at all.
+- **A byte lost on the way in.** One gap command arrived as
+  `GP:WERNER|5` ("Unrecognized BLE command"). Inbound writes are well
+  under the module's rate, so it isn't the same overrun; once so far.
+- **Prepare's count can step back.** While a set is prepared, `PREP:n/t`
+  goes back by one when the file being built is interrupted (cueing it
+  requeues it). Cosmetic.
+- **Other `loop()` stalls over 10ms.** `PROFILE` on 2026-11-01 also showed
+  the status-line stage taking up to 44ms and BLE input up to 77ms, with
+  nothing to do with the cache. Probably Serial or BLE output waiting for
+  buffer room, or BLE commands that touch the card (and so its path
+  lookups - see the next item). Not yet looked into.
+- **Cache-build stalls.** While `MipCache` is building, a single build step
+  could stall `loop()` for up to ~35ms on an SD write - over this project's
+  10ms limit for control latency, so the knobs and pads felt it during a
+  build. FatFs was erasing every sector before writing it, which
+  `RA6M5FastSD` now skips (2026-11-01): an 8KB write went from ~25ms to
+  ~2.7ms (worst ~8ms on `SDWriteBench`), and a 60s mono file's copies now
+  build in 26s (~0.43s per second of audio, from ~0.66). Traced on
+  2026-11-01 (branch `experiment/cache-stall-trace`, not for merging:
+  every step timed by kind, every SD driver call logged):
+  - **Path lookups are the stall.** For a file in a real set (a
+    long-named file in `HALLOWEEN CLIPS`), every operation that names a
+    path - open, remove, rename, mkdir, `exists()` - walks
+    `/sd/cache/<set>/<long name>/` from the root, reading about 36
+    directory sectors one command at a time (~0.25ms each, FatFs's tiny
+    mode keeps no directory sectors between lookups): ~9ms per lookup.
+    So every open step took ~14ms, every finish (close, remove, rename)
+    ~25-29ms and every wipe step 13-28ms, and `MipCache::start()` took
+    50-100ms - 70ms of it checking which copies exist, one `exists()` per
+    copy (244 reads). The 76ms `PROFILE` saw was `start()`, which is in
+    the same profiler stage. A test file at the root with a short name
+    hides all this (open ~3ms, finish ~8ms).
+  - **The data steps are fine:** filtering, reading and writing stay
+    under 10ms (stereo worst ~9.5ms, mono ~8.7ms).
+  - **The card's own busy:** now and then one write takes ~23ms (two in
+    one build, none in another). Not fixable short of non-blocking
+    writes; rare.
+  Done: `RA6M5FastSD` now caches single-sector reads, 8 sectors at a time
+  (branch `feature/sd-sector-cache`). Open steps 13.7 -> 5.9ms, wipe
+  steps 14.9 -> 6.1ms on average, finish steps 25.7 -> 14.7ms, and
+  `start()` 98 -> 44ms (just after mounting) or 48 -> 32ms; copies came
+  out byte-identical. Doubling the cache barely helped (finish 14.0ms):
+  what's left is FatFs's own work matching long names (with the audio
+  interrupt taking half the CPU meanwhile) and its single-sector writes,
+  ~1.2ms each, four per finish. Then `MipCache` changed (branch
+  `feature/mipcache-short-names`): each WAV's copies live in
+  `/sd/cache/<8 hex digits>/`, named by a hash of its path, with 8.3 file
+  names, and each copy is written under its own name and counts as done
+  once it's full length - no `.tmp`, remove and rename. For the same clip:
+  open steps 5.9 -> 2.5ms, finish 14.7 -> 4.2ms, wipe steps 6.1 -> 1.5ms,
+  `start()` 32 -> 22ms (and 44 -> 20ms just after mounting); copies
+  byte-identical. The first boot on it deleted the old layout's 749 files
+  (75 folders) - quickly enough that it was over before the USB serial
+  port opened. What's left over 10ms: now and then a data step that lands
+  on a card write slower than usual (10-12ms, a couple per build), and
+  `start()`, ~20ms once per file loaded or prepared. Splitting `start()`
+  into steps would fix the second, but the sketch reads its result (which
+  copies are ready) straight after calling it, so playback would briefly
+  start on the WAV alone - worth doing only if loading a file is felt.
+  Also seen: the card itself sometimes slows to ~13ms per single-sector
+  write for a few seconds (just after the 749 deletions).
 
 ## BLE / CodeLess
 
@@ -107,44 +317,173 @@ capacitors from the wiper pins to ground). What's left, for the record:
   but it gets wedged by whichever sketch ran before it: a module left in
   Binary mode swallows its `ATR`/`AT+ADVSTOP`/`AT+ADVSTART` as raw pipe data,
   so startup appears to succeed and nothing works. The one sketch broken by a
-  feature it does not use. Explicitly deferred.
+  feature it does not use.
 - **The `+++` acknowledgement churn.** The module asks to leave Binary mode by
-  sending `+++` every two seconds; both sketches now answer it, but the reply
-  (`AT`/`AT+BINREQEXITACK`) goes out *as pipe data* while Binary mode is live,
-  so the module likely never sees it and keeps asking. The link recovers every
-  time, so this is cosmetic - but clients occasionally see stray `AT+...`
-  lines in their data stream. Really a symptom of the open question below.
-- **`CodelessPipe` library.** Full proposal in `CodelessPipe_design.md`. Its
-  two unresolved questions, both of which change the design:
+  sending `+++`; the sketches answer it, but the reply
+  (`AT`/`AT+BINREQEXITACK`) may go out *as pipe data* while Binary mode is
+  live, so clients occasionally see stray `AT+...` lines in their data
+  stream. Cosmetic - the link recovers every time. Really a symptom of the
+  open question below.
+- **`CodelessPipe` library.** Full proposal in `CodelessPipe_design.md`.
+  Agreed sequencing: port the fixes into each sketch as a straight copy
+  first, then extract the library from the working call sites. Its two
+  unresolved questions, both of which change the design:
   - What the mode-detection probe should send when a sketch has no traffic of
     its own (proposed: a lone `"\n"`).
   - Whether the sketch can *force* the mode transition - e.g. `AT+DISCONNECT`
-    right after `AT+BINREQACK` - instead of waiting for the central to hang
-    up. Untested. If it works, the handshake gets much simpler and the `+++`
-    churn above probably disappears with it.
+    right after `AT+BINREQACK` - instead of the central hanging up and
+    reconnecting. Untested. If it works, the handshake gets much simpler and
+    the `+++` churn above probably disappears with it.
+- **Faster BLE (maybe).** Uploads top out at ~1.8KB/s, and this CodeLess
+  firmware has no commands to raise the baud rate, MTU or data length. The
+  only real lever is replacing CodeLess with custom DA14531 firmware (SDK6
+  DSPS with a bigger MTU, data length extension and a faster UART) - a large
+  project.
+- **Does the module's Bluetooth address change when it restarts?** Once
+  (2026-10-16), desktop Safari's pairing chooser listed two `CLv2-CodeLess`
+  entries with completely different addresses, though there's only one board
+  in range. The likely cause: the DA14531 SDK can generate a fresh "static
+  random" address at each boot, and the module restarts on every power cycle
+  and every Binary-mode disconnect, so the Mac briefly still lists the old
+  one. (macOS shows browsers a made-up identifier per device rather than
+  the real address, so the listed addresses may not be the real ones.) To test:
+  `AT+BDADDR`, restart (`AT+R` or a reset), `AT+BDADDR` again. A small `BDADDR`
+  passthrough in `SDResampleDemo`'s Serial console would do it. Harmless for
+  the web page, which finds the board by name and service, but it would break
+  anything that remembers a device (saved Web Bluetooth permissions,
+  automatic reconnection). If it does change, check CodeLess's AT command
+  reference for a way to set a fixed address.
+
+## PCB / hardware
+
+- **When the OSH Park boards arrive:** 1:1 fit check of the parts, re-run
+  ERC (now with the PWR_FLAG), build one, recalibrate the touch thresholds
+  for real pads instead of wires, re-test touch noise, and check BLE range
+  with the lid on.
+- **BOM, after the fit check** (`feature/pcb-bom`, not merged yet):
+  - Feet (3M SJ5023) - height unverified.
+  - Check the M-F standoff's male thread bites into the F-F standoff above.
+  - TS header pin diameter versus the SL socket's contact range.
+  - C4 (axial, laid flat) fit on its footprint.
+  - The LCSC columns are stale - refresh or drop them.
+  - Low Mouser stock on the SL-112 socket and TS-116 header matters for kits.
+- **Rev 2 (maybe):** the I2S mic and OLED, preserved as designed on
+  `feature/pcb-mic-oled`.
+- **Before publishing the board:** fab notes (ENIG preferred, for the exposed
+  touch pads and edge plating), a `datasheets/` README with URLs instead of
+  the PDFs, and a build README. (Licensing and the SparkFun credit are done -
+  see `LICENSE`.)
+- **Next board revision: put a source location on the silkscreen.**
+  CERN-OHL-S-2.0 asks for a "Source Location" on the product - the repo's
+  URL - and the license name would fit next to the existing "this hardware
+  is open source" text on the back.
+- **Tighter knob settings for the PCB build.** SDResampleDemo's knob noise
+  settings were set on the breadboard: 20ms `smoothTau` on both pots, 4x
+  oversampling on pot2 only, 0.3-degree backlash on knob1 and the scrub,
+  a 1-degree scrub start. Measured on the PCB (2026-11-08, `KnobNoise`
+  plus NoiseMeter): every wiper under 0.5 counts RMS, against ~1.5 on the
+  breadboard with caps; the smoothed angle jitters 0.003-0.007 degrees RMS
+  but up to 0.08 peak-to-peak, so the 0.3-degree backlash is only ~4x the
+  worst peak - about right already - and the 1-degree scrub start ~12x,
+  room to halve it. The bigger win is lag - the 20ms smoothing (plus the
+  scrub's own 20ms follow) is over the 10ms rule; maybe 5ms with 4x
+  oversampling on both pots. Keep the current values as the default for
+  anyone building on a breadboard; the PCB values would be an option (a
+  `#define` in the sketch, say). Before choosing: add a 5ms smoothing
+  setting to `KnobNoise` and measure at several angles, then set each
+  threshold at 3-5x the worst peak-to-peak; check by feel that a hand
+  resting on a knob doesn't start a scrub, and that the page's 1.00x
+  doesn't flicker. (Odd, to look into: on knob2 the 20ms-smoothed angle
+  showed a larger peak-to-peak than the unsmoothed one, 0.07 against
+  0.02-0.06.)
+
+## CapTouchTheremin
+
+- **Tune it by ear and hand.** Written and tested unattended (2026-10-31):
+  hands away it's silent and the resting note is steady, the audio
+  interrupt is 4% of the CPU, and the pads scan ~2300 times a second - but
+  nobody has played it yet. `PITCH_FULL`, `VOLUME_FULL`, `KNEE` and the two
+  dead zones are guesses from the bench numbers (a touch adds 5000-12000
+  counts); watch the plotter's `pitchHand`/`volumeHand` while playing and
+  set them from what a hand really adds across a playable distance.
+- **Range.** Plain wires sense about an inch. A bigger plate or a short
+  antenna should reach further, but raises the hands-away reading towards
+  the counter's ceiling - see the sensor offset item under the libraries.
+- **Knob 2 wraps.** The bottom note jumps from C5 back to C2 where the pot's
+  angle wraps; folding it (as `AudioKnobsDemo` does) or `MultiTurnKnob` with
+  limits would avoid that, if it bothers anyone.
+
+## Arduino libraries
+
+- **Publish the libraries to the Library Manager, so the Arduino IDE can
+  find and install them.**
+  Plan approved 2026-09-26, postponed until after a code review of the
+  libraries. `RV112FF` and `MultiTurnKnob` were reviewed on 2026-10-26:
+  their comments no longer refer to this project, and both build for
+  RP2040, Teensy and AVR as well (step 1's `architectures=*` is done). Written for `RV112FF`, `RA6M5CapTouch`, `MultiTurnKnob` and
+  `RA6M5AnalogTuning`; `RA6M5FastSD` came later and is experimental (it
+  reaches into the core class's private members), so it probably shouldn't
+  be published. The Library Manager needs each library in its own repository
+  with `library.properties` at the top, so the plan keeps developing
+  everything in this repo and publishes each library folder from it with
+  `git subtree split`:
+  1. Prep: ~~set `architectures=*` for `RV112FF` and `MultiTurnKnob`~~
+     (done); run `arduino-lint --library-manager submit` on each; merge to
+     main.
+  2. Create a public GitHub repo per library, then fill in each library's
+     empty `url=`.
+  3. For each library: `git subtree split --prefix=<Library> main`, push the
+     result to its repo's `main`, and tag it `1.0.0` to match
+     `library.properties`. Splitting only reads history, so it's safe to run
+     from any checkout.
+  4. Open a pull request against `arduino/library-registry` adding the repo
+     URLs. Publish `RV112FF` first: `MultiTurnKnob` has `depends=RV112FF`,
+     which the Library Manager resolves automatically once both are listed.
+  - The four names were free in the registry when checked on 2026-09-25, but
+    names are first-come, first-served.
+  - After publishing, a new release is just the same split-push-tag, with the
+    version bumped in `library.properties`; the registry picks up new tags by
+    itself.
+- **WS2812 hardware offload.** Drive the D13 LED from GPT1 PWM with the DTC
+  loading each bit's duty (or SCI8 as SPI plus DMA) instead of FastLED, so
+  LED updates never mask interrupts. FastLED's ~30us `cli()` per update drops
+  one audio tick, which turned out to be inaudible - so this is for tidiness,
+  and possibly its own tutorial demo of hardware-offloaded LED driving. Would
+  ship as a small local library in the style of `RA6M5CapTouch`. Watch for
+  the SD driver's DMAC channel.
+- **RA6M5CapTouch: sensor offset current.** `setMeasurementCount()` works,
+  but with `CTSUSO` (the offset current that subtracts each pad's background
+  reading) left at 0, the bench pads (~11800 counts each) overflow the 16-bit
+  counter at 6 repeats - and a touch adds up to ~12000 more per repeat, so
+  only 1-2 repeats are really usable. Exposing the offset would fix that, but
+  carefully: per the manual, an offset larger than the pad's own current
+  latches the TSCAP voltage error (`CTSUERRS.CTSUICOMP`), which only clears by
+  powering the CTSU down. Measured 2026-10-31, two pads, hands off: noise
+  (sd) 12.9 counts at 1 repeat; per repeat, 9.7 at 2 and 8.0 at 4 - about
+  what averaging the same number of 1-repeat scans in software gives (7.2 for
+  4), so software averaging is the better buy until the offset exists.
+  Averaging 16 scans only reached 4.9, not the 3.2 independent noise would
+  give - something slow, perhaps mains hum, isn't averaged out in ~7ms.
+- **RA6M5CapTouch: check the TSCAP error flag.** `update()` now aborts and
+  resets a scan that stops making progress (`scanFailures()`), but nothing
+  checks `CTSUICOMP`, which the manual says leaves readings undefined while
+  scans still complete normally. Checking it after each scan, and powering
+  the CTSU down and back up when it's set, would cover the other way the pads
+  could have died on stage (see SDResampleDemo's known issues).
 
 ## Toolchain / bench reliability
 
-- **USB and DFU flakiness makes iteration slow.** Raised as a real cost, to be
-  tackled deliberately rather than worked around. Observed repeatedly on
-  2026-09-21:
-  - `make upload` fails with `dfu-util: Cannot set alternate interface zero:
-    LIBUSB_ERROR_OTHER` (exit status 74) while the board still enumerates
-    perfectly well as a serial port. Retrying sometimes works immediately;
-    at one point it failed seven times running and was only cleared by
-    physically unplugging, waiting, and replugging.
-  - Separately, the serial device node vanished entirely for several minutes
-    after a DFU attempt - no `/dev/cu.usbmodem*`, nothing in
-    `arduino-cli board list`, and `dfu-util -l` saw no DFU device either -
-    until an unplug/replug.
-  - An inline USB power monitor was in the chain for most of the session and
-    has since been removed; a plausible contributor, not yet confirmed.
-  - Our own tooling handles the post-reset re-enumeration only partly: the
-    upload/monitor sequence waits for the device *node* to exist, but the
-    node can appear before the CDC endpoint is ready, which is what produced
-    `Port monitor error: timeout waiting for message` mid-session. A
-    readiness check (or a short retry on first read) would be more honest
-    than the current existence check plus a fixed sleep.
+- **USB and DFU flakiness makes iteration slow.** `make upload` sometimes
+  fails with `dfu-util: Cannot set alternate interface zero:
+  LIBUSB_ERROR_OTHER` while the board still enumerates as a serial port, and
+  the serial device node has vanished for minutes after a DFU attempt; both
+  cleared only by unplugging and replugging. An inline USB power monitor was
+  in the chain at the time and is a plausible contributor, not confirmed.
+- **A real readiness check before opening the monitor.** The upload/monitor
+  sequence waits for the device *node* to exist, but the node can appear
+  before the CDC endpoint is ready (`Port monitor error: timeout waiting for
+  message`). A readiness check, or a short retry on the first read, would be
+  more honest than the existence check plus a fixed sleep.
 
 ## PCB case
 
@@ -157,21 +496,11 @@ capacitors from the wiper pins to ground). What's left, for the record:
 
 ## Web pages
 
-- **Redeploy the hosted copies.** `mykle.com/webble/oscillator-remote.html` is
-  still the pre-fix version, and `wav-remote.html` has changed too (device
-  filter, transport pill, potential-speed readout). Neither phone sees any of
-  today's work until they are redeployed.
+- **Redeploy the hosted copies after changing them.** `oscillator-remote.html`
+  and `wav-remote.html` are self-hosted on mykle.com; the phone only sees a
+  change once it's redeployed. Up to date as of 2026-10-09.
 
-## SDResampleDemo - other
+## Documentation
 
-- **`WavReader` only handles mono 16-bit PCM.** Confirmed live: `boom.wav` on
-  the test card returns `ERR:boom.wav:this demo only plays mono 16-bit PCM WAV
-  files`. Stereo, 8/24-bit, float and WAVE_FORMAT_EXTENSIBLE are all present in
-  a real sample library. Failing cleanly over BLE is the correct behaviour and
-  not a bug, but broader format support would make the demo far less annoying
-  to use with real files.
-- **Re-benchmark the underrun ceiling.** The header quotes ~23-25x forward as
-  the measured onset point, from before bidirectional support reserved
-  `REVERSAL_MARGIN` of the ring as standing reversal headroom. That reservation
-  lowers the real forward runway, so the number is stale. Worth re-measuring in
-  both directions against whatever card is on the bench.
+- **The tutorial.** The long-term goal: a hobbyist tutorial built from these
+  demos.

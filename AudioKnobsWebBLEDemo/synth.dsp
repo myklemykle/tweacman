@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Mykle Hansen
+// Specified by Mykle Hansen, implemented by Claude (Anthropic).
+
 // synth.dsp - two sine oscillators, mixed to mono
 //
 // freq1/freq2/gain1/gain2 are meant to be driven directly from C++ (see

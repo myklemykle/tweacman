@@ -41,3 +41,6 @@ r01uh0891ej0150-ra6m5.pdf
 
 # Built by `make filter-render`
 /tools/filter_render
+
+# Serial logs from tools/serial_log.sh (make serial-log)
+logs/

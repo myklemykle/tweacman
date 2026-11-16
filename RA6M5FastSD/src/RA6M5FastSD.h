@@ -60,6 +60,17 @@
   left in a lookup is mostly FatFs's own work matching long names, and
   the single-sector writes it makes - twice the cache barely helped.
 
+  And it reports failed transfers as failures. The core's driver can hand
+  back a failed transfer as a good one, garbage and all, and waits about
+  2.5 seconds before giving up on one that never finishes; this class
+  returns an error for both, after about half a second at most, and counts
+  them (transferErrors(), transferTimeouts()). Neither driver recovers by
+  itself, though: after a timeout, or once the card-detect switch has
+  reported the card removed even for an instant, every later request fails
+  until the card is started up again. A sketch that should keep going
+  unmounts the filesystem and mounts it again, which restarts the card -
+  see the SDBurnIn example.
+
   It's a drop-in replacement: same constructor, and FATFileSystem mounts it
   the same way.
 
@@ -123,9 +134,25 @@ class FastSDCardBlockDevice : public SDCardBlockDevice {
   uint32_t sectorCacheHits() const { return cacheHits_; }
   uint32_t sectorCacheMisses() const { return cacheMisses_; }
 
+  // Trouble on the card's connection, counted since the last
+  // resetErrorCounts(), for the multi-block path (all reads and writes
+  // unless setMultiBlock(false)): transfers the SD host reported as failed;
+  // transfers that never finished; requests the driver refused to start
+  // (it does that once the card is marked uninitialised, until the card is
+  // started up again); and transfers that ended without the driver saying
+  // how, trusted as good - not expected to happen at all. The core's own
+  // is_card_present() and is_card_initialized() show the card-detect
+  // switch, and whether the driver still counts the card as started.
+  uint32_t transferErrors() const { return transferErrors_; }
+  uint32_t transferTimeouts() const { return timeouts_; }
+  uint32_t refusedRequests() const { return refused_; }
+  uint32_t missedEvents() const { return missedEvents_; }
+  void resetErrorCounts();
+
  private:
   int readAligned(void *buffer, bd_addr_t addr, bd_size_t size);
   int programAligned(const void *buffer, bd_addr_t addr, bd_size_t size);
+  int finishTransfer(fsp_err_t started);
   int readCachedSector(void *buffer, bd_addr_t addr);
   void updateCache(const void *buffer, bd_addr_t addr, bd_size_t size);
   void dropFromCache(bd_addr_t addr, bd_size_t size);
@@ -148,4 +175,9 @@ class FastSDCardBlockDevice : public SDCardBlockDevice {
 
   bool multiBlock_ = true;
   bool skipErase_ = true;
+
+  volatile uint32_t transferErrors_ = 0;
+  volatile uint32_t timeouts_ = 0;
+  volatile uint32_t refused_ = 0;
+  volatile uint32_t missedEvents_ = 0;
 };
